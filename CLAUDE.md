@@ -23,7 +23,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ./run.sh <архив.zip>   # единственная точка входа: архив → out/submission.json
 make solve      # то же через make (ARCHIVE=... переопределяет архив)
 make check      # локальное зеркало CI: lint + typecheck + test
-make extract    # пересобрать кэш текста PDF (solution/docs_text.json, в git не хранится)
 make install    # uv sync --extra dev
 ```
 
@@ -63,8 +62,8 @@ make install    # uv sync --extra dev
   (разбирать имя как `stem.split(".", 1)`). Вычислительное ядро — `solve_cell`,
   точка подмены для фаз 1–2; `score` печатает сверку с `ground_truth.json`.
 - **`dossier.py`** — детерминированная маршрутизация документов (тип, `ACC-\d+`,
-  отсев недействующих редакций). Пока не подключён к расчёту; работает по кэшу
-  `docs_text.json` от `extract.py`.
+  отсев недействующих редакций). Пока не подключён к расчёту; переписывается в
+  задаче 21 на постраничный текст из `pdftext.py`.
 
 ### Логика улики (`find_evidence`)
 
