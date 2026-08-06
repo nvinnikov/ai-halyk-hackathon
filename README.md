@@ -49,7 +49,11 @@ make check     # локальный CI-гейт: lint + typecheck + tests
   тесты и end-to-end прогон `solution/solve.py`, плюс сканирование секретов
   (gitleaks, конфиг в `.gitleaks.toml`).
 - **`.github/workflows/claude-review.yml`** — автоматический review PR. Требует
-  секрет репозитория `CLAUDE_CODE_OAUTH_TOKEN`; без него джоба — no-op.
+  секрет репозитория `CLAUDE_CODE_OAUTH_TOKEN`; без него джоба скипается.
+  **Правила ревью — в `.github/REVIEW.md`**, тюнить надо там: правка самого
+  workflow отключает ревью на том же PR (защита `claude-code-action`).
+- **`.github/workflows/claude.yml`** — ассистент по упоминанию `@claude`
+  в комментариях к PR и issue.
 
 Регрессионный порог скора зафиксирован в `tests/test_solution.py` (`BASELINE`).
 Улучшили решение — поднимите порог тем же коммитом, тогда откат назад поймается
