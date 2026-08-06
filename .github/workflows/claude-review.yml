@@ -32,12 +32,19 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
+    # Контекст secrets недоступен в `if` на уровне job и step, поэтому наличие
+    # токена прокидывается через env — иначе шаг с пустым секретом не
+    # пропускается, а падает, и на PR висит красный крест.
+    env:
+      HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
+        if: env.HAS_TOKEN == 'true'
         with:
           fetch-depth: 0
 
       - uses: anthropics/claude-code-action@v1
+        if: env.HAS_TOKEN == 'true'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
