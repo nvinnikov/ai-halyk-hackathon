@@ -71,6 +71,33 @@ def test_ambiguous_txn_alarm():
     assert ambig["txn_id"] == "TXN-S1-S2-0001"
 
 
+def test_regex_boundary_p1_not_in_p10():
+    # P1 не должен матчиться в P10 — критичный negative test
+    idx = build_index([row("TXN-P10-0001", "ACC-1")], ["P1"])
+    assert idx["scenario_to_account"] == {}
+    assert idx["background"]["rows"] == 1
+    # P1 не найден, индекс пуст, алярм на 0 счётов
+    assert any(a["kind"] == "index_cardinality" for a in idx["alarms"])
+
+
+def test_regex_boundary_s7_not_in_s7x():
+    # S7 не должен матчиться в S7X — критичный negative test
+    idx = build_index([row("TXN-S7X-0001", "ACC-1")], ["S7"])
+    assert idx["scenario_to_account"] == {}
+    assert idx["background"]["rows"] == 1
+
+
+def test_regex_boundary_p10_without_ambiguous():
+    # Позитивный контроль: при P1 и P10 строка TXN-P10-0001 матчится ровно в P10
+    # (не ambiguous, не в P1)
+    idx = build_index([row("TXN-P10-0001", "ACC-1")], ["P1", "P10"])
+    assert idx["scenario_to_account"] == {"P10": "ACC-1"}
+    assert "P1" not in idx["scenario_to_account"]
+    # Нет ambiguous_txn — P10 матчился один раз
+    alarm_kinds = {a["kind"] for a in idx["alarms"]}
+    assert "ambiguous_txn" not in alarm_kinds
+
+
 def test_public_dataset_matches_spec_numbers(tmp_path, monkeypatch):
     import json
 
