@@ -25,6 +25,7 @@ from expected_extraction import FACTS, SPECS
 from covenants import DRIVERS, METRIC_CATEGORIES, M
 from engine import inflow, prepare_rows, select_rows, sign_divergence
 from engine import norm as norm_cp
+from fx import coverage_alarms, to_usd
 from ledger import dirty_rows_of, extract_archive, find_inputs, load_ledger, rows_of
 from scindex import INDEX_VERSION, build_index
 from stages import artifact
@@ -36,29 +37,36 @@ SUBMISSION_META = {"team": "", "contact_email": "", "model": ""}
 # --- легаси-ядро (заменяется задачами 15/16/24) ------------------------------
 
 
-def _to_usd(rows: list[dict], facts: dict) -> list[dict]:
-    """Временная валютная нормализация по курсам из фактов досье.
+def _facts_of(scenario: str) -> dict:
+    """Факты досье сценария — единственная точка чтения FACTS.
 
-    Отдельная стадия fx.py с курсом на дату операции — задача 12; этот блок
-    уходит вместе с ней.
+    Задача 24 подменит здесь источник на извлечённые LLM факты, не трогая
+    вызывающих (в том числе сбор донорских курсов по чужим заёмщикам).
     """
-    fx = facts.get("fx", {})
-    out = []
-    for r in rows:
-        rate = fx.get(r["currency"]) if r["currency"] != "USD" else None
-        out.append({**r, "amt": r["amt"] * Decimal(str(rate))} if rate and r["amt"] is not None else r)
-    return out
+    return FACTS[scenario]
 
 
-def load_rows(scenario: str, all_rows: list[dict], index: dict, facts: dict) -> tuple[list, list]:
+def load_rows(
+    scenario: str, all_rows: list[dict], index: dict, facts: dict, donor_rates: list[dict]
+) -> tuple[list, list, list]:
     """Строки сценария: отбор по счёту из индекса, курс, решения досье.
 
-    Возвращает пару (сырые, подготовленные). Сырые нужны улике: она откатывает
-    одно решение и пересобирает строки заново, а в подготовленных отсечённой
-    операции уже нет.
+    Возвращает тройку (сырые, подготовленные, алярмы fx). Сырые нужны улике:
+    она откатывает одно решение и пересобирает строки заново, а в
+    подготовленных отсечённой операции уже нет.
+
+    Порядок стадий обязателен: конвертация в USD идёт ДО prepare_rows,
+    поэтому amount_override перекрывает уже сконвертированную сумму и курсом
+    не домножается — записка казначейства фиксирует итоговую долларовую
+    сумму (см. докстринг fx.py).
     """
-    raw = _to_usd(select_rows(all_rows, index["scenario_to_account"][scenario]), facts)
-    return raw, prepare_rows(raw, facts)
+    selected = select_rows(all_rows, index["scenario_to_account"][scenario])
+    own_rates = facts.get("fx_rates", [])
+    # Покрытие проверяется до расчёта: непокрытая пара (валюта, дата) — это
+    # алярм уровня заёмщика, а не молчаливая потеря строки в агрегации.
+    alarms = coverage_alarms(selected, own_rates, donor_rates)
+    raw, row_alarms = to_usd(selected, own_rates, donor_rates)
+    return raw, prepare_rows(raw, facts), alarms + row_alarms
 
 
 def _verdict(actual, direction, limit):
@@ -201,9 +209,16 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
         print(f"ALARM {alarm}", flush=True)
 
     for scenario in targets:
-        facts = FACTS[scenario]
+        facts = _facts_of(scenario)
+        # Донорская ступень лестницы: курсы всех прочих целевых заёмщиков.
+        # Порядок доноров фиксирован, чтобы выбор не зависел от порядка
+        # сценариев в шаблоне; окончательный тай-брейк — в fx.pick_rate.
+        donor_rates = sorted(
+            (r for other in targets if other != scenario for r in _facts_of(other).get("fx_rates", [])),
+            key=lambda r: (r.get("doc_date") or "", r.get("doc_hash") or "", str(r.get("usd_per_unit"))),
+        )
         try:
-            raw, rows = load_rows(scenario, scenario_rows, index, facts)
+            raw, rows, fx_alarms = load_rows(scenario, scenario_rows, index, facts, donor_rates)
         except Exception as exc:  # fail-open: сценарий целиком остаётся скелетом
             print(f"ALARM scenario_failed {scenario}: {exc!r}", flush=True)
             for clause in sorted(template["answers"][scenario]):
@@ -214,8 +229,12 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
                     {"scenario": scenario, "clause": clause, "path": "legacy", "error": repr(exc)},
                 )
             continue
+        for alarm in fx_alarms:
+            print(f"ALARM {alarm}", flush=True)
         for clause in sorted(template["answers"][scenario]):
             trace = {"scenario": scenario, "clause": clause, "path": "legacy"}
+            if fx_alarms:
+                trace["fx_alarms"] = fx_alarms
             # Знак расходной категории: дефолт out, а расхождение с net значит
             # сторно внутри читаемой категории — на приватном наборе такие
             # ячейки видны сразу, а не после разбора расхождения в баллах.

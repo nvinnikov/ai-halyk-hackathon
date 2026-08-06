@@ -87,10 +87,10 @@ def test_scenario_load_failure_does_not_kill_run(monkeypatch):
     victim = sorted(TEMPLATE["answers"])[0]
     original = solve.load_rows
 
-    def sabotaged(scenario, all_rows, index, facts):
+    def sabotaged(scenario, all_rows, index, facts, donor_rates):
         if scenario == victim:
             raise RuntimeError("искусственный сбой загрузки сценария")
-        return original(scenario, all_rows, index, facts)
+        return original(scenario, all_rows, index, facts, donor_rates)
 
     monkeypatch.setattr(solve, "load_rows", sabotaged)
     answers = solve.main(PUBLIC_ZIP, facts_source="expected")

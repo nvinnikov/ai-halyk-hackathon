@@ -5,10 +5,11 @@
 восстанавливает ли он этот файл из PDF (раздел 7 спеки, eval №1)?
 """
 
+from decimal import Decimal
 from typing import Any
 
-# Any по значению: набор ключей у каждого сценария свой (reclass, exclude, fx,
-# amount_override, ...), и потребители достают их через .get с дефолтом.
+# Any по значению: набор ключей у каждого сценария свой (reclass, exclude,
+# fx_rates, amount_override, ...), и потребители достают их через .get с дефолтом.
 FACTS: dict[str, dict[str, Any]] = {
     # scenario_id -> факты досье
     "B1": {  # ACC-7201 Ekibastuz Energy JSC
@@ -32,7 +33,20 @@ FACTS: dict[str, dict[str, Any]] = {
     },
     "P3": {  # ACC-7803 Shymkent Refinery Services JSC
         "related_parties": ["Turan Capital LLP"],
-        "fx": {"EUR": 83690.23 / 72146.75},
+        # Курс выведен из пары зеркальных платежей, интервал в документе не
+        # указан — пустые границы, стадия fx помечает это в трейсе.
+        "fx_rates": [
+            {
+                "currency": "EUR",
+                "usd_per_unit": str((Decimal("83690.23") / Decimal("72146.75")).quantize(Decimal("1E-9"))),
+                "effective_from": "",
+                "effective_to": "",
+                "source_quote": "выведен из пары зеркальных платежей казначейства",
+                "derivation": "paired_payment",
+                "doc_date": "",
+                "doc_hash": "",
+            }
+        ],
     },
     "P4": {  # ACC-7804 Aktobe Grain Terminal JSC  (таблица добавок — vision)
         "related_parties": ["Aral Capital Partners LLP"],
