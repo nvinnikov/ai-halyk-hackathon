@@ -29,6 +29,11 @@ from util import ROOT, stable_json
 MODEL = "claude-sonnet-5"
 CACHE = ROOT / "work" / "llm_cache"
 CASSETTE = ROOT / "eval" / "cassette"
+# Суммарный потолок сетевых обращений на один call() — раздел 6 спеки.
+# Общий бюджет: и ретраи на транзиентные ошибки, и единственный
+# max_tokens-повтор расходуют попытки из одного и того же счётчика, а не
+# каждый по своему циклу до MAX_ATTEMPTS (иначе один call() мог бы сделать
+# до 2×MAX_ATTEMPTS запросов).
 MAX_ATTEMPTS = 4
 DEFAULT_MAX_TOKENS = 8000
 # стандартный прайс Sonnet 5; до 2026-08-31 действует вводный $2/$10 за млн —
@@ -107,10 +112,18 @@ def _charge(usage) -> None:
         _budget["spent_usd"] += cost
 
 
-def _request(blocks: list, schema: dict, max_tokens: int, delay: float):
-    """Один сетевой раунд: ретраи на транзиентные ошибки, без ретраев на 400."""
+def _request(blocks: list, schema: dict, max_tokens: int, delay: float, attempts_left: int):
+    """Один раунд до первого ответа: ретраит транзиентные ошибки в пределах
+    attempts_left — общего на весь call() бюджета попыток (см. MAX_ATTEMPTS).
+
+    Возвращает (resp, attempts_left) — остаток бюджета передаётся вызывающей
+    стороне, чтобы max_tokens-повтор в call() тратил попытки из того же
+    счётчика, а не заводил себе отдельный цикл до MAX_ATTEMPTS.
+    """
     last: Exception | None = None
-    for attempt in range(MAX_ATTEMPTS):
+    while attempts_left > 0:
+        attempt_no = MAX_ATTEMPTS - attempts_left
+        attempts_left -= 1
         try:
             resp = _create(
                 model=MODEL,
@@ -132,11 +145,11 @@ def _request(blocks: list, schema: dict, max_tokens: int, delay: float):
             raise SchemaRejected(str(exc)) from exc
         except RETRYABLE as exc:
             last = exc
-            if attempt < MAX_ATTEMPTS - 1:
-                time.sleep(delay * 2**attempt)
+            if attempts_left > 0:
+                time.sleep(delay * 2**attempt_no)
             continue
         _charge(resp.usage)
-        return resp
+        return resp, attempts_left
     assert last is not None
     raise last
 
@@ -169,14 +182,20 @@ def call(
     request_blocks = _with_cache_control(blocks)
     delay = 1.0 + int(key[:4], 16) / 65536  # детерминированный джиттер
 
-    resp = _request(request_blocks, schema, max_tokens, delay)
+    attempts_left = MAX_ATTEMPTS
+    resp, attempts_left = _request(request_blocks, schema, max_tokens, delay, attempts_left)
 
     # stop_reason проверяется до чтения контента: обрезанный/отказанный
     # ответ не должен тихо пройти как валидный результат.
     if resp.stop_reason == "refusal":
         raise SchemaRejected("модель отказалась отвечать (stop_reason=refusal)")
     if resp.stop_reason == "max_tokens":
-        resp = _request(request_blocks, schema, max_tokens * 2, delay)
+        if attempts_left <= 0:
+            # Бюджет попыток (общий с ретраями транзиентных ошибок) уже
+            # исчерпан — тихо возвращать обрезанный JSON нельзя, а второй
+            # сетевой вызов сверх MAX_ATTEMPTS запрещён спекой.
+            raise SchemaRejected("ответ обрезан по max_tokens: попытки исчерпаны")
+        resp, attempts_left = _request(request_blocks, schema, max_tokens * 2, delay, attempts_left)
         if resp.stop_reason == "max_tokens":
             raise SchemaRejected("ответ обрезан по max_tokens дважды подряд")
 

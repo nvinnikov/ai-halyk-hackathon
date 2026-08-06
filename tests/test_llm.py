@@ -37,6 +37,12 @@ def bad_request_error(message="bad request"):
     return anthropic.BadRequestError(message, response=resp, body=None)
 
 
+def rate_limit_error(message="rate limited"):
+    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    resp = httpx.Response(429, request=req)
+    return anthropic.RateLimitError(message, response=resp, body=None)
+
+
 @pytest.fixture(autouse=True)
 def isolated_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(llm, "CACHE", tmp_path / "llm_cache")
@@ -191,6 +197,48 @@ def test_offline_without_cassette_raises_cassette_miss(monkeypatch):
 
     with pytest.raises(llm.CassetteMiss):
         llm.call("p", SCHEMA, "v1")
+
+
+def test_retry_and_max_tokens_retry_share_one_attempts_budget(monkeypatch):
+    """RateLimit-ретрай и max_tokens-повтор списывают попытки из общего
+    счётчика MAX_ATTEMPTS=4, а не заводят каждый свой цикл до 4."""
+    calls = []
+
+    def fake_create(**kw):
+        calls.append(kw["max_tokens"])
+        if len(calls) == 1:
+            raise rate_limit_error()
+        if len(calls) == 2:
+            return FakeResp({}, stop_reason="max_tokens")
+        return FakeResp({"a": 9}, stop_reason="tool_use")
+
+    monkeypatch.setattr(llm, "_create", fake_create)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+
+    assert llm.call("p", SCHEMA, "v1", max_tokens=1000) == {"a": 9}
+    assert calls == [1000, 1000, 2000]
+    assert len(calls) <= llm.MAX_ATTEMPTS
+
+
+def test_attempts_budget_exhausted_before_max_tokens_retry_raises_schema_rejected(monkeypatch):
+    """Если ретраи на RateLimit уже съели весь бюджет попыток и последний
+    оставшийся ответ обрезан по max_tokens — второй сетевой вызов сверх
+    MAX_ATTEMPTS не делается, сразу SchemaRejected."""
+    calls = []
+
+    def fake_create(**kw):
+        calls.append(kw["max_tokens"])
+        if len(calls) < llm.MAX_ATTEMPTS:
+            raise rate_limit_error()
+        return FakeResp({}, stop_reason="max_tokens")
+
+    monkeypatch.setattr(llm, "_create", fake_create)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+
+    with pytest.raises(llm.SchemaRejected):
+        llm.call("p", SCHEMA, "v1", max_tokens=1000)
+    assert len(calls) == llm.MAX_ATTEMPTS
+    assert not list(llm.CACHE.glob("*.json"))
 
 
 def test_offline_with_cache_hit_does_not_raise(monkeypatch):
