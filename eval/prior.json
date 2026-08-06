@@ -1,0 +1,27 @@
+{
+ "by": {
+  "max|absolute": {
+   "BREACH": 5,
+   "COMPLIANT": 9
+  },
+  "max|ratio": {
+   "BREACH": 4
+  },
+  "max|share": {
+   "BREACH": 4,
+   "COMPLIANT": 2
+  },
+  "min|absolute": {
+   "BREACH": 2,
+   "COMPLIANT": 5
+  },
+  "min|ratio": {
+   "BREACH": 2,
+   "COMPLIANT": 3
+  }
+ },
+ "global": {
+  "BREACH": 17,
+  "COMPLIANT": 19
+ }
+}
