@@ -22,6 +22,7 @@ on:
     paths-ignore:
       - 'LICENSE'
       - '.gitignore'
+      - 'docs/**'
 
 # Новый пуш в тот же PR отменяет незавершённый review.
 concurrency:
