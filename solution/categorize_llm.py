@@ -45,23 +45,24 @@ BATCH_SIZE = 50
 SCHEMA_VERSION = "1"
 
 
-def categorize_batch(descriptions: list[str]) -> dict[str, str]:
+def categorize_batch(descriptions: list[str]) -> tuple[dict[str, str], list[dict]]:
     """Категоризирует список описаний через LLM пачками по 50.
 
     Параметры:
         descriptions: уникальные описания банковских операций
 
     Возвращает:
-        dict[str, str]: маппинг {description → category}
-        Если LLM предложит категорию вне LEAVES → остаётся OTHER.
+        (маппинг {description → category}, список алярмов)
+        Если LLM предложит категорию вне LEAVES → остаётся OTHER + алярм category_rejected.
     """
     if not descriptions:
-        return {}
+        return {}, []
 
     # Дедупликация и сортировка для детерминизма
     unique = sorted(set(descriptions))
 
     result = {}
+    alarms = []
     taxonomy_str = ", ".join(sorted(LEAVES - {"OTHER"}))
 
     # Батчим по 50
@@ -86,8 +87,15 @@ def categorize_batch(descriptions: list[str]) -> dict[str, str]:
 
             # Валидация против таксономии
             if cat not in LEAVES:
+                alarms.append(
+                    {
+                        "kind": "category_rejected",
+                        "description": desc,
+                        "returned": cat,
+                    }
+                )
                 cat = "OTHER"
 
             result[desc] = cat
 
-    return result
+    return result, alarms

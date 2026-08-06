@@ -13,6 +13,7 @@ from typing import Any, TypedDict
 
 from categorize import categorize
 from categorize_llm import categorize_batch
+from scindex import target_scenario_of
 from stages import artifact
 from util import dataset_hash, workdir
 
@@ -97,10 +98,13 @@ def parse_amount(raw: str) -> Decimal | None:
     return -d if neg else d
 
 
-def load_ledger(wd: Path, input_dir: Path) -> dict:
+def load_ledger(wd: Path, input_dir: Path, target_scenarios: list[str] | None = None) -> dict:
     def build() -> dict[str, list[dict[str, Any]]]:
         rows: list[dict[str, Any]] = []
         dirty: list[dict[str, Any]] = []
+        target_set = set(target_scenarios) if target_scenarios else set()
+        alarms: list[dict[str, Any]] = []
+
         with open(find_inputs(input_dir)["ledger_csv"], newline="") as fh:
             for r in csv.DictReader(fh):
                 rec = {
@@ -117,18 +121,32 @@ def load_ledger(wd: Path, input_dir: Path) -> dict:
                 rec["cat_tier"] = 1
                 rows.append(rec)
 
-        # Второй ярус: LLM для непокрытого
-        other_descriptions = sorted({r["description"] for r in rows if r["cat"] == "OTHER"})
-        if other_descriptions:
-            llm_categories = categorize_batch(other_descriptions)
+        # Второй ярус: LLM для непокрытого (только для целевых заёмщиков)
+        if target_set:
+            # Собираем описания со статусом OTHER для целевых заёмщиков
+            target_other_descriptions: dict[str, list[str]] = {}
             for r in rows:
-                if r["cat"] == "OTHER" and r["description"] in llm_categories:
-                    r["cat"] = llm_categories[r["description"]]
-                    r["cat_tier"] = 2
+                if r["cat"] == "OTHER":
+                    target = target_scenario_of(r["txn_id"], target_set)
+                    if target:
+                        if r["description"] not in target_other_descriptions:
+                            target_other_descriptions[r["description"]] = []
+
+            if target_other_descriptions:
+                unique_descriptions = sorted(target_other_descriptions.keys())
+                llm_categories, cat_alarms = categorize_batch(unique_descriptions)
+                alarms.extend(cat_alarms)
+
+                for r in rows:
+                    if r["cat"] == "OTHER" and r["description"] in llm_categories:
+                        target = target_scenario_of(r["txn_id"], target_set)
+                        if target:
+                            r["cat"] = llm_categories[r["description"]]
+                            r["cat_tier"] = 2
 
         rows.sort(key=lambda x: x["txn_id"])
         dirty.sort(key=lambda x: x["txn_id"])
-        return {"rows": rows, "dirty": dirty}
+        return {"rows": rows, "dirty": dirty, "alarms": alarms}
 
     return artifact(wd / "ledger.json", LEDGER_VERSION, build)
 

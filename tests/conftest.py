@@ -1,31 +1,27 @@
-"""Общие фикстуры для всех тестов."""
+"""Модули solution/* читают датасет по путям от корня репозитория и импортируют
+друг друга плоско, поэтому тесты фиксируют и cwd, и sys.path."""
 
-import re
+import os
 import sys
+import zipfile
 from pathlib import Path
 
-import pytest
+ROOT = Path(__file__).resolve().parent.parent
 
-# Добавляем solution/ в путь для импорта
-sys.path.insert(0, str(Path(__file__).parent.parent / "solution"))
+os.chdir(ROOT)
+sys.path.insert(0, str(ROOT / "solution"))
+sys.path.insert(0, str(ROOT / "eval"))
 
-import llm
+# Собрать архив датасета для CI, если его нет.
+# В CI файл в .gitignore отсутствует, поэтому пересоздаём из закоммиченного датасета.
+_ZIP_PATH = ROOT / "6a741640c31eb032062683.zip"
+_DATASET_PATH = ROOT / "dataset" / "agentic-bank-public"
 
-
-@pytest.fixture(autouse=True)
-def mock_llm_call_for_tests(monkeypatch):
-    """Мокирование llm.call для тестов, чтобы не требовать реального LLM-ключа."""
-
-    def fake_call(prompt, schema, schema_version, document_b64=None, max_tokens=8000):
-        # На публичном датасете есть 11 уникальных описаний в OTHER:
-        # "Sewer discharge levy" с разными периодами.
-        # По брифу, все они должны быть классифицированы как UTILITIES.
-        descriptions = []
-        for line in prompt.split("\n"):
-            if re.match(r"^\d+\.\s+", line):
-                desc = line.split(". ", 1)[1] if ". " in line else line
-                descriptions.append(desc)
-
-        return {"categories": [{"description": desc, "category": "UTILITIES"} for desc in descriptions]}
-
-    monkeypatch.setattr(llm, "call", fake_call)
+if not _ZIP_PATH.exists() and _DATASET_PATH.exists():
+    # Архивируем dataset/agentic-bank-public/ так, чтобы верхнеуровневый каталог
+    # в архиве был agentic-bank-public/ (архивируем из dataset/)
+    with zipfile.ZipFile(_ZIP_PATH, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file_path in _DATASET_PATH.rglob("*"):
+            if file_path.is_file():
+                arcname = file_path.relative_to(_DATASET_PATH.parent)
+                zf.write(file_path, arcname)

@@ -165,9 +165,9 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
     sub = {**SUBMISSION_META, "answers": answers}  # answers — та же ссылка, правки видны в sub
     dump_submission(sub, template["answers"])
 
-    ledger_art = load_ledger(wd, input_dir)
-    all_rows = rows_of(ledger_art)
     targets = sorted(template["answers"])
+    ledger_art = load_ledger(wd, input_dir, target_scenarios=targets)
+    all_rows = rows_of(ledger_art)
     index = artifact(wd / "index.json", INDEX_VERSION, lambda: build_index(all_rows, targets))
     for alarm in index["alarms"]:
         print(f"ALARM {alarm}", flush=True)

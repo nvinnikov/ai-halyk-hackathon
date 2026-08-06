@@ -39,7 +39,7 @@ def isolated_cache(tmp_path, monkeypatch):
 
 
 def test_categorize_batch_basic(monkeypatch):
-    """Монкепатч llm.call: батч из 3 описаний размечается, результат — словарь."""
+    """Монкепатч llm.call: батч из 3 описаний размечается, результат — (словарь, алярмы)."""
     call_count = [0]
 
     def fake_call(prompt, schema, schema_version, document_b64=None, max_tokens=8000):
@@ -59,18 +59,19 @@ def test_categorize_batch_basic(monkeypatch):
     monkeypatch.setattr(llm, "call", fake_call)
 
     descriptions = ["Sewer discharge levy", "Electricity bills", "Payroll advance"]
-    result = categorize_batch(descriptions)
+    mapping, alarms = categorize_batch(descriptions)
 
-    assert result == {
+    assert mapping == {
         "Sewer discharge levy": "UTILITIES",
         "Electricity bills": "UTILITIES",
         "Payroll advance": "PAYROLL",
     }
+    assert alarms == []
     assert call_count[0] == 1
 
 
 def test_categorize_batch_out_of_taxonomy_stays_other(monkeypatch):
-    """Ответ с категорией вне таксономии → описание остаётся OTHER, алярм в результате."""
+    """Ответ с категорией вне таксономии → описание остаётся OTHER, алярм category_rejected."""
 
     def fake_call(prompt, schema, schema_version, document_b64=None, max_tokens=8000):
         return {
@@ -82,10 +83,15 @@ def test_categorize_batch_out_of_taxonomy_stays_other(monkeypatch):
     monkeypatch.setattr(llm, "call", fake_call)
 
     descriptions = ["Unknown transaction"]
-    result = categorize_batch(descriptions)
+    mapping, alarms = categorize_batch(descriptions)
 
     # Описание остаётся OTHER (вне таксономии)
-    assert result == {"Unknown transaction": "OTHER"}
+    assert mapping == {"Unknown transaction": "OTHER"}
+    # Проверяем алярм category_rejected
+    assert len(alarms) == 1
+    assert alarms[0]["kind"] == "category_rejected"
+    assert alarms[0]["description"] == "Unknown transaction"
+    assert alarms[0]["returned"] == "UNKNOWN_CATEGORY"
 
 
 def test_categorize_batch_deterministic_sorting(monkeypatch):
@@ -98,7 +104,12 @@ def test_categorize_batch_deterministic_sorting(monkeypatch):
 
         descriptions_in_prompt = re.findall(r"^(\d+\. .+)$", prompt, re.MULTILINE)
         batches.append(list(descriptions_in_prompt))
-        return {"categories": [{"description": f"{i}", "category": "REVENUE"} for i in range(3)]}
+        return {
+            "categories": [
+                {"description": line.split(". ", 1)[1], "category": "REVENUE"}
+                for line in descriptions_in_prompt
+            ]
+        }
 
     monkeypatch.setattr(llm, "call", fake_call)
 
@@ -117,12 +128,14 @@ def test_categorize_batch_batching_by_50(monkeypatch):
     def fake_call(prompt, schema, schema_version, document_b64=None, max_tokens=8000):
         call_count[0] += 1
         # Подсчитаем количество строк в промпте (приблизительно)
-        lines_with_desc = len([line for line in prompt.split("\n") if line.startswith(("1.", "2.", "3."))])
-        assert lines_with_desc <= 50, f"Батч содержит {lines_with_desc} описаний, ожидается <= 50"
-        # Возвращаем dummy ответ
+        import re
+
+        lines_with_desc = re.findall(r"^(\d+\. .+)$", prompt, re.MULTILINE)
+        assert len(lines_with_desc) <= 50, f"Батч содержит {len(lines_with_desc)} описаний, ожидается <= 50"
+        # Возвращаем ответ с реальными описаниями
         return {
             "categories": [
-                {"description": f"desc_{i}", "category": "REVENUE"} for i in range(lines_with_desc)
+                {"description": line.split(". ", 1)[1], "category": "REVENUE"} for line in lines_with_desc
             ]
         }
 
@@ -137,7 +150,7 @@ def test_categorize_batch_batching_by_50(monkeypatch):
 
 
 def test_load_ledger_adds_cat_tier_after_categorize(tmp_path, monkeypatch):
-    """load_ledger добавляет cat_tier: 1 (правила) или 2 (LLM)."""
+    """load_ledger добавляет cat_tier: 1 (правила) или 2 (LLM, только для целевых)."""
     import csv
     import io
     import zipfile
@@ -153,7 +166,7 @@ def test_load_ledger_adds_cat_tier_after_categorize(tmp_path, monkeypatch):
         z.writestr("dataset/submission_template.json", "{}")
 
         # CSV с описаниями: одно покроется правилами (payroll),
-        # одно не покроется (будет OTHER)
+        # одно не покроется (будет OTHER). Вторая строка содержит целевой id в txn_id.
         output = io.StringIO()
         writer = csv.DictWriter(
             output,
@@ -173,7 +186,7 @@ def test_load_ledger_adds_cat_tier_after_categorize(tmp_path, monkeypatch):
         )
         writer.writerow(
             {
-                "txn_id": "TXN-002",
+                "txn_id": "SCENARIO-A_TXN-002",  # Содержит целевой id SCENARIO-A
                 "date": "2025-01-02",
                 "account_id": "ACC-001",
                 "counterparty": "Corp",
@@ -197,7 +210,8 @@ def test_load_ledger_adds_cat_tier_after_categorize(tmp_path, monkeypatch):
     monkeypatch.setattr(llm, "call", fake_llm_call)
 
     wd = tmp_path / ds_hash
-    art = load_ledger(wd, input_dir)
+    # Передаём целевой сценарий
+    art = load_ledger(wd, input_dir, target_scenarios=["SCENARIO-A"])
 
     rows = art["rows"]
     # Первая строка покрыта правилами → cat_tier == 1
@@ -205,8 +219,8 @@ def test_load_ledger_adds_cat_tier_after_categorize(tmp_path, monkeypatch):
     assert payroll_row["cat"] == "PAYROLL"
     assert payroll_row["cat_tier"] == 1
 
-    # Вторая строка покрыта LLM → cat_tier == 2
-    utility_row = next(r for r in rows if r["txn_id"] == "TXN-002")
+    # Вторая строка покрыта LLM → cat_tier == 2 (только потому что это целевой сценарий)
+    utility_row = next(r for r in rows if "SCENARIO-A" in r["txn_id"])
     assert utility_row["cat"] == "UTILITIES"
     assert utility_row["cat_tier"] == 2
 

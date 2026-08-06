@@ -10,6 +10,18 @@ from collections import defaultdict
 INDEX_VERSION = 1
 
 
+def target_scenario_of(txn_id: str, target_set: set[str]) -> str | None:
+    """Определить целевой сценарий из txn_id по одному попаданию.
+
+    Ищет целевой id на границах небуквенно-цифровых символов в txn_id.
+    Ровно одно совпадение → возвращает сценарий; иначе → None.
+    """
+    hits = sorted(
+        sc for sc in target_set if re.search(rf"(?<![A-Za-z0-9]){re.escape(sc)}(?![A-Za-z0-9])", txn_id)
+    )
+    return hits[0] if len(hits) == 1 else None
+
+
 def build_index(rows: list[dict], targets: list[str]) -> dict:
     """Построить индекс сценариев и счётов из строк леджера.
 
@@ -31,22 +43,19 @@ def build_index(rows: list[dict], targets: list[str]) -> dict:
     ambiguous_txns = []
 
     for r in rows:
-        # Поиск целевого id на границах небуквенно-цифровых символов
-        hits = sorted(
-            sc
-            for sc in target_set
-            if re.search(rf"(?<![A-Za-z0-9]){re.escape(sc)}(?![A-Za-z0-9])", r["txn_id"])
-        )
-
-        if len(hits) == 1:
-            links[hits[0]].add(r["account_id"])
-        elif len(hits) > 1:
-            # Несколько целевых id в одной строке
-            ambiguous_txns.append(r["txn_id"])
-            background_accounts.add(r["account_id"])
-            background_rows += 1
+        target = target_scenario_of(r["txn_id"], target_set)
+        if target is not None:
+            links[target].add(r["account_id"])
         else:
-            # Ни один целевой id не найден
+            # Проверяем, есть ли несколько совпадений (для алярма ambiguous_txn)
+            hits = sorted(
+                sc
+                for sc in target_set
+                if re.search(rf"(?<![A-Za-z0-9]){re.escape(sc)}(?![A-Za-z0-9])", r["txn_id"])
+            )
+            if len(hits) > 1:
+                # Несколько целевых id в одной строке
+                ambiguous_txns.append(r["txn_id"])
             background_accounts.add(r["account_id"])
             background_rows += 1
 
