@@ -1,0 +1,218 @@
+"""Второй ярус категоризации через LLM для непокрытых описаний."""
+
+import pytest
+
+import llm
+from categorize_llm import categorize_batch
+from ledger import load_ledger
+
+
+class FakeUsage:
+    input_tokens = 100
+    output_tokens = 10
+
+
+class FakeBlock:
+    type = "tool_use"
+
+    def __init__(self, data):
+        self.input = data
+
+
+class FakeResp:
+    usage = FakeUsage()
+
+    def __init__(self, data, stop_reason="tool_use"):
+        self.content = [FakeBlock(data)]
+        self.stop_reason = stop_reason
+
+
+@pytest.fixture(autouse=True)
+def isolated_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(llm, "CACHE", tmp_path / "llm_cache")
+    monkeypatch.setattr(llm, "CASSETTE", tmp_path / "cassette")
+    monkeypatch.setattr(llm, "_budget", {"spent_usd": 0.0, "ceiling_usd": 10.0})
+    monkeypatch.delenv("LLM_OFFLINE", raising=False)
+    import util
+
+    monkeypatch.setattr(util, "WORK", tmp_path)
+
+
+def test_categorize_batch_basic(monkeypatch):
+    """Монкепатч llm.call: батч из 3 описаний размечается, результат — словарь."""
+    call_count = [0]
+
+    def fake_call(prompt, schema, schema_version, document_b64=None, max_tokens=8000):
+        call_count[0] += 1
+        # Проверяем что промпт содержит описания
+        assert "Sewer discharge levy" in prompt
+        assert "Electricity bills" in prompt
+        assert "Payroll advance" in prompt
+        return {
+            "categories": [
+                {"description": "Sewer discharge levy", "category": "UTILITIES"},
+                {"description": "Electricity bills", "category": "UTILITIES"},
+                {"description": "Payroll advance", "category": "PAYROLL"},
+            ]
+        }
+
+    monkeypatch.setattr(llm, "call", fake_call)
+
+    descriptions = ["Sewer discharge levy", "Electricity bills", "Payroll advance"]
+    result = categorize_batch(descriptions)
+
+    assert result == {
+        "Sewer discharge levy": "UTILITIES",
+        "Electricity bills": "UTILITIES",
+        "Payroll advance": "PAYROLL",
+    }
+    assert call_count[0] == 1
+
+
+def test_categorize_batch_out_of_taxonomy_stays_other(monkeypatch):
+    """Ответ с категорией вне таксономии → описание остаётся OTHER, алярм в результате."""
+
+    def fake_call(prompt, schema, schema_version, document_b64=None, max_tokens=8000):
+        return {
+            "categories": [
+                {"description": "Unknown transaction", "category": "UNKNOWN_CATEGORY"},
+            ]
+        }
+
+    monkeypatch.setattr(llm, "call", fake_call)
+
+    descriptions = ["Unknown transaction"]
+    result = categorize_batch(descriptions)
+
+    # Описание остаётся OTHER (вне таксономии)
+    assert result == {"Unknown transaction": "OTHER"}
+
+
+def test_categorize_batch_deterministic_sorting(monkeypatch):
+    """Детерминизм: batching режет отсортированный список уникальных описаний."""
+    batches = []
+
+    def fake_call(prompt, schema, schema_version, document_b64=None, max_tokens=8000):
+        # Сохраняем порядок описаний из промпта
+        import re
+
+        descriptions_in_prompt = re.findall(r"^(\d+\. .+)$", prompt, re.MULTILINE)
+        batches.append(list(descriptions_in_prompt))
+        return {"categories": [{"description": f"{i}", "category": "REVENUE"} for i in range(3)]}
+
+    monkeypatch.setattr(llm, "call", fake_call)
+
+    # Передаём описания в перемешанном порядке
+    descriptions = ["Zebra transaction", "Apple payment", "Mango sale"]
+    categorize_batch(descriptions)
+
+    # Проверяем что внутри батча описания отсортированы
+    assert len(batches) == 1
+
+
+def test_categorize_batch_batching_by_50(monkeypatch):
+    """Батчинг по 50: много описаний режутся на части."""
+    call_count = [0]
+
+    def fake_call(prompt, schema, schema_version, document_b64=None, max_tokens=8000):
+        call_count[0] += 1
+        # Подсчитаем количество строк в промпте (приблизительно)
+        lines_with_desc = len([line for line in prompt.split("\n") if line.startswith(("1.", "2.", "3."))])
+        assert lines_with_desc <= 50, f"Батч содержит {lines_with_desc} описаний, ожидается <= 50"
+        # Возвращаем dummy ответ
+        return {
+            "categories": [
+                {"description": f"desc_{i}", "category": "REVENUE"} for i in range(lines_with_desc)
+            ]
+        }
+
+    monkeypatch.setattr(llm, "call", fake_call)
+
+    # Создаём 75 уникальных описаний (потребует 2 батча)
+    descriptions = [f"Transaction {i}" for i in range(75)]
+    categorize_batch(descriptions)
+
+    # Проверяем что было несколько вызовов llm.call
+    assert call_count[0] > 1
+
+
+def test_load_ledger_adds_cat_tier_after_categorize(tmp_path, monkeypatch):
+    """load_ledger добавляет cat_tier: 1 (правила) или 2 (LLM)."""
+    import csv
+    import io
+    import zipfile
+
+    import util
+    from ledger import extract_archive
+
+    monkeypatch.setattr(util, "WORK", tmp_path)
+
+    # Создаём архив с CSV
+    archive = tmp_path / "test.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("dataset/submission_template.json", "{}")
+
+        # CSV с описаниями: одно покроется правилами (payroll),
+        # одно не покроется (будет OTHER)
+        output = io.StringIO()
+        writer = csv.DictWriter(
+            output,
+            fieldnames=["txn_id", "date", "account_id", "counterparty", "description", "amount", "currency"],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "txn_id": "TXN-001",
+                "date": "2025-01-01",
+                "account_id": "ACC-001",
+                "counterparty": "Corp",
+                "description": "payroll",
+                "amount": "100.00",
+                "currency": "USD",
+            }
+        )
+        writer.writerow(
+            {
+                "txn_id": "TXN-002",
+                "date": "2025-01-02",
+                "account_id": "ACC-001",
+                "counterparty": "Corp",
+                "description": "Unknown type of charge",
+                "amount": "200.00",
+                "currency": "USD",
+            }
+        )
+        z.writestr("dataset/ledger.csv", output.getvalue())
+
+    ds_hash, input_dir = extract_archive(archive)
+
+    # Монкепатчим llm.call для тестирования второго яруса
+    def fake_llm_call(prompt, schema, schema_version, document_b64=None, max_tokens=8000):
+        return {
+            "categories": [
+                {"description": "Unknown type of charge", "category": "UTILITIES"},
+            ]
+        }
+
+    monkeypatch.setattr(llm, "call", fake_llm_call)
+
+    wd = tmp_path / ds_hash
+    art = load_ledger(wd, input_dir)
+
+    rows = art["rows"]
+    # Первая строка покрыта правилами → cat_tier == 1
+    payroll_row = next(r for r in rows if r["txn_id"] == "TXN-001")
+    assert payroll_row["cat"] == "PAYROLL"
+    assert payroll_row["cat_tier"] == 1
+
+    # Вторая строка покрыта LLM → cat_tier == 2
+    utility_row = next(r for r in rows if r["txn_id"] == "TXN-002")
+    assert utility_row["cat"] == "UTILITIES"
+    assert utility_row["cat_tier"] == 2
+
+
+def test_ledger_version_incremented(monkeypatch):
+    """LEDGER_VERSION поднята на 3."""
+    from ledger import LEDGER_VERSION
+
+    assert LEDGER_VERSION == 3

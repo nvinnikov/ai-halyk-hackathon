@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from categorize import categorize
+from categorize_llm import categorize_batch
 from stages import artifact
 from util import dataset_hash, workdir
 
@@ -25,9 +26,10 @@ class LedgerRow(TypedDict):
     currency: str
     amount: str
     cat: str
+    cat_tier: int
 
 
-LEDGER_VERSION = 2
+LEDGER_VERSION = 3
 _NA = {"n/a", "na", "none", "-", "—", "--"}
 
 
@@ -110,8 +112,20 @@ def load_ledger(wd: Path, input_dir: Path) -> dict:
                     dirty.append({**rec, "raw_amount": r.get("amount")})
                     continue
                 rec["amount"] = str(amt)
+                # Первый ярус: категоризация по правилам
                 rec["cat"] = categorize(rec["description"])
+                rec["cat_tier"] = 1
                 rows.append(rec)
+
+        # Второй ярус: LLM для непокрытого
+        other_descriptions = sorted({r["description"] for r in rows if r["cat"] == "OTHER"})
+        if other_descriptions:
+            llm_categories = categorize_batch(other_descriptions)
+            for r in rows:
+                if r["cat"] == "OTHER" and r["description"] in llm_categories:
+                    r["cat"] = llm_categories[r["description"]]
+                    r["cat_tier"] = 2
+
         rows.sort(key=lambda x: x["txn_id"])
         dirty.sort(key=lambda x: x["txn_id"])
         return {"rows": rows, "dirty": dirty}

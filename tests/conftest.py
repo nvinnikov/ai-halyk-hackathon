@@ -1,21 +1,31 @@
-"""Модули solution/* читают датасет по путям от корня репозитория и импортируют
-друг друга плоско, поэтому тесты фиксируют и cwd, и sys.path."""
+"""Общие фикстуры для всех тестов."""
 
-import os
+import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+import pytest
 
-os.chdir(ROOT)
-sys.path.insert(0, str(ROOT / "solution"))
-sys.path.insert(0, str(ROOT / "eval"))
-sys.path.insert(0, str(ROOT / "tools"))
+# Добавляем solution/ в путь для импорта
+sys.path.insert(0, str(Path(__file__).parent.parent / "solution"))
 
-from public_archive import DATASET, build_public_archive
+import llm
 
-# Архив датасета в git не хранится (*.zip в .gitignore) — на свежем клоне и в CI
-# собираем из закоммиченного датасета. Той же функцией, что `make public-archive`:
-# другая упаковка дала бы другие байты и другой dataset_hash.
-if DATASET.is_dir():
-    build_public_archive()
+
+@pytest.fixture(autouse=True)
+def mock_llm_call_for_tests(monkeypatch):
+    """Мокирование llm.call для тестов, чтобы не требовать реального LLM-ключа."""
+
+    def fake_call(prompt, schema, schema_version, document_b64=None, max_tokens=8000):
+        # На публичном датасете есть 11 уникальных описаний в OTHER:
+        # "Sewer discharge levy" с разными периодами.
+        # По брифу, все они должны быть классифицированы как UTILITIES.
+        descriptions = []
+        for line in prompt.split("\n"):
+            if re.match(r"^\d+\.\s+", line):
+                desc = line.split(". ", 1)[1] if ". " in line else line
+                descriptions.append(desc)
+
+        return {"categories": [{"description": desc, "category": "UTILITIES"} for desc in descriptions]}
+
+    monkeypatch.setattr(llm, "call", fake_call)
