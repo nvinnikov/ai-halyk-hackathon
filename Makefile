@@ -1,6 +1,6 @@
 # Все цели идут через `uv run` ради воспроизводимого окружения из uv.lock.
 # `check` — локальное зеркало CI-гейта.
-.PHONY: install extract solve score lint typecheck test check
+.PHONY: install public-archive extract solve score lint typecheck test check
 
 install:
 	uv sync --extra dev
@@ -15,12 +15,18 @@ install:
 extract: install
 	uv run python solution/extract.py
 
+# Публичный архив в git не хранится (*.zip в .gitignore), а вход пайплайна —
+# именно архив. Собирается из закоммиченного датасета тем же кодом, что зовут
+# CI и tests/conftest.py. Если файл уже есть — no-op.
+public-archive: install
+	uv run python tools/public_archive.py
+
 # Основной прогон через единственную точку входа: пишет out/submission.json и
 # печатает скор по публичному ground_truth. Архив переопределяется:
-# `make solve ARCHIVE=private.zip`.
+# `make solve ARCHIVE=private.zip` — тогда public-archive не нужен.
 ARCHIVE ?= 6a741640c31eb032062683.zip
 
-solve: install
+solve: public-archive
 	./run.sh $(ARCHIVE)
 
 score: solve

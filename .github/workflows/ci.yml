@@ -43,10 +43,10 @@ jobs:
           version: "0.11.26"
       - run: uv sync --extra dev --frozen
       # Архив задания в git не хранится (*.zip в .gitignore), а вход пайплайна —
-      # именно архив. Собираем его из закоммиченного датасета; тем же файлом
-      # пользуется tests/conftest.py.
+      # именно архив. Собираем тем же кодом, что `make public-archive` и
+      # tests/conftest.py: другая упаковка дала бы другой dataset_hash.
       - name: Собрать архив датасета
-        run: cd dataset && zip -qr ../6a741640c31eb032062683.zip agentic-bank-public
+        run: uv run python tools/public_archive.py
       # Регрессия по публичному набору: скор не ниже baseline, форма ответа
       # совпадает с submission_template.json, повторный прогон даёт то же самое.
       - name: pytest (регрессия скора + форма submission)

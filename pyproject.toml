@@ -24,7 +24,7 @@ package = false
 [tool.ruff]
 line-length = 110
 target-version = "py311"
-src = ["solution", "tests"]
+src = ["solution", "tests", "tools"]
 
 [tool.ruff.lint]
 # pyflakes(F), pycodestyle(E/W), isort(I), bugbear(B), pyupgrade(UP), comprehensions(C4)
@@ -35,7 +35,7 @@ ignore = ["E402"]
 
 [tool.mypy]
 python_version = "3.11"
-files = ["solution", "tests"]
+files = ["solution", "tests", "tools"]
 # Код гоняется на скорость хакатона и почти не типизирован: проверяем то, что
 # можно проверить без аннотаций, вместо того чтобы глушить весь mypy.
 ignore_missing_imports = true

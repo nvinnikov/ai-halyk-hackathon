@@ -9,10 +9,18 @@
 ## Быстрый старт
 
 ```bash
+make public-archive                   # собрать публичный архив (в git не хранится)
 ./run.sh 6a741640c31eb032062683.zip   # единственная точка входа: архив → out/submission.json
 make solve                            # то же самое через make (ARCHIVE=... переопределяет архив)
 make check                            # локальный CI-гейт: lint + typecheck + tests
 ```
+
+Вход пайплайна — zip-архив датасета, а `*.zip` в `.gitignore`, поэтому на свежем
+клоне публичный архив надо собрать: `make public-archive` пакует
+`dataset/agentic-bank-public/` в `6a741640c31eb032062683.zip`. Тем же кодом
+(`tools/public_archive.py`) пользуются CI и `tests/conftest.py` — иначе байты
+архива, а с ними и `dataset_hash`, разошлись бы. На боевом прогоне архив
+приходит аргументом и уже существует.
 
 Окружение поднимает [uv](https://docs.astral.sh/uv/) из `uv.lock`, Python пинится
 `.python-version`. Все скрипты рассчитаны на запуск **из корня репозитория** —
@@ -30,6 +38,7 @@ make check                            # локальный CI-гейт: lint + t
 | `solution/engine.py` | Загрузка и нормализация леджера, агрегаты (выручка, расходы по категориям, платежи связанным сторонам). |
 | `solution/covenants.py` | Формулы ковенантов и их пороги по заёмщикам. |
 | `solution/solve.py` | Harness: скелет-первым `out/submission.json`, fail-open на ячейку, трейс в `work/<hash>/trace/`. |
+| `tools/public_archive.py` | Сборка публичного архива датасета — общий код для `make public-archive`, CI и `tests/conftest.py`. |
 | `docs/superpowers/specs/` | Проектная спека пайплайна. |
 
 ## Команды
@@ -37,6 +46,7 @@ make check                            # локальный CI-гейт: lint + t
 | Команда | Что делает |
 | --- | --- |
 | `make install` | `uv sync --extra dev` |
+| `make public-archive` | Собрать `6a741640c31eb032062683.zip` из `dataset/agentic-bank-public/` |
 | `make extract` | Пересобрать кэш текста PDF |
 | `make solve` | Прогнать решение (`./run.sh`), записать `out/submission.json`, напечатать скор |
 | `make lint` | `ruff format --check` + `ruff check` |

@@ -3,7 +3,6 @@
 
 import os
 import sys
-import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -11,17 +10,12 @@ ROOT = Path(__file__).resolve().parent.parent
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT / "solution"))
 sys.path.insert(0, str(ROOT / "eval"))
+sys.path.insert(0, str(ROOT / "tools"))
 
-# Собрать архив датасета для CI, если его нет.
-# В CI файл в .gitignore отсутствует, поэтому пересоздаём из закоммиченного датасета.
-_ZIP_PATH = ROOT / "6a741640c31eb032062683.zip"
-_DATASET_PATH = ROOT / "dataset" / "agentic-bank-public"
+from public_archive import DATASET, build_public_archive
 
-if not _ZIP_PATH.exists() and _DATASET_PATH.exists():
-    # Архивируем dataset/agentic-bank-public/ так, чтобы верхнеуровневый каталог
-    # в архиве был agentic-bank-public/ (архивируем из dataset/)
-    with zipfile.ZipFile(_ZIP_PATH, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file_path in _DATASET_PATH.rglob("*"):
-            if file_path.is_file():
-                arcname = file_path.relative_to(_DATASET_PATH.parent)
-                zf.write(file_path, arcname)
+# Архив датасета в git не хранится (*.zip в .gitignore) — на свежем клоне и в CI
+# собираем из закоммиченного датасета. Той же функцией, что `make public-archive`:
+# другая упаковка дала бы другие байты и другой dataset_hash.
+if DATASET.is_dir():
+    build_public_archive()

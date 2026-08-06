@@ -18,6 +18,20 @@ PUBLIC_ZIP = Path("6a741640c31eb032062683.zip")
 GT = json.loads(Path("dataset/agentic-bank-public/ground_truth.json").read_text())["scenarios"]
 TEMPLATE = json.loads(Path("dataset/agentic-bank-public/submission_template.json").read_text())
 BASELINE = 34.00
+CELL_FIELDS = ("actual", "evidence_txn_id", "status")
+
+
+def assert_cell_valid(cell: dict, where: str) -> None:
+    """Форма ячейки. dump_submission сверяет с шаблоном только пары
+    (сценарий, пункт), поля внутри ячейки не проверяет никто, кроме этого."""
+    assert sorted(cell) == list(CELL_FIELDS), f"{where}: поля {sorted(cell)}"
+    assert cell["status"] in ("BREACH", "COMPLIANT"), f"{where}: статус {cell['status']!r}"
+    assert isinstance(cell["actual"], int | float) and not isinstance(cell["actual"], bool), (
+        f"{where}: actual не число ({cell['actual']!r})"
+    )
+    assert cell["evidence_txn_id"] is None or isinstance(cell["evidence_txn_id"], str), (
+        f"{where}: улика не строка и не None ({cell['evidence_txn_id']!r})"
+    )
 
 
 @pytest.fixture(scope="module")
@@ -36,14 +50,20 @@ def test_hash_printed_first(capsys):
     assert first.startswith("dataset_hash: ")
 
 
+def test_template_cells_have_expected_fields():
+    """CELL_FIELDS — не выдумка теста, а форма ячейки из шаблона организаторов."""
+    for sc, cells in TEMPLATE["answers"].items():
+        for clause, cell in cells.items():
+            assert sorted(cell) == list(CELL_FIELDS), f"шаблон {sc} {clause}: поля {sorted(cell)}"
+
+
 def test_submission_file_matches_template(answers):
     sub = json.loads(Path("out/submission.json").read_text())
     assert sorted(sub["answers"]) == sorted(TEMPLATE["answers"])
     for sc, cells in sub["answers"].items():
         assert sorted(cells) == sorted(TEMPLATE["answers"][sc])
-        for cell in cells.values():
-            assert cell["status"] in ("BREACH", "COMPLIANT")
-            assert isinstance(cell["actual"], int | float)
+        for clause, cell in cells.items():
+            assert_cell_valid(cell, f"{sc} {clause}")
 
 
 def test_cell_failure_does_not_kill_run(monkeypatch):
@@ -57,9 +77,8 @@ def test_cell_failure_does_not_kill_run(monkeypatch):
 
     monkeypatch.setattr(solve, "solve_cell", sabotaged)
     answers = solve.main(PUBLIC_ZIP, facts_source="expected")
-    for cell in answers[victim].values():
-        assert cell["status"] in ("BREACH", "COMPLIANT")
-        assert isinstance(cell["actual"], int | float)
+    for clause, cell in answers[victim].items():
+        assert_cell_valid(cell, f"{victim} {clause}")
 
 
 def test_scenario_load_failure_does_not_kill_run(monkeypatch):
@@ -75,9 +94,8 @@ def test_scenario_load_failure_does_not_kill_run(monkeypatch):
 
     monkeypatch.setattr(solve, "load", sabotaged)
     answers = solve.main(PUBLIC_ZIP, facts_source="expected")
-    for cell in answers[victim].values():
-        assert cell["status"] in ("BREACH", "COMPLIANT")
-        assert isinstance(cell["actual"], int | float)
+    for clause, cell in answers[victim].items():
+        assert_cell_valid(cell, f"{victim} {clause}")
     other = sorted(TEMPLATE["answers"])[1]
     assert any(cell["evidence_txn_id"] is not None for cell in answers[other].values())
 
