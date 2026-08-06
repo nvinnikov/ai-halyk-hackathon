@@ -41,6 +41,16 @@ def test_fallback_cell_actual_ladder():
     assert "fallback_coin_flip" in alarms
 
 
+def test_prior_loads_from_any_cwd(monkeypatch, tmp_path):
+    """Прогон могут запустить не из корня — приор обязан найтись через ROOT,
+    иначе skeleton() падает до первой ячейки и submission не создаётся."""
+    import fallbacks
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(fallbacks, "_prior_cache", None)
+    assert "global" in fallbacks.load_prior()
+
+
 def test_fallback_cell_always_complete():
     cell, _ = fallback_cell(None, None, None, [])
     assert cell["status"] in ("BREACH", "COMPLIANT")

@@ -10,11 +10,13 @@
 """
 
 import json
-from pathlib import Path
 
 from dsl import Ratio
+from util import ROOT
 
-_PRIOR_PATH = Path("eval/prior.json")
+# Через ROOT, а не cwd: запуск не из корня уронил бы skeleton() до первой
+# ячейки — submission не создался бы вообще, отменяя весь скелет-первым.
+_PRIOR_PATH = ROOT / "eval" / "prior.json"
 _prior_cache: dict | None = None
 
 # ключевые слова цитаты пункта → имя шаблона (ярус «эвристика по типу ковенанта»)

@@ -87,6 +87,22 @@ def test_cell_failure_does_not_kill_run(monkeypatch):
             assert cell["actual"] == float(Decimal(str(SPECS[sc][clause][2])))
 
 
+def test_diagnostics_failure_does_not_kill_run(monkeypatch):
+    """Диагностика (borrower-трейс, sign_divergence) — не расчёт: её падение
+    не должно ни убивать прогон, ни отбрасывать уже посчитанную ячейку.
+    После задачи 24 категории приходят от LLM, и expand() внутри
+    sign_divergence может бросить KeyError на первой же невалидной."""
+
+    def boom(*a, **k):
+        raise KeyError("категория вне таксономии")
+
+    monkeypatch.setattr(solve, "sign_divergence", boom)
+    monkeypatch.setattr(solve, "_write_borrower_trace", boom)
+    answers = solve.main(PUBLIC_ZIP, facts_source="expected")
+    total = score(answers, GT, verbose=False)
+    assert total >= BASELINE  # ячейки посчитаны, диагностика потеряна — не наоборот
+
+
 def test_scenario_load_failure_does_not_kill_run(monkeypatch):
     """Падение загрузки сценария не убивает прогон: его три ячейки остаются
     скелетом, остальные сценарии считаются."""

@@ -348,43 +348,71 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
             for clause in sorted(template["answers"][scenario]):
                 cell, trace = _spec_only_fallback(scenario, clause, computed, exc)
                 answers[scenario][clause] = cell
-                dump_submission(sub, template["answers"])
-                _write_trace(wd, scenario, clause, trace)
+                try:
+                    dump_submission(sub, template["answers"])
+                    _write_trace(wd, scenario, clause, trace)
+                except Exception as wexc:
+                    print(f"ALARM trace_write_failed {scenario} {clause}: {wexc!r}", flush=True)
             continue
         for alarm in fx_alarms:
             print(f"ALARM {alarm}", flush=True)
-        cov = _write_borrower_trace(wd, scenario, rows, template["answers"][scenario], facts_source)
-        if cov["alarm"] != "none":
-            print(
-                f"ALARM category_coverage {scenario}: {cov['alarm']} other_share={cov['other_share']:.4f}",
-                flush=True,
-            )
+        # Диагностика — не расчёт: её падение не должно стоить ни одной ячейки.
+        try:
+            cov = _write_borrower_trace(wd, scenario, rows, template["answers"][scenario], facts_source)
+            if cov["alarm"] != "none":
+                print(
+                    f"ALARM category_coverage {scenario}: {cov['alarm']} other_share={cov['other_share']:.4f}",
+                    flush=True,
+                )
+        except Exception as exc:
+            print(f"ALARM borrower_trace_failed {scenario}: {exc!r}", flush=True)
         for clause in sorted(template["answers"][scenario]):
+            trace: dict = {"scenario": scenario, "clause": clause}
+            cell = answers[scenario][clause]  # скелет — фолбэк последней инстанции
             try:
-                cellspec_or_error: object = legacy_spec_to_cellspec(SPECS[scenario][clause])
-            except Exception as exc:
-                cellspec_or_error = exc
-            cell, trace = run_cell(scenario, clause, raw, facts, cellspec_or_error, computed)
-            if trace.get("tier") != 0:
-                print(f"ALARM cell_fallback {scenario} {clause}: tier={trace.get('tier')}", flush=True)
-            if fx_alarms:
-                trace["fx_alarms"] = fx_alarms
-            if isinstance(cellspec_or_error, dict):
-                # Знак расходной категории: дефолт out, а расхождение с net значит
-                # сторно внутри читаемой категории — на приватном наборе такие
-                # ячейки видны сразу, а не после разбора расхождения в баллах.
-                divergence = sign_divergence(rows, _metric_categories(cellspec_or_error["metric_ast"]))
-                if divergence:
-                    trace["sign_divergence"] = divergence
-                if trace.get("tier") == 0:
-                    computed.append((cellspec_or_error["direction"], cell["actual"]))
-                if cell["evidence_txn_id"] is not None:
-                    emitted += 1
-                    if isinstance(cellspec_or_error["metric_ast"], Ratio):
-                        ratio_emitted += 1
+                try:
+                    cellspec_or_error: object = legacy_spec_to_cellspec(SPECS[scenario][clause])
+                except Exception as exc:
+                    cellspec_or_error = exc
+                cell, trace = run_cell(scenario, clause, raw, facts, cellspec_or_error, computed)
+                if trace.get("tier") != 0:
+                    print(
+                        f"ALARM cell_fallback {scenario} {clause}: tier={trace.get('tier')}",
+                        flush=True,
+                    )
+                if fx_alarms:
+                    trace["fx_alarms"] = fx_alarms
+                if isinstance(cellspec_or_error, dict):
+                    # Знак расходной категории: дефолт out, а расхождение с net
+                    # значит сторно внутри читаемой категории. Категории могут
+                    # прийти от LLM — падение диагностики (KeyError в expand)
+                    # не должно отбросить уже посчитанную ячейку.
+                    try:
+                        divergence = sign_divergence(
+                            rows, _metric_categories(cellspec_or_error["metric_ast"])
+                        )
+                        if divergence:
+                            trace["sign_divergence"] = divergence
+                    except Exception as exc:
+                        trace["sign_divergence_error"] = repr(exc)
+                    if trace.get("tier") == 0:
+                        computed.append((cellspec_or_error["direction"], cell["actual"]))
+                    if cell["evidence_txn_id"] is not None:
+                        emitted += 1
+                        if isinstance(cellspec_or_error["metric_ast"], Ratio):
+                            ratio_emitted += 1
+            except Exception as exc:  # fail-open последней инстанции: ячейка — скелет
+                trace["error"] = repr(exc)
+                print(f"ALARM cell_failed {scenario} {clause}: {exc!r}", flush=True)
             answers[scenario][clause] = cell
-            dump_submission(sub, template["answers"])
-            _write_trace(wd, scenario, clause, trace)
+            try:
+                dump_submission(sub, template["answers"])
+            except Exception as exc:
+                print(f"ALARM submission_write_failed {scenario} {clause}: {exc!r}", flush=True)
+            try:
+                _write_trace(wd, scenario, clause, trace)
+            except Exception as exc:
+                print(f"ALARM trace_write_failed {scenario} {clause}: {exc!r}", flush=True)
     print(f"evidence emitted: {emitted}, of them on ratio-metrics: {ratio_emitted}", flush=True)
     return answers
 
