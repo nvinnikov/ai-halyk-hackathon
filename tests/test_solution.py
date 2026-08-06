@@ -67,18 +67,24 @@ def test_submission_file_matches_template(answers):
 
 
 def test_cell_failure_does_not_kill_run(monkeypatch):
-    original = solve.solve_cell
-    victim = sorted(TEMPLATE["answers"])[0]
+    """Сломанное вычисление не убивает прогон: ячейка приходит по лестнице,
+    и прочитанный порог не выбрасывается (5.7) — actual равен порогу спеки,
+    а не медиане и не 1.0."""
+    from decimal import Decimal
 
-    def sabotaged(scenario, clause, raw, facts):
-        if scenario == victim:
-            raise RuntimeError("искусственный сбой ячейки")
-        return original(scenario, clause, raw, facts)
+    from expected_extraction import SPECS
 
-    monkeypatch.setattr(solve, "solve_cell", sabotaged)
+    import evidence
+
+    def sabotaged(raw, facts, cellspec, overrides=None, set_exclude=frozenset()):
+        raise RuntimeError("искусственный сбой вычисления")
+
+    monkeypatch.setattr(evidence, "compute", sabotaged)
     answers = solve.main(PUBLIC_ZIP, facts_source="expected")
-    for clause, cell in answers[victim].items():
-        assert_cell_valid(cell, f"{victim} {clause}")
+    for sc, cells in answers.items():
+        for clause, cell in cells.items():
+            assert_cell_valid(cell, f"{sc} {clause}")
+            assert cell["actual"] == float(Decimal(str(SPECS[sc][clause][2])))
 
 
 def test_scenario_load_failure_does_not_kill_run(monkeypatch):
@@ -105,7 +111,9 @@ def test_trace_written_per_cell(answers):
 
     ds_hash, _ = extract_archive(PUBLIC_ZIP)
     traces = list((Path("work") / ds_hash / "trace").glob("*.json"))
-    assert len(traces) == 36
+    borrower = [t for t in traces if t.stem.endswith(".borrower")]
+    assert len(traces) - len(borrower) == 36
+    assert len(borrower) == 12
 
 
 def test_deterministic(answers):

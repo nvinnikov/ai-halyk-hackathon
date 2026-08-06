@@ -7,9 +7,10 @@ Submission пишется задом наперёд (раздел 6): снача
 индекса: всё, что может упасть после этого, оставляет на диске валидный
 файл вместо пустоты.
 
-Вычислительное ядро в solve_cell — интерпретатор DSL по шаблонам метрик;
-спеки и факты пока эталонные (мост legacy_spec_to_cellspec), задача 24
-подменит их на извлечённые, не трогая harness.
+Вычислительное ядро — лестница run_cell (5.7): спека в DSL → эвристика по
+цитате пункта → приор; null в actual не существует как состояние. Спеки и
+факты пока эталонные (мост legacy_spec_to_cellspec), задача 24 подменит их
+на извлечённые, не трогая harness.
 """
 
 import json
@@ -24,13 +25,15 @@ from expected_extraction import FACTS, SPECS
 
 import evidence
 from dsl import Agg, Ratio, parse, walk
-from engine import prepare_rows, select_rows, sign_divergence
+from engine import agg, prepare_rows, select_rows, sign_divergence
+from fallbacks import fallback_cell, family_of, heuristic_template
 from fx import coverage_alarms, to_usd
 from ledger import dirty_rows_of, extract_archive, find_inputs, load_ledger, rows_of
 from scindex import INDEX_VERSION, build_index
 from stages import artifact
+from taxonomy import coverage_report
 from templates import TEMPLATES
-from util import OUT, ROOT, q2, stable_json, workdir
+from util import OUT, q2, stable_json, workdir
 
 SUBMISSION_META = {"team": "", "contact_email": "", "model": ""}
 
@@ -101,6 +104,7 @@ def legacy_spec_to_cellspec(spec: tuple) -> dict:
         trigger = parse(f"gt(agg(FINANCING, in), const({opts['trigger_financing']}))")
     return {
         "metric_ast": parse(TEMPLATES[name]),
+        "metric_text": TEMPLATES[name],
         "direction": direction,
         "limit": Decimal(str(limit)),
         "trigger_ast": trigger,
@@ -114,25 +118,85 @@ def _metric_categories(node) -> list[str]:
     return sorted({n.category for n in walk(node) if isinstance(n, Agg) and n.sign != "in"})
 
 
-def solve_cell(scenario: str, clause: str, raw: list, facts: dict) -> dict:
-    """Одна ячейка ответа. Точка подмены ядра задачами фаз 1–2: сигнатура и
-    форма результата фиксированы, содержимое — нет.
-
-    Принимает сырые строки (до prepare_rows): подготовка уезжает внутрь
-    evidence.compute, контрфактуал улики пересобирает строки сам. Модуль
-    значения берётся только здесь, при записи в submission: вердикт выше
-    считается со знаком (interp.verdict)."""
-    cellspec = legacy_spec_to_cellspec(SPECS[scenario][clause])
-    status, res = evidence.compute(raw, facts, cellspec)
-    ev_txn, ev_trace = evidence.find(raw, facts, cellspec, status)
+def _metric_inputs(node, raw: list, facts: dict) -> dict:
+    """Входы формулы для трейса: агрегат каждой пары (категория, знак) из AST."""
+    rows = prepare_rows(raw, facts)
     return {
-        "status": status,
-        "actual": q2(abs(res.value)),
-        "evidence_txn_id": ev_txn,
-        # Служебные ключи снимаются перед записью в submission, уходят в трейс.
-        "_alarms": sorted(res.flags),
-        "_evidence_trace": ev_trace,
+        f"{n.category}:{n.sign}": str(agg(rows, n.category, n.sign)) for n in walk(node) if isinstance(n, Agg)
     }
+
+
+def run_cell(
+    scenario: str,
+    clause: str,
+    raw: list,
+    facts: dict,
+    cellspec_or_error,
+    computed: list,
+    quote: str = "",
+) -> tuple[dict, dict]:
+    """Лестница целиком: спека → эвристика по цитате → приор. (ячейка, трейс).
+
+    Ярус пишется в trace["tier"]: 0 — dsl, 1 — heuristic_template, 2 — prior;
+    его читает инвариант check_fallback_rate (задача 26). Модуль значения
+    берётся только при записи в ячейку: вердикт считается со знаком.
+    quote — цитата пункта договора; задача 24 передаёт её из извлечённой
+    спеки, в expected-режиме она пуста."""
+    trace: dict = {"scenario": scenario, "clause": clause, "quote": quote}
+    if isinstance(cellspec_or_error, dict):
+        cellspec = cellspec_or_error
+        trace["spec"] = {
+            "quote": quote,
+            "direction": cellspec["direction"],
+            "limit": str(cellspec["limit"]),
+            "metric": cellspec.get("metric_text", ""),
+        }
+        try:
+            status, res = evidence.compute(raw, facts, cellspec)
+            ev_txn, ev_trace = evidence.find(raw, facts, cellspec, status)
+            trace.update(
+                path="dsl",
+                tier=0,
+                formula=cellspec.get("metric_text", ""),
+                inputs=_metric_inputs(cellspec["metric_ast"], raw, facts),
+                value=str(res.value),
+                evidence=ev_trace,
+                flags=sorted(res.flags),
+            )
+            cell = {"status": status, "actual": q2(abs(res.value)), "evidence_txn_id": ev_txn}
+            return cell, trace
+        except Exception as exc:
+            # Спека построилась, вычисление упало: направление и порог прочитаны,
+            # лестница не выбрасывает их (5.7) — actual = порог, статус — приор.
+            trace["dsl_error"] = repr(exc)
+            cell, alarms = fallback_cell(
+                cellspec["direction"],
+                family_of(cellspec["metric_ast"], cellspec["limit"]),
+                cellspec["limit"],
+                computed,
+            )
+            trace.update(path="prior", tier=2, alarms=alarms)
+            return cell, trace
+    trace["spec_error"] = repr(cellspec_or_error)
+    tpl = heuristic_template(quote)
+    if tpl is not None:
+        try:
+            metric_ast = parse(TEMPLATES[tpl])
+            # Порога нет — эвристика даёт только метрику; статус возьмёт приор.
+            _, res = evidence.compute(
+                raw,
+                facts,
+                {"metric_ast": metric_ast, "direction": "max", "limit": Decimal(0), "trigger_ast": None},
+            )
+            cell, alarms = fallback_cell(None, family_of(metric_ast, None), None, computed)
+            cell["actual"] = q2(abs(res.value))
+            trace.update(path="heuristic_template", tier=1, template=tpl, alarms=alarms)
+            return cell, trace
+        except Exception as exc:
+            trace["heuristic_error"] = repr(exc)
+    cell, alarms = fallback_cell(None, None, None, computed)
+    trace.update(path="prior", tier=2, alarms=alarms)
+    return cell, trace
 
 
 def _donor_rates(targets: list[str], scenario: str) -> list[dict]:
@@ -171,20 +235,11 @@ def scenario_inputs(archive: Path, scenario: str) -> tuple[list[dict], dict]:
 # --- harness -----------------------------------------------------------------
 
 
-def _prior_status() -> str:
-    """Самый частый статус по публичному набору — фолбэк ячейки, которую не
-    удалось посчитать. Ключи сортируются: при равенстве частот выбор не должен
-    зависеть от порядка в JSON."""
-    p = json.loads((ROOT / "eval" / "prior.json").read_text())["global"]
-    return max(sorted(p), key=lambda k: p[k])
-
-
 def skeleton(template_answers: dict) -> dict:
-    status = _prior_status()
-    return {
-        sc: {cl: {"status": status, "actual": 1.0, "evidence_txn_id": None} for cl in cells}
-        for sc, cells in template_answers.items()
-    }
+    """Каждая ячейка скелета — нижний ярус лестницы (глобальный приор):
+    на этом этапе не известно ничего, кроме самого шаблона."""
+    cell, _ = fallback_cell(None, None, None, [])
+    return {sc: {cl: dict(cell) for cl in cells} for sc, cells in template_answers.items()}
 
 
 def dump_submission(sub: dict, template_answers: dict) -> None:
@@ -197,6 +252,48 @@ def dump_submission(sub: dict, template_answers: dict) -> None:
     tmp = OUT / "submission.json.tmp"
     tmp.write_text(json.dumps(sub, ensure_ascii=False, indent=2))
     tmp.replace(OUT / "submission.json")
+
+
+def _spec_only_fallback(scenario: str, clause: str, computed: list, exc: Exception) -> tuple[dict, dict]:
+    """Сценарий не загрузился: строк нет, но спека известна — лестница
+    сохраняет прочитанные направление и порог вместо скелета."""
+    trace: dict = {"scenario": scenario, "clause": clause, "error": repr(exc)}
+    try:
+        cs = legacy_spec_to_cellspec(SPECS[scenario][clause])
+        cell, alarms = fallback_cell(
+            cs["direction"], family_of(cs["metric_ast"], cs["limit"]), cs["limit"], computed
+        )
+    except Exception as spec_exc:
+        trace["spec_error"] = repr(spec_exc)
+        cell, alarms = fallback_cell(None, None, None, computed)
+    trace.update(path="prior", tier=2, alarms=alarms)
+    return cell, trace
+
+
+def _write_borrower_trace(wd: Path, scenario: str, rows: list, clauses, facts_source: str) -> dict:
+    """Пер-заёмщицкий трейс (раздел 6): категории всех строк и покрытие
+    категоризации пишутся один раз на заёмщика, а не трижды по ячейкам.
+    Документы в expected-режиме пусты: факты пришли из эталона, не из PDF."""
+    referenced: set[str] = set()
+    for clause in sorted(clauses):
+        try:
+            cs = legacy_spec_to_cellspec(SPECS[scenario][clause])
+        except Exception:
+            continue
+        referenced |= {n.category for n in walk(cs["metric_ast"]) if isinstance(n, Agg)}
+    cov = coverage_report(rows, referenced)
+    payload = {
+        "scenario": scenario,
+        "facts_source": facts_source,
+        "docs_used": [],
+        "docs_rejected": [],
+        "categories": {r["txn_id"]: r["cat"] for r in sorted(rows, key=lambda x: x["txn_id"])},
+        "coverage": cov,
+    }
+    d = wd / "trace"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{scenario}.borrower.json").write_text(stable_json(payload))
+    return cov
 
 
 def _write_trace(wd: Path, scenario: str, clause: str, payload: dict) -> None:
@@ -237,50 +334,54 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
     # Диагностика 5.6: общее число непустых улик и доля на коэффициентных
     # метриках — резкий рост второй цифры значит, что D собрано слишком широко.
     emitted = ratio_emitted = 0
+    # Посчитанные ярусом dsl пары (направление, actual) — медианная ступень
+    # лестницы для ячеек без прочитанного порога.
+    computed: list[tuple[str, float]] = []
     for scenario in targets:
         facts = _facts_of(scenario)
         try:
             raw, rows, fx_alarms = load_rows(
                 scenario, scenario_rows, index, facts, _donor_rates(targets, scenario)
             )
-        except Exception as exc:  # fail-open: сценарий целиком остаётся скелетом
+        except Exception as exc:  # fail-open: ячейки приходят лестницей без строк
             print(f"ALARM scenario_failed {scenario}: {exc!r}", flush=True)
             for clause in sorted(template["answers"][scenario]):
-                _write_trace(
-                    wd,
-                    scenario,
-                    clause,
-                    {"scenario": scenario, "clause": clause, "path": "legacy", "error": repr(exc)},
-                )
+                cell, trace = _spec_only_fallback(scenario, clause, computed, exc)
+                answers[scenario][clause] = cell
+                dump_submission(sub, template["answers"])
+                _write_trace(wd, scenario, clause, trace)
             continue
         for alarm in fx_alarms:
             print(f"ALARM {alarm}", flush=True)
+        cov = _write_borrower_trace(wd, scenario, rows, template["answers"][scenario], facts_source)
+        if cov["alarm"] != "none":
+            print(
+                f"ALARM category_coverage {scenario}: {cov['alarm']} other_share={cov['other_share']:.4f}",
+                flush=True,
+            )
         for clause in sorted(template["answers"][scenario]):
-            trace = {"scenario": scenario, "clause": clause, "path": "legacy"}
+            try:
+                cellspec_or_error: object = legacy_spec_to_cellspec(SPECS[scenario][clause])
+            except Exception as exc:
+                cellspec_or_error = exc
+            cell, trace = run_cell(scenario, clause, raw, facts, cellspec_or_error, computed)
+            if trace.get("tier") != 0:
+                print(f"ALARM cell_fallback {scenario} {clause}: tier={trace.get('tier')}", flush=True)
             if fx_alarms:
                 trace["fx_alarms"] = fx_alarms
-            metric_ast = legacy_spec_to_cellspec(SPECS[scenario][clause])["metric_ast"]
-            # Знак расходной категории: дефолт out, а расхождение с net значит
-            # сторно внутри читаемой категории — на приватном наборе такие
-            # ячейки видны сразу, а не после разбора расхождения в баллах.
-            divergence = sign_divergence(rows, _metric_categories(metric_ast))
-            if divergence:
-                trace["sign_divergence"] = divergence
-            try:
-                cell = solve_cell(scenario, clause, raw, facts)
-                cell_alarms = cell.pop("_alarms", [])
-                if cell_alarms:
-                    trace["alarms"] = cell_alarms
-                trace["evidence"] = cell.pop("_evidence_trace", [])
-                trace["cell"] = cell
-            except Exception as exc:  # fail-open: ячейка остаётся фолбэком
-                trace["error"] = repr(exc)
-                print(f"ALARM cell_failed {scenario} {clause}: {exc!r}", flush=True)
-                cell = answers[scenario][clause]
-            if cell["evidence_txn_id"] is not None:
-                emitted += 1
-                if isinstance(metric_ast, Ratio):
-                    ratio_emitted += 1
+            if isinstance(cellspec_or_error, dict):
+                # Знак расходной категории: дефолт out, а расхождение с net значит
+                # сторно внутри читаемой категории — на приватном наборе такие
+                # ячейки видны сразу, а не после разбора расхождения в баллах.
+                divergence = sign_divergence(rows, _metric_categories(cellspec_or_error["metric_ast"]))
+                if divergence:
+                    trace["sign_divergence"] = divergence
+                if trace.get("tier") == 0:
+                    computed.append((cellspec_or_error["direction"], cell["actual"]))
+                if cell["evidence_txn_id"] is not None:
+                    emitted += 1
+                    if isinstance(cellspec_or_error["metric_ast"], Ratio):
+                        ratio_emitted += 1
             answers[scenario][clause] = cell
             dump_submission(sub, template["answers"])
             _write_trace(wd, scenario, clause, trace)
