@@ -78,6 +78,14 @@ def test_diff_facts_fx_rates_missing():
     assert any("fx_rates" in x for x in d)
 
 
+def test_diff_facts_fx_rates_extra():
+    """Лишний курс в got при пустом want должен быть поймана."""
+    want = {"fx_rates": []}
+    got = {"fx_rates": [{"currency": "EUR", "usd_per_unit": "1.1234"}]}
+    d = diff_facts(got, want)
+    assert any("fx_rates" in x and "extra" in x for x in d)
+
+
 def test_diff_facts_ebitda_addbacks_equal():
     want = {"ebitda_addbacks": ["100.00", "200.50", "300.75"]}
     got = {"ebitda_addbacks": ["100.00", "200.50", "300.75"]}
@@ -119,3 +127,36 @@ def test_diff_facts_addback_materiality_exact():
     got_bad = {"addback_materiality": "300000.01"}
     d = diff_facts(got_bad, want)
     assert any("addback_materiality" in x for x in d)
+
+
+# Тесты на детект галлюцинаций: лишние поля в got при пустом want
+def test_diff_facts_hallucination_reclass():
+    """Extraction выписал reclass, хотя want его не требует."""
+    want = {"reclass": []}
+    got = {"reclass": [{"txn": "TXN-0001", "counterparty": None, "to": "INTEREST", "quote": "q"}]}
+    d = diff_facts(got, want)
+    assert any("reclass" in x for x in d)
+
+
+def test_diff_facts_hallucination_exclude():
+    """Extraction выписал exclude, хотя want его не требует."""
+    want = {"exclude": []}
+    got = {"exclude": ["TXN-0001"]}
+    d = diff_facts(got, want)
+    assert any("exclude" in x for x in d)
+
+
+def test_diff_facts_hallucination_amount_override():
+    """Extraction выписал amount_override, хотя want его не требует."""
+    want = {"amount_override": {}}
+    got = {"amount_override": {"TXN-0001": "1000.00"}}
+    d = diff_facts(got, want)
+    assert any("amount_override" in x for x in d)
+
+
+def test_diff_facts_hallucination_ebitda_addbacks():
+    """Extraction выписал ebitda_addbacks, хотя want их не требует."""
+    want = {"ebitda_addbacks": []}
+    got = {"ebitda_addbacks": ["1000.00", "2000.00"]}
+    d = diff_facts(got, want)
+    assert any("ebitda_addbacks" in x for x in d)
