@@ -44,6 +44,21 @@ def test_all_five_categories_covered(tmp_path):
     assert all(n > 0 for n in report["by_category"].values())
 
 
+def test_mutation_counts_exact(tmp_path):
+    """Точные числа замера: регрессия, потерявшая часть из 47 описаний или
+    перекинувшая их между категориями (но сохранившая все пять непустыми),
+    не должна проходить незамеченной — она делает следующий замер тише."""
+    _, report = _mutated(tmp_path)
+    assert report["by_category"] == {
+        "CAPEX": 10,
+        "CONSULTING": 4,
+        "FINANCING": 2,
+        "OTHER_OPEX": 15,
+        "REVENUE": 16,
+    }
+    assert sum(report["by_category"].values()) == 47
+
+
 def test_only_description_changes(tmp_path):
     """Суммы, счета, даты и валюты не тронуты — иначе поедет ключ."""
     dst, _ = _mutated(tmp_path)
