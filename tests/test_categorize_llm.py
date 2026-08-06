@@ -310,3 +310,14 @@ def test_unknown_order_rejected():
 
     with _pytest.raises(ValueError):
         categorize_llm.categorize_batch(["x"], order="random")
+
+
+def test_unknown_order_rejected_on_empty_input():
+    """Пустой список не должен маскировать опечатку в имени перестановки —
+    иначе замер разброса (5.2.1) тихо получит два одинаковых прогона вместо трёх."""
+    import pytest as _pytest
+
+    import categorize_llm
+
+    with _pytest.raises(ValueError):
+        categorize_llm.categorize_batch([], order="bogus")

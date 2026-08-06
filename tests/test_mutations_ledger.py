@@ -21,6 +21,10 @@ from ledger import find_inputs
 from templates import TEMPLATES
 
 DATASET = Path("dataset/agentic-bank-public")
+# Публичный архив: имя от организаторов (см. tools/public_archive.py). Общая
+# константа для сравнения байтов мутированного архива и для чистого прогона,
+# перезаписывающего out/submission.json после llm-тестов (см. finally ниже).
+PUBLIC_ZIP = Path("6a741640c31eb032062683.zip")
 
 
 def _mutated(tmp_path) -> tuple[Path, dict]:
@@ -118,7 +122,7 @@ def test_archive_builds_and_differs(tmp_path):
     dataset_hash и отдельный каталог work/."""
     z = build_mutated_archive(tmp_path / "mutated.zip")
     assert z.exists() and z.stat().st_size > 0
-    assert z.read_bytes() != Path("6a741640c31eb032062683.zip").read_bytes()
+    assert z.read_bytes() != PUBLIC_ZIP.read_bytes()
 
 
 GT = json.loads(Path("dataset/agentic-bank-public/ground_truth.json").read_text())["scenarios"]
@@ -128,6 +132,12 @@ GT = json.loads(Path("dataset/agentic-bank-public/ground_truth.json").read_text(
 # то есть в каждую коэффициентную ячейку, и частичное восстановление там
 # означает систематический сдвиг всех коэффициентов. Остальные три —
 # None до шага фиксации (значения впечатываются по факту первого замера).
+#
+# ОТКРЫТЫЙ ПУНКТ (дедлайн — открытие приватного набора): CAPEX, CONSULTING,
+# FINANCING не утверждаются вообще, пока не измерены живым прогоном на API —
+#   ANTHROPIC_API_KEY=... uv run pytest tests/test_mutations_ledger.py -m llm -q -s
+# Значения берутся из строки «ХУДШЕЕ ПО ТРЁМ» в выводе теста
+# test_recovery_by_category_worst_of_three_orders, округлённые вниз до сотых.
 FLOORS: dict[str, float | None] = {
     "REVENUE": 1.0,
     "OTHER_OPEX": 1.0,
@@ -173,19 +183,30 @@ def test_recovery_by_category_worst_of_three_orders(tmp_path):
         print(f"order={order}: " + ", ".join(f"{c}={sum(h) / len(h):.2f}" for c, h in sorted(by_cat.items())))
 
     print("ХУДШЕЕ ПО ТРЁМ: " + ", ".join(f"{c}={v:.2f}" for c, v in sorted(worst.items())))
-    failed = {c: worst[c] for c, floor in FLOORS.items() if floor is not None and worst.get(c, 0.0) < floor}
+    failed = {
+        c: worst.get(c, 0.0) for c, floor in FLOORS.items() if floor is not None and worst.get(c, 0.0) < floor
+    }
     assert failed == {}, f"восстановление ниже требуемого: {failed}"
 
 
 @pytest.mark.llm
 def test_mutated_run_scores_and_is_deterministic(tmp_path):
-    """Полный прогон на мутированном архиве против неизменного ключа."""
+    """Полный прогон на мутированном архиве против неизменного ключа.
+
+    solve.main всегда пишет out/submission.json, независимо от архива —
+    без finally на диске остался бы submission мутированного прогона,
+    внешне неотличимый от настоящего, а это единственный артефакт, который
+    уходит на проверку (см. tests/test_solution.py::
+    test_other_unassigned_written_when_rows_lost — тот же приём)."""
     import solve
     from score import score
 
-    z = build_mutated_archive(tmp_path / "mutated.zip")
-    a = solve.main(z, facts_source="expected")
-    total = score(a, GT, verbose=True)
-    print(f"СКОР НА МУТИРОВАННОМ АРХИВЕ: {total:.2f} (публичный потолок 34.00)")
-    b = solve.main(z, facts_source="expected")
-    assert a == b, "второй прогон разошёлся: детерминизм через кэш не держится"
+    try:
+        z = build_mutated_archive(tmp_path / "mutated.zip")
+        a = solve.main(z, facts_source="expected")
+        total = score(a, GT, verbose=True)
+        print(f"СКОР НА МУТИРОВАННОМ АРХИВЕ: {total:.2f} (публичный потолок 34.00)")
+        b = solve.main(z, facts_source="expected")
+        assert a == b, "второй прогон разошёлся: детерминизм через кэш не держится"
+    finally:
+        solve.main(PUBLIC_ZIP, facts_source="expected")

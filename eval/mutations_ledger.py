@@ -17,6 +17,7 @@ import shutil
 from pathlib import Path
 
 from categorize import categorize
+from public_archive import DATASET as PUBLIC_DATASET
 from public_archive import pack_dataset
 
 MUTATED_CATEGORIES = frozenset({"REVENUE", "CAPEX", "OTHER_OPEX", "CONSULTING", "FINANCING"})
@@ -99,7 +100,7 @@ def build_mutated_archive(dst_zip: Path) -> Path:
     """Архив мутированного датасета. Упаковывается тем же pack_dataset, что и
     публичный: иначе разные байты дали бы расходящиеся dataset_hash при
     одинаковом содержимом."""
-    src = Path("dataset/agentic-bank-public")
+    src = PUBLIC_DATASET
     work = Path(dst_zip).parent / (Path(dst_zip).stem + "_src")
     mutate_ledger(src, work)
     return pack_dataset(work / src.name, Path(dst_zip))

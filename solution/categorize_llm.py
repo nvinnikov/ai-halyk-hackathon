@@ -73,11 +73,12 @@ def categorize_batch(descriptions: list[str], order: str = "sorted") -> tuple[di
         (маппинг {description → category}, список алярмов)
         Если LLM предложит категорию вне LEAVES → остаётся OTHER + алярм category_rejected.
     """
+    # order валидируется до проверки на пустой ввод: иначе опечатка в имени
+    # перестановки (замер разброса, 5.2.1) на пустом списке пройдёт молча,
+    # а не пустой список — тихого провала здесь допускать нельзя.
+    unique = _ordered(descriptions, order)
     if not descriptions:
         return {}, []
-
-    # Дедупликация и порядок для детерминизма
-    unique = _ordered(descriptions, order)
 
     result = {}
     alarms = []

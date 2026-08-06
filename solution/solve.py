@@ -414,8 +414,16 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
                         trace["sign_divergence_error"] = repr(exc)
                     # Неразнесённые строки глазами этой ячейки (5.3): диагностика,
                     # вердикт не меняется. Падение обхода не стоит ячейки.
+                    #
+                    # Категории триггера учитываются наравне с категориями метрики:
+                    # несработавший триггер даёт COMPLIANT безусловно (evidence.compute),
+                    # поэтому потерянная строка в категории, которую читает только
+                    # триггер, молча переворачивает статус так же, как строка в метрике.
                     try:
-                        oa = cell_other_alarm(rows, _all_metric_categories(cellspec_or_error["metric_ast"]))
+                        alarm_categories = _all_metric_categories(cellspec_or_error["metric_ast"])
+                        if cellspec_or_error["trigger_ast"] is not None:
+                            alarm_categories |= _all_metric_categories(cellspec_or_error["trigger_ast"])
+                        oa = cell_other_alarm(rows, alarm_categories)
                         if oa is not None:
                             trace["other_unassigned"] = oa
                             print(

@@ -103,6 +103,7 @@ def test_diagnostics_failure_does_not_kill_run(monkeypatch):
 
     monkeypatch.setattr(solve, "sign_divergence", boom)
     monkeypatch.setattr(solve, "_write_borrower_trace", boom)
+    monkeypatch.setattr(solve, "cell_other_alarm", boom)
     answers = solve.main(PUBLIC_ZIP, facts_source="expected")
     total = score(answers, GT, verbose=False)
     assert total >= BASELINE  # ячейки посчитаны, диагностика потеряна — не наоборот
