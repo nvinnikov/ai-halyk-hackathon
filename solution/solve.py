@@ -7,8 +7,9 @@ Submission пишется задом наперёд (раздел 6): снача
 индекса: всё, что может упасть после этого, оставляет на диске валидный
 файл вместо пустоты.
 
-Вычислительное ядро в solve_cell пока легаси (engine + covenants на
-эталонных фактах); фазы 1–2 подменяют его, не трогая harness.
+Вычислительное ядро в solve_cell — интерпретатор DSL по шаблонам метрик;
+спеки и факты пока эталонные (мост legacy_spec_to_cellspec), задача 24
+подменит их на извлечённые, не трогая harness.
 """
 
 import copy
@@ -22,19 +23,40 @@ sys.path.insert(0, "eval")
 
 from expected_extraction import FACTS, SPECS
 
-from covenants import DRIVERS, METRIC_CATEGORIES, M
-from engine import inflow, prepare_rows, select_rows, sign_divergence
+from covenants import DRIVERS, METRIC_CATEGORIES
+from dsl import parse
 from engine import norm as norm_cp
+from engine import prepare_rows, select_rows, sign_divergence
 from fx import coverage_alarms, to_usd
+from interp import Ctx, check_trigger, evaluate, verdict
 from ledger import dirty_rows_of, extract_archive, find_inputs, load_ledger, rows_of
 from scindex import INDEX_VERSION, build_index
 from stages import artifact
+from templates import TEMPLATES
 from util import OUT, ROOT, q2, stable_json, workdir
 
 SUBMISSION_META = {"team": "", "contact_email": "", "model": ""}
 
 
-# --- легаси-ядро (заменяется задачами 15/16/24) ------------------------------
+# --- ядро на эталонных фактах (источник подменяется задачами 16/24) ----------
+
+
+def _with_doc_facts(facts: dict) -> dict:
+    """doc_facts для doc()-метрик DSL: считается детерминированно из сырых
+    фактов досье — арифметика (порог материальности, сумма добавок) остаётся
+    в коде, LLM отдаёт только исходные числа."""
+    out = dict(facts)
+    doc_facts = dict(out.get("doc_facts", {}))
+    addbacks = [Decimal(str(a)) for a in out.get("ebitda_addbacks", [])]
+    materiality = Decimal(str(out.get("addback_materiality", 0)))
+    doc_facts.setdefault(
+        "ebitda_addbacks_material_total",
+        str(sum((a for a in addbacks if a >= materiality), Decimal(0))),
+    )
+    if "severance_liability" in out:
+        doc_facts.setdefault("severance_liability", str(out["severance_liability"]))
+    out["doc_facts"] = doc_facts
+    return out
 
 
 def _facts_of(scenario: str) -> dict:
@@ -42,8 +64,10 @@ def _facts_of(scenario: str) -> dict:
 
     Задача 24 подменит здесь источник на извлечённые LLM факты, не трогая
     вызывающих (в том числе сбор донорских курсов по чужим заёмщикам).
+    Факты всегда проходят через _with_doc_facts: doc()-метрики DSL ждут
+    готовый doc_facts.
     """
-    return FACTS[scenario]
+    return _with_doc_facts(FACTS[scenario])
 
 
 def load_rows(
@@ -69,30 +93,40 @@ def load_rows(
     return raw, prepare_rows(raw, facts), alarms + row_alarms
 
 
-def _verdict(actual, direction, limit):
-    if direction == "max":
-        return "BREACH" if actual > limit else "COMPLIANT"
-    return "BREACH" if actual < limit else "COMPLIANT"
+def legacy_spec_to_cellspec(spec: tuple) -> dict:
+    """Мост из легаси-кортежа SPECS в форму ячейки для интерпретатора.
 
-
-def _evaluate(scenario, clause, rows, facts):
-    spec = SPECS[scenario][clause]
+    Временный: задача 24 будет собирать cellspec из извлечённой спеки."""
     name, direction, limit = spec[0], spec[1], spec[2]
     opts = spec[3] if len(spec) > 3 else {}
-    actual = M[name](rows, facts)
-    if "trigger_financing" in opts and inflow(rows, "FINANCING") <= opts["trigger_financing"]:
-        return "COMPLIANT", actual  # springing-тест не сработал
-    return _verdict(actual, direction, limit), actual
+    trigger = None
+    if "trigger_financing" in opts:
+        trigger = parse(f"gt(agg(FINANCING, in), const({opts['trigger_financing']}))")
+    return {
+        "metric_ast": parse(TEMPLATES[name]),
+        "direction": direction,
+        "limit": Decimal(str(limit)),
+        "trigger_ast": trigger,
+    }
+
+
+def _cell_verdict(scenario, clause, rows, facts):
+    """(status, res, alarms) ячейки интерпретатором. Триггер решает, применяется
+    ли тест, но вычисление метрики происходит всегда (5.7)."""
+    cellspec = legacy_spec_to_cellspec(SPECS[scenario][clause])
+    ctx = Ctx(rows=rows, facts=facts)
+    res = evaluate(cellspec["metric_ast"], ctx)
+    if not check_trigger(cellspec["trigger_ast"], ctx):
+        return "COMPLIANT", res, sorted(res.flags)  # springing-тест не сработал
+    status, alarms = verdict(res, cellspec["direction"], cellspec["limit"])
+    return status, res, alarms
 
 
 def _flips(scenario, clause, status, alt, raw):
     """Контрфактуал считается на тех же сырых строках с изменёнными фактами —
     без подмены глобального FACTS: скрытое состояние сломало бы детерминизм
     при параллельном счёте сценариев (задача 24)."""
-    try:
-        return _evaluate(scenario, clause, prepare_rows(raw, alt), alt)[0] != status
-    except ZeroDivisionError:
-        return False
+    return _cell_verdict(scenario, clause, prepare_rows(raw, alt), alt)[0] != status
 
 
 def _find_evidence(scenario, clause, status, rows, facts, raw):
@@ -133,13 +167,50 @@ def _find_evidence(scenario, clause, status, rows, facts, raw):
 
 def solve_cell(scenario: str, clause: str, rows: list, facts: dict, raw: list) -> dict:
     """Одна ячейка ответа. Точка подмены ядра задачами фаз 1–2: сигнатура и
-    форма результата фиксированы, содержимое — нет."""
-    status, actual = _evaluate(scenario, clause, rows, facts)
+    форма результата фиксированы, содержимое — нет.
+
+    Модуль значения берётся только здесь, при записи в submission: вердикт
+    выше считается со знаком (interp.verdict)."""
+    status, res, alarms = _cell_verdict(scenario, clause, rows, facts)
     return {
         "status": status,
-        "actual": q2(Decimal(str(abs(actual)))),
+        "actual": q2(abs(res.value)),
         "evidence_txn_id": _find_evidence(scenario, clause, status, rows, facts, raw),
+        "_alarms": alarms,  # снимается перед записью в submission, уходит в трейс
     }
+
+
+def _donor_rates(targets: list[str], scenario: str) -> list[dict]:
+    """Донорская ступень лестницы: курсы всех прочих целевых заёмщиков.
+
+    Порядок доноров фиксирован, чтобы выбор не зависел от порядка сценариев
+    в шаблоне; окончательный тай-брейк — в fx.pick_rate."""
+    return sorted(
+        (r for other in targets if other != scenario for r in _facts_of(other).get("fx_rates", [])),
+        key=lambda r: (r.get("doc_date") or "", r.get("doc_hash") or "", str(r.get("usd_per_unit"))),
+    )
+
+
+def scenario_inputs(archive: Path, scenario: str) -> tuple[list[dict], dict]:
+    """Строки заёмщика после fx-конвертации + факты (пока эталонные), факты
+    уже пропущены через _with_doc_facts. Переиспользуется тестами и main-путём
+    через те же стадии; повторный вызов дёшев — стадии кэшируются в work/<hash>.
+
+    В отличие от main, скелет submission здесь не строится: это read-only
+    вход для парити-теста и контрфактуалов задачи 16."""
+    archive = Path(archive)
+    ds_hash, input_dir = extract_archive(archive)
+    wd = workdir(ds_hash)
+    inputs = find_inputs(input_dir)
+    template = json.loads(inputs["template"].read_text())
+    targets = sorted(template["answers"])
+    ledger_art = load_ledger(wd, input_dir, target_scenarios=targets)
+    all_rows = rows_of(ledger_art)
+    index = artifact(wd / "index.json", INDEX_VERSION, lambda: build_index(all_rows, targets))
+    scenario_rows = all_rows + dirty_rows_of(ledger_art)
+    facts = _facts_of(scenario)
+    raw, _rows, _alarms = load_rows(scenario, scenario_rows, index, facts, _donor_rates(targets, scenario))
+    return raw, facts
 
 
 # --- harness -----------------------------------------------------------------
@@ -210,15 +281,10 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
 
     for scenario in targets:
         facts = _facts_of(scenario)
-        # Донорская ступень лестницы: курсы всех прочих целевых заёмщиков.
-        # Порядок доноров фиксирован, чтобы выбор не зависел от порядка
-        # сценариев в шаблоне; окончательный тай-брейк — в fx.pick_rate.
-        donor_rates = sorted(
-            (r for other in targets if other != scenario for r in _facts_of(other).get("fx_rates", [])),
-            key=lambda r: (r.get("doc_date") or "", r.get("doc_hash") or "", str(r.get("usd_per_unit"))),
-        )
         try:
-            raw, rows, fx_alarms = load_rows(scenario, scenario_rows, index, facts, donor_rates)
+            raw, rows, fx_alarms = load_rows(
+                scenario, scenario_rows, index, facts, _donor_rates(targets, scenario)
+            )
         except Exception as exc:  # fail-open: сценарий целиком остаётся скелетом
             print(f"ALARM scenario_failed {scenario}: {exc!r}", flush=True)
             for clause in sorted(template["answers"][scenario]):
@@ -243,6 +309,9 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
                 trace["sign_divergence"] = divergence
             try:
                 cell = solve_cell(scenario, clause, rows, facts, raw)
+                cell_alarms = cell.pop("_alarms", [])
+                if cell_alarms:
+                    trace["alarms"] = cell_alarms
                 trace["cell"] = cell
             except Exception as exc:  # fail-open: ячейка остаётся фолбэком
                 trace["error"] = repr(exc)
