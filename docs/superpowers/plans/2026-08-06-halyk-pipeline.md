@@ -1849,8 +1849,12 @@ git commit -m "feat: двухуровневая таксономия с ролл
 - Test: `tests/test_categorize_llm.py`
 
 **Interfaces:**
-- Consumes: `llm.call`, `taxonomy.LEAVES`.
-- Produces: `categorize_llm.categorize_batch(descriptions: list[str]) -> dict[str, str]` — уникальные описания → лист таксономии; вызывается из `load_ledger` для строк, где первый ярус дал `OTHER`; батчи по 50, кэш LLM делает повторы бесплатными. В строку артефакта пишется `"cat_tier": 1 | 2` — ярус виден в трейсе. Ответ модели вне `LEAVES` → строка остаётся `OTHER` + алярм `category_rejected`.
+- Consumes: `llm.call`, `taxonomy.LEAVES`, `scindex.target_scenario_of` (шаред-хелпер разбора txn_id, см. ниже).
+- Produces: `categorize_llm.categorize_batch(descriptions: list[str]) -> tuple[dict[str, str], list[dict]]` — `(уникальные описания → лист, алярмы)`; батчи по 50, кэш LLM делает повторы бесплатными. Ответ модели вне `LEAVES` → описание остаётся `OTHER` + алярм `{"kind": "category_rejected", "description": ..., "returned": ...}` в списке алярмов. В строку артефакта пишется `"cat_tier": 1 | 2`.
+
+**Правка по ревью (обязательна): второй ярус — ТОЛЬКО для строк целевых заёмщиков.** Иначе публичный прогон делает реальные LLM-вызовы на фоновых строках («Sewer discharge levy» у нецелевых счетов), и `run.sh`/CI-шаг `solve.py` падают без ключа, а офлайн-воспроизводимость гейта теряется. Гейт: `load_ledger` принимает `target_scenarios: list[str]` (ключи `submission_template.json`, доступны через `find_inputs`) и применяет второй ярус только к строкам, где `scindex.target_scenario_of(txn_id, set(target_scenarios))` вернул целевой сценарий И `cat == "OTHER"`. На публичном наборе у целевых 0 таких строк → **ноль LLM-вызовов**, гейт 34.00 офлайн-зелёный без ключа/кассеты/мока. Фоновые строки остаются `OTHER` (нам они не нужны). Извлечь из `scindex` per-txn матч в общий хелпер `scindex.target_scenario_of(txn_id, target_set) -> str | None` (граничный regex, ровно один целевой → сценарий, иначе None) и переиспользовать в обоих местах — не дублировать regex.
+
+**conftest.py НЕ переписывать.** Инфраструктура `488d1c2` (chdir, sys.path eval+tools, автосборка публичного архива) обязана остаться. Глобальный autouse-мок `llm.call` НЕ добавлять — при гейтинге на целевых он не нужен (публичные тесты не триггерят второй ярус). `test_categorize_llm` мокает `llm.call` сам, по-тестово.
 
 Схема и промпт:
 
