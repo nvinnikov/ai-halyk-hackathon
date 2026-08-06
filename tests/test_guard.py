@@ -66,3 +66,30 @@ def test_sanitize_removes_cf_from_normal_text():
     clean = sanitize_document(text)
     # Cf удалён, слово склеено
     assert clean == "платьёж"
+
+
+def test_sanitize_removes_control_chars_from_tag():
+    # Null character (U+0000, \x00) внутри слова document не спасает тег
+    dirty = "start <docu\x00ment> end"
+    clean = sanitize_document(dirty)
+    # Cc символ удалён, потом тег вырезан
+    assert "document" not in clean.lower()
+    assert "start" in clean and "end" in clean
+
+
+def test_sanitize_removes_form_feed_from_tag():
+    # Form feed (U+000C, \x0c) перед или внутри тега не спасает его
+    dirty = "text <docu\x0cment> more"
+    clean = sanitize_document(dirty)
+    # Cc символ удалён, тег вырезан
+    assert "document" not in clean.lower()
+    assert "text" in clean and "more" in clean
+
+
+def test_sanitize_preserves_newline_and_tab():
+    # \n и \t должны сохраняться (они несут форматирование текста)
+    text = "первая строка\nвторая строка\tс табуляцией"
+    clean = sanitize_document(text)
+    assert "\n" in clean
+    assert "\t" in clean
+    assert "первая строка" in clean and "вторая строка" in clean

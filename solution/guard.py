@@ -14,21 +14,22 @@ def sanitize_document(text: str) -> str:
 
     Удаляет последовательности вида </document> или <document...>,
     регистронезависимо и с пробелами внутри тегов, чтобы содержимое
-    не могло закрыть контейнер промпта. Также удаляет все format-символы
-    Unicode (категория Cf) — zero-width, BOM, directional marks — которые
-    могут быть использованы для обхода регекса.
+    не могло закрыть контейнер промпта. Также удаляет все format (Cf)
+    и control (Cc) символы Unicode — zero-width, BOM, null-bytes и т.д. —
+    которые могут быть использованы для обхода регекса.
 
     Args:
         text: Текст для санитизации.
 
     Returns:
-        Текст с вырезанными document-тегами и format-символами.
+        Текст с вырезанными document-тегами, format и control символами.
     """
-    # Сначала удаляем все Cf символы (zero-width, BOM, directional marks).
-    # Они используются для обхода регекса: <docu​ment> не совпадает с pattern,
-    # но LLM видит это как <document> и контейнер остаётся открытым.
-    # Cf-символы не должны быть в финансовых документах.
-    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    # Удаляем все Cf и Cc символы, но сохраняем значимые управляющие:
+    # \n (newline), \t (tab), \r (carriage return) — они несут форматирование.
+    # Атаки: <docu\x00ment> (null), <docu\x0cment> (form feed) не должны обходить защиту.
+    # Cf-/Cc-символы не должны быть в финансовых документах.
+    keep_chars = {"\n", "\t", "\r"}  # Сохраняем значимые управляющие
+    text = "".join(ch for ch in text if unicodedata.category(ch) not in ("Cf", "Cc") or ch in keep_chars)
 
     # Паттерн ловит: < (опциональные пробелы) (опциональный /)
     # (опциональные пробелы) document (остаток до >)
