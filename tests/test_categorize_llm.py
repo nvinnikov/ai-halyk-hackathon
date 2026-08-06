@@ -265,3 +265,48 @@ def test_categorize_batch_llm_failure_is_fail_open(monkeypatch):
     mapping, alarms = categorize_batch(["Some payment"])
     assert mapping == {}
     assert any(a["kind"] == "categorize_failed" for a in alarms)
+
+
+def test_order_changes_prompt_not_semantics(monkeypatch):
+    """Три перестановки дают три разных промпта при одном наборе описаний."""
+    import categorize_llm
+
+    seen = []
+
+    def fake_call(prompt, schema, version, **kw):
+        seen.append(prompt)
+        return {"categories": [{"description": d, "category": "UTILITIES"} for d in descs]}
+
+    # 4 описания, не 3: с тремя "Zebra/Alpha/Mango levy" hash-порядок случайно
+    # совпадает с reverse-порядком (sha256 — не random, совпадение стабильное),
+    # и тест был бы вечно красным по вине сэмпла, а не кода.
+    descs = ["Zebra levy", "Alpha levy", "Mango levy", "Delta levy"]
+    monkeypatch.setattr(categorize_llm.llm, "call", fake_call)
+    for order in ("sorted", "reverse", "hash"):
+        categorize_llm.categorize_batch(descs, order=order)
+    assert len(set(seen)) == 3, "перестановки обязаны давать разные промпты"
+
+
+def test_order_default_is_sorted(monkeypatch):
+    """Дефолт рабочего пути не меняется."""
+    import categorize_llm
+
+    seen = []
+
+    def fake_call(prompt, schema, version, **kw):
+        seen.append(prompt)
+        return {"categories": []}
+
+    monkeypatch.setattr(categorize_llm.llm, "call", fake_call)
+    categorize_llm.categorize_batch(["B item", "A item"])
+    categorize_llm.categorize_batch(["B item", "A item"], order="sorted")
+    assert seen[0] == seen[1]
+
+
+def test_unknown_order_rejected():
+    import pytest as _pytest
+
+    import categorize_llm
+
+    with _pytest.raises(ValueError):
+        categorize_llm.categorize_batch(["x"], order="random")

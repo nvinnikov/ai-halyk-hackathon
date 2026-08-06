@@ -5,8 +5,10 @@
 """
 
 import csv
+import json
 from pathlib import Path
 
+import pytest
 from mutations_ledger import (
     MUTATED_CATEGORIES,
     build_mutated_archive,
@@ -117,3 +119,73 @@ def test_archive_builds_and_differs(tmp_path):
     z = build_mutated_archive(tmp_path / "mutated.zip")
     assert z.exists() and z.stat().st_size > 0
     assert z.read_bytes() != Path("6a741640c31eb032062683.zip").read_bytes()
+
+
+GT = json.loads(Path("dataset/agentic-bank-public/ground_truth.json").read_text())["scenarios"]
+
+# Восстановление, которого требуем от второго яруса, по худшей из трёх
+# перестановок. REVENUE и OTHER_OPEX — жёстко и априори: обе входят в EBITDA,
+# то есть в каждую коэффициентную ячейку, и частичное восстановление там
+# означает систематический сдвиг всех коэффициентов. Остальные три —
+# None до шага фиксации (значения впечатываются по факту первого замера).
+FLOORS: dict[str, float | None] = {
+    "REVENUE": 1.0,
+    "OTHER_OPEX": 1.0,
+    "CAPEX": None,
+    "CONSULTING": None,
+    "FINANCING": None,
+}
+
+
+@pytest.mark.llm
+def test_second_tier_regression_on_sewer_levy():
+    """Единственное описание набора, где второй ярус вызывается без мутации.
+
+    Тест заведомо зелёный: разово это уже проверено. Его задача — чтобы
+    правка промпта, схемы или таксономии не сломала ветку молча."""
+    from categorize_llm import categorize_batch
+
+    descs = sorted({d for d in _source_descriptions() if "sewer discharge levy" in d.lower()})
+    assert descs, "описания Sewer discharge levy исчезли из набора"
+    got, alarms = categorize_batch(descs)
+    assert [a for a in alarms if a["kind"] != "category_rejected"] == []
+    assert {got.get(d) for d in descs} == {"UTILITIES"}
+
+
+@pytest.mark.llm
+def test_recovery_by_category_worst_of_three_orders(tmp_path):
+    """Точность восстановления по худшей из трёх перестановок (5.2.1)."""
+    from categorize_llm import categorize_batch
+
+    _, report = _mutated(tmp_path)
+    origin = report["origin"]
+    descs = sorted(origin)
+
+    worst: dict[str, float] = {}
+    for order in ("sorted", "reverse", "hash"):
+        got, _ = categorize_batch(descs, order=order)
+        by_cat: dict[str, list[bool]] = {}
+        for d, want in sorted(origin.items()):
+            by_cat.setdefault(want, []).append(got.get(d) == want)
+        for cat, hits in by_cat.items():
+            share = sum(hits) / len(hits)
+            worst[cat] = min(worst.get(cat, 1.0), share)
+        print(f"order={order}: " + ", ".join(f"{c}={sum(h) / len(h):.2f}" for c, h in sorted(by_cat.items())))
+
+    print("ХУДШЕЕ ПО ТРЁМ: " + ", ".join(f"{c}={v:.2f}" for c, v in sorted(worst.items())))
+    failed = {c: worst[c] for c, floor in FLOORS.items() if floor is not None and worst.get(c, 0.0) < floor}
+    assert failed == {}, f"восстановление ниже требуемого: {failed}"
+
+
+@pytest.mark.llm
+def test_mutated_run_scores_and_is_deterministic(tmp_path):
+    """Полный прогон на мутированном архиве против неизменного ключа."""
+    import solve
+    from score import score
+
+    z = build_mutated_archive(tmp_path / "mutated.zip")
+    a = solve.main(z, facts_source="expected")
+    total = score(a, GT, verbose=True)
+    print(f"СКОР НА МУТИРОВАННОМ АРХИВЕ: {total:.2f} (публичный потолок 34.00)")
+    b = solve.main(z, facts_source="expected")
+    assert a == b, "второй прогон разошёлся: детерминизм через кэш не держится"

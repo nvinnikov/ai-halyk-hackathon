@@ -5,6 +5,8 @@
 Ответ валидируется против LEAVES; вне таксономии → OTHER.
 """
 
+import hashlib
+
 import llm
 from taxonomy import LEAVES
 
@@ -45,11 +47,27 @@ BATCH_SIZE = 50
 SCHEMA_VERSION = "1"
 
 
-def categorize_batch(descriptions: list[str]) -> tuple[dict[str, str], list[dict]]:
+def _ordered(descriptions: list[str], order: str) -> list[str]:
+    """Порядок описаний в пачке. Рабочий путь всегда sorted; остальные два
+    нужны замеру разброса (спека 5.2.1): другой порядок даёт другой промпт,
+    другой ключ кэша и, значит, независимый ответ модели при той же задаче."""
+    unique = sorted(set(descriptions))
+    if order == "sorted":
+        return unique
+    if order == "reverse":
+        return list(reversed(unique))
+    if order == "hash":
+        return sorted(unique, key=lambda d: hashlib.sha256(d.encode()).hexdigest())
+    raise ValueError(f"unknown order {order!r}")
+
+
+def categorize_batch(descriptions: list[str], order: str = "sorted") -> tuple[dict[str, str], list[dict]]:
     """Категоризирует список описаний через LLM пачками по 50.
 
     Параметры:
         descriptions: уникальные описания банковских операций
+        order: порядок описаний в пачке — "sorted" (рабочий путь), "reverse"
+            или "hash" (замер разброса, спека 5.2.1)
 
     Возвращает:
         (маппинг {description → category}, список алярмов)
@@ -58,8 +76,8 @@ def categorize_batch(descriptions: list[str]) -> tuple[dict[str, str], list[dict
     if not descriptions:
         return {}, []
 
-    # Дедупликация и сортировка для детерминизма
-    unique = sorted(set(descriptions))
+    # Дедупликация и порядок для детерминизма
+    unique = _ordered(descriptions, order)
 
     result = {}
     alarms = []
