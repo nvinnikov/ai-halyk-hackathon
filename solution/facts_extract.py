@@ -9,7 +9,7 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 1
+FACTS_VERSION = 2  # v2: paired_payment fx_rate теряет границы интервала (см. _merge_doc)
 SCHEMA_VERSION = "facts-1"
 RESOLVE_SCHEMA_VERSION = "docfact-1"
 
@@ -270,9 +270,21 @@ def _merge_doc(facts: dict, raw: dict, doc: dict, text: str) -> None:
             continue
         if not number_ok(fx["usd_per_unit"], "fx_rates"):
             continue
+        bounds = {}
+        if fx["derivation"] == "paired_payment":
+            # Курс из пары зеркальных платежей — точечное наблюдение, а не
+            # строка таблицы с заявленным периодом действия: в договоре нет
+            # интервала, который можно было бы процитировать. Модель иногда
+            # всё равно проставляет дату платежа в effective_from/to — тогда
+            # fx.pick_rate покрывает курсом только этот один день и теряет
+            # его как донора для остальных дат (fx_uncovered там, где должен
+            # быть донорский курс). Снимаем границы независимо от того, что
+            # вернула модель — это следствие типа вывода, а не цитаты.
+            bounds = {"effective_from": "", "effective_to": ""}
         facts["fx_rates"].append(
             {
                 **fx,
+                **bounds,
                 "doc_date": doc["date"],
                 "doc_hash": hashlib.sha256(doc["file"].encode()).hexdigest()[:12],
             }

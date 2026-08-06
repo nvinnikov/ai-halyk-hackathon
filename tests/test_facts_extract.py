@@ -67,6 +67,65 @@ def test_merge_and_contract(tmp_path, monkeypatch):
     assert facts["fx_rates"][0]["doc_hash"]  # заполнен из имени файла-источника
 
 
+def test_paired_payment_fx_rate_has_no_interval_bounds(tmp_path, monkeypatch):
+    # paired_payment — курс, выведенный из ОДНОЙ пары зеркальных платежей, а
+    # не прочитанный из таблицы с интервалом действия: у него нет и не может
+    # быть документально заявленной границы. Модель иногда всё равно
+    # проставляет в effective_from/to дату платежа — тогда курс покрывает
+    # только один день и не работает донором для остальных дат/сценариев
+    # (real-run finding: EUR-курс P3, выведенный из платежа за 2025-12-31,
+    # переставал закрывать fx_uncovered на других датах).
+    def fake_call(prompt, schema, schema_version, **kw):
+        if "kyc text" in prompt:
+            return empty()
+        return {
+            **empty(),
+            "fx_rates": [
+                {
+                    "currency": "EUR",
+                    "usd_per_unit": "1.16",
+                    "effective_from": "2025-02-01",
+                    "effective_to": "2025-02-01",
+                    "source_quote": "курс",
+                    "derivation": "paired_payment",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(facts_extract.llm, "call", fake_call)
+    facts = facts_extract.extract_facts(tmp_path, DOSSIER)
+    rate = facts["fx_rates"][0]
+    assert rate["effective_from"] == ""
+    assert rate["effective_to"] == ""
+
+
+def test_table_fx_rate_keeps_its_interval_bounds(tmp_path, monkeypatch):
+    # У derivation=table курс читается из таблицы с явным периодом действия —
+    # границы документально заявлены и снимать их нельзя.
+    def fake_call(prompt, schema, schema_version, **kw):
+        if "kyc text" in prompt:
+            return empty()
+        return {
+            **empty(),
+            "fx_rates": [
+                {
+                    "currency": "EUR",
+                    "usd_per_unit": "1.16",
+                    "effective_from": "2025-02-01",
+                    "effective_to": "2025-02-28",
+                    "source_quote": "курс",
+                    "derivation": "table",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(facts_extract.llm, "call", fake_call)
+    facts = facts_extract.extract_facts(tmp_path, DOSSIER)
+    rate = facts["fx_rates"][0]
+    assert rate["effective_from"] == "2025-02-01"
+    assert rate["effective_to"] == "2025-02-28"
+
+
 def test_addbacks_assembled_in_numeric_order(tmp_path, monkeypatch):
     def fake_call(prompt, schema, schema_version, **kw):
         if "kyc text" in prompt:
