@@ -9,3 +9,4 @@ ROOT = Path(__file__).resolve().parent.parent
 
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT / "solution"))
+sys.path.insert(0, str(ROOT / "eval"))
