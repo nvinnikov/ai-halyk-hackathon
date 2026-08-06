@@ -127,6 +127,20 @@ def test_limit_not_in_quote_marks_invalid(tmp_path, monkeypatch):
     assert "limit_not_in_quote" in sp["errors"]
 
 
+def test_limit_with_thousands_separator_in_quote_is_valid(tmp_path, monkeypatch):
+    # Модель почти всегда цитирует порог с разделителями тысяч ($1,500,000.00),
+    # а limit отдаёт голым числом (1500000.00) — это форматирование, не признак
+    # того, что порога нет в цитате.
+    cov = covenant(
+        limit="1500000.00",
+        quote="Пункт 6.1: капитальные затраты не должны превышать $1,500,000.00",
+    )
+    monkeypatch.setattr(specs_extract.llm, "call", lambda *a, **k: {"covenants": [cov]})
+    art = specs_extract.extract_specs(tmp_path, make_dossier(cov["quote"]), set())
+    sp = art["clauses"]["6.1"]
+    assert sp["valid"] is True and sp["errors"] == []
+
+
 def test_limit_outlier_alarm_does_not_block_validity(tmp_path, monkeypatch):
     covs = [
         covenant(clause="6.1", metric="agg(CAPEX, out)", limit="2000000"),

@@ -129,8 +129,20 @@ def _limit_forms(limit: str) -> set[str]:
     return forms
 
 
+_THOUSANDS_SEP = re.compile(r"(?<=\d)[,\x20\xa0\u202f](?=\d{3}(?:\D|$))")
+
+
+def _degroup_thousands(text: str) -> str:
+    """Снимает разделители тысяч (запятая, неразрывный/узкий неразрывный
+    пробел) между группами цифр: «$1,500,000.00» → «$1500000.00». Цитата уже
+    прошла verify_quote (доказанно реальный текст договора) — здесь только
+    сверяем цифровую форму порога, снимать разделители безопасно."""
+    return _THOUSANDS_SEP.sub("", text)
+
+
 def _limit_in_quote(limit: str, quote: str) -> bool:
-    return any(form in quote for form in _limit_forms(limit))
+    degrouped = _degroup_thousands(quote)
+    return any(form in quote or form in degrouped for form in _limit_forms(limit))
 
 
 def _check(sp: dict, fact_keys: set[str], agreement_text: str) -> tuple[dict, object | None]:
