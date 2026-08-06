@@ -135,13 +135,14 @@ def test_prepare_rows_reclass_needs_nonempty_tokens():
 
 
 def test_metric_categories_are_known_to_taxonomy():
-    """Диагностика знака кормит эти имена в agg → expand: опечатка в списке
+    """Диагностика знака кормит эти имена в agg → expand: опечатка в шаблоне
     уронила бы ячейку в фолбэк, а не подсветила расхождение."""
-    from covenants import METRIC_CATEGORIES, M
+    from dsl import parse
+    from solve import _metric_categories
+    from templates import TEMPLATES
 
-    assert set(METRIC_CATEGORIES) <= set(M), sorted(set(METRIC_CATEGORIES) - set(M))
-    for cats in METRIC_CATEGORIES.values():
-        for cat in cats:
+    for text in sorted(TEMPLATES.values()):
+        for cat in _metric_categories(parse(text)):
             agg([], cat, "out")  # expand кинет KeyError на неизвестной категории
 
 

@@ -70,10 +70,10 @@ def test_cell_failure_does_not_kill_run(monkeypatch):
     original = solve.solve_cell
     victim = sorted(TEMPLATE["answers"])[0]
 
-    def sabotaged(scenario, clause, rows, facts, raw):
+    def sabotaged(scenario, clause, raw, facts):
         if scenario == victim:
             raise RuntimeError("искусственный сбой ячейки")
-        return original(scenario, clause, rows, facts, raw)
+        return original(scenario, clause, raw, facts)
 
     monkeypatch.setattr(solve, "solve_cell", sabotaged)
     answers = solve.main(PUBLIC_ZIP, facts_source="expected")

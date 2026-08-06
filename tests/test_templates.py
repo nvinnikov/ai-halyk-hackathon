@@ -12,9 +12,9 @@ import pytest
 from expected_extraction import SPECS
 
 import solve
-from covenants import M
 from dsl import parse, signature
 from interp import Ctx, evaluate
+from legacy_metrics import M
 from templates import TEMPLATES, match_signature
 from util import q2
 

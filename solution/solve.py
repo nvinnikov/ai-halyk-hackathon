@@ -12,7 +12,6 @@ Submission пишется задом наперёд (раздел 6): снача
 подменит их на извлечённые, не трогая harness.
 """
 
-import copy
 import json
 import sys
 from decimal import Decimal
@@ -23,12 +22,10 @@ sys.path.insert(0, "eval")
 
 from expected_extraction import FACTS, SPECS
 
-from covenants import DRIVERS, METRIC_CATEGORIES
-from dsl import parse
-from engine import norm as norm_cp
+import evidence
+from dsl import Agg, Ratio, parse, walk
 from engine import prepare_rows, select_rows, sign_divergence
 from fx import coverage_alarms, to_usd
-from interp import Ctx, check_trigger, evaluate, verdict
 from ledger import dirty_rows_of, extract_archive, find_inputs, load_ledger, rows_of
 from scindex import INDEX_VERSION, build_index
 from stages import artifact
@@ -110,73 +107,31 @@ def legacy_spec_to_cellspec(spec: tuple) -> dict:
     }
 
 
-def _cell_verdict(scenario, clause, rows, facts):
-    """(status, res, alarms) ячейки интерпретатором. Триггер решает, применяется
-    ли тест, но вычисление метрики происходит всегда (5.7)."""
-    cellspec = legacy_spec_to_cellspec(SPECS[scenario][clause])
-    ctx = Ctx(rows=rows, facts=facts)
-    res = evaluate(cellspec["metric_ast"], ctx)
-    if not check_trigger(cellspec["trigger_ast"], ctx):
-        return "COMPLIANT", res, sorted(res.flags)  # springing-тест не сработал
-    status, alarms = verdict(res, cellspec["direction"], cellspec["limit"])
-    return status, res, alarms
+def _metric_categories(node) -> list[str]:
+    """Расходные категории, читаемые метрикой, — из AST вместо ручного списка
+    METRIC_CATEGORIES: тот вёлся руками при формулах-лямбдах и уехал бы от
+    формул при первой правке."""
+    return sorted({n.category for n in walk(node) if isinstance(n, Agg) and n.sign != "in"})
 
 
-def _flips(scenario, clause, status, alt, raw):
-    """Контрфактуал считается на тех же сырых строках с изменёнными фактами —
-    без подмены глобального FACTS: скрытое состояние сломало бы детерминизм
-    при параллельном счёте сценариев (задача 24)."""
-    return _cell_verdict(scenario, clause, prepare_rows(raw, alt), alt)[0] != status
-
-
-def _find_evidence(scenario, clause, status, rows, facts, raw):
-    """Улика — единственная операция, определяющая вердикт.
-
-    Два случая: (1) ограничиваемая величина состоит ровно из одной операции;
-    (2) решение аудитора/казначейства по конкретной операции переворачивает
-    вердикт при откате. Перебор откатов отсортирован — порядок улик не должен
-    зависеть от порядка ключей в фактах (раздел 3).
-    """
-    if status != "BREACH":
-        return None
-    metric = SPECS[scenario][clause][0]
-    driver = DRIVERS.get(metric)
-    if driver:
-        drivers = driver(rows, facts)
-        if len(drivers) == 1:
-            return drivers[0]["txn_id"]
-    for i in range(len(facts.get("reclass", []))):
-        alt = copy.deepcopy(facts)
-        item = alt["reclass"].pop(i)
-        if not _flips(scenario, clause, status, alt, raw):
-            continue
-        for r in rows:
-            if item.get("txn") == r["txn_id"]:
-                return r["txn_id"]
-            cp = item.get("counterparty")
-            if cp and norm_cp(cp) == norm_cp(r["counterparty"]):
-                return r["txn_id"]
-    for txn in sorted(list(facts.get("exclude", [])) + list(facts.get("amount_override", {}))):
-        alt = copy.deepcopy(facts)
-        alt["exclude"] = [t for t in alt.get("exclude", []) if t != txn]
-        alt["amount_override"] = {k: v for k, v in alt.get("amount_override", {}).items() if k != txn}
-        if _flips(scenario, clause, status, alt, raw):
-            return txn
-    return None
-
-
-def solve_cell(scenario: str, clause: str, rows: list, facts: dict, raw: list) -> dict:
+def solve_cell(scenario: str, clause: str, raw: list, facts: dict) -> dict:
     """Одна ячейка ответа. Точка подмены ядра задачами фаз 1–2: сигнатура и
     форма результата фиксированы, содержимое — нет.
 
-    Модуль значения берётся только здесь, при записи в submission: вердикт
-    выше считается со знаком (interp.verdict)."""
-    status, res, alarms = _cell_verdict(scenario, clause, rows, facts)
+    Принимает сырые строки (до prepare_rows): подготовка уезжает внутрь
+    evidence.compute, контрфактуал улики пересобирает строки сам. Модуль
+    значения берётся только здесь, при записи в submission: вердикт выше
+    считается со знаком (interp.verdict)."""
+    cellspec = legacy_spec_to_cellspec(SPECS[scenario][clause])
+    status, res = evidence.compute(raw, facts, cellspec)
+    ev_txn, ev_trace = evidence.find(raw, facts, cellspec, status)
     return {
         "status": status,
         "actual": q2(abs(res.value)),
-        "evidence_txn_id": _find_evidence(scenario, clause, status, rows, facts, raw),
-        "_alarms": alarms,  # снимается перед записью в submission, уходит в трейс
+        "evidence_txn_id": ev_txn,
+        # Служебные ключи снимаются перед записью в submission, уходят в трейс.
+        "_alarms": sorted(res.flags),
+        "_evidence_trace": ev_trace,
     }
 
 
@@ -279,6 +234,9 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
     for alarm in index["alarms"]:
         print(f"ALARM {alarm}", flush=True)
 
+    # Диагностика 5.6: общее число непустых улик и доля на коэффициентных
+    # метриках — резкий рост второй цифры значит, что D собрано слишком широко.
+    emitted = ratio_emitted = 0
     for scenario in targets:
         facts = _facts_of(scenario)
         try:
@@ -301,25 +259,32 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
             trace = {"scenario": scenario, "clause": clause, "path": "legacy"}
             if fx_alarms:
                 trace["fx_alarms"] = fx_alarms
+            metric_ast = legacy_spec_to_cellspec(SPECS[scenario][clause])["metric_ast"]
             # Знак расходной категории: дефолт out, а расхождение с net значит
             # сторно внутри читаемой категории — на приватном наборе такие
             # ячейки видны сразу, а не после разбора расхождения в баллах.
-            divergence = sign_divergence(rows, METRIC_CATEGORIES.get(SPECS[scenario][clause][0], []))
+            divergence = sign_divergence(rows, _metric_categories(metric_ast))
             if divergence:
                 trace["sign_divergence"] = divergence
             try:
-                cell = solve_cell(scenario, clause, rows, facts, raw)
+                cell = solve_cell(scenario, clause, raw, facts)
                 cell_alarms = cell.pop("_alarms", [])
                 if cell_alarms:
                     trace["alarms"] = cell_alarms
+                trace["evidence"] = cell.pop("_evidence_trace", [])
                 trace["cell"] = cell
             except Exception as exc:  # fail-open: ячейка остаётся фолбэком
                 trace["error"] = repr(exc)
                 print(f"ALARM cell_failed {scenario} {clause}: {exc!r}", flush=True)
                 cell = answers[scenario][clause]
+            if cell["evidence_txn_id"] is not None:
+                emitted += 1
+                if isinstance(metric_ast, Ratio):
+                    ratio_emitted += 1
             answers[scenario][clause] = cell
             dump_submission(sub, template["answers"])
             _write_trace(wd, scenario, clause, trace)
+    print(f"evidence emitted: {emitted}, of them on ratio-metrics: {ratio_emitted}", flush=True)
     return answers
 
 

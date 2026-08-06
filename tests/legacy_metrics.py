@@ -1,7 +1,8 @@
-"""Формулы ковенантов по заёмщикам.
+"""Легаси-формулы ковенантов — эталон для парити-теста DSL (test_templates).
 
-Каждая функция возвращает фактическое значение показателя (положительное).
-Направление сравнения и порог заданы отдельно в SPECS.
+Из runtime-пути ушли в задаче 16: боевой расчёт — интерпретатор DSL по
+шаблонам. Каждая функция возвращает фактическое значение показателя
+(положительное); направление сравнения и порог заданы отдельно в SPECS.
 """
 
 import sys
@@ -152,54 +153,3 @@ def _(rows, f):
 def _(rows, f):
     t = totals(rows)
     return revenue(rows) - max(t["PAYROLL"], t["TAX"])
-
-
-# --- расходные категории, читаемые метрикой ----------------------------------
-# Нужны для диагностики знака: расходная категория берётся модулем расхода
-# (out), и расхождение с неттингом (net) означает сторно внутри неё. Список
-# ведётся вручную, потому что формулы выше — непрозрачные лямбды; вместе с M
-# он уходит в задачу 15, где категории берутся из разбора спеки.
-# ebitda() = выручка − OTHER_OPEX, поэтому OTHER_OPEX есть у всех, кто её зовёт.
-METRIC_CATEGORIES = {
-    "icr": ["OTHER_OPEX", "INTEREST"],
-    "max_overhead_line": ["PAYROLL", "UTILITIES"],
-    "related_share_opex": ["OTHER_OPEX"],
-    "capex": ["CAPEX"],
-    "capital_intensity": ["CAPEX", "OTHER_OPEX", "RENT"],
-    "sources_cover": ["OTHER_OPEX", "CAPEX"],
-    "springing_leverage": ["OTHER_OPEX"],
-    "adj_ebitda_margin": ["OTHER_OPEX"],
-    "group_capex_to_ebitda": ["CAPEX", "OTHER_OPEX"],
-    "tax_utility_to_ebitda": ["TAX", "UTILITIES", "OTHER_OPEX"],
-    "staff_liabilities": ["PAYROLL"],
-    "revenue_cover_payroll_utilities": ["PAYROLL", "UTILITIES"],
-    "unrestricted_transfer_share": ["CAPEX"],
-    "insurance_cover": ["INSURANCE", "RENT", "UTILITIES"],
-    "revenue_less_max_overhead": ["PAYROLL", "TAX"],
-}
-
-
-# --- строки, формирующие ограничиваемую величину -----------------------------
-# Нужны для поиска улики: если ограничиваемый набор состоит ровно из одной
-# операции, именно она определяет вердикт.
-def _cat(cat):
-    return lambda rows, f: [r for r in rows if r["cat"] == cat and r["amt"] < 0]
-
-
-DRIVERS = {
-    "related_abs": lambda rows, f: related_payments(rows, f),
-    "related_share_revenue": lambda rows, f: related_payments(rows, f),
-    "related_share_opex": lambda rows, f: related_payments(rows, f),
-    "capex": _cat("CAPEX"),
-    "unrestricted_transfer_share": lambda rows, f: [
-        r
-        for r in rows
-        if r["cat"] == "CAPEX"
-        and r["amt"] < 0
-        and "subsidiary" in r["description"].lower()
-        and any(
-            norm(s) in norm(r["counterparty"]) or norm(r["counterparty"]) in norm(s)
-            for s in f.get("unrestricted_subsidiaries", [])
-        )
-    ],
-}
