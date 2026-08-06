@@ -19,6 +19,7 @@ def fake(monkeypatch, tmp_path):
     state = {"text": "", "llm": []}
 
     monkeypatch.setattr(route, "full_text", lambda wd, p: state["text"])
+    monkeypatch.setattr(route, "first_page_text", lambda wd, p: state["text"])
     monkeypatch.setattr(route, "doc_hash", lambda p: "cafe00000000")
 
     def fake_call(prompt, schema, schema_version, **kw):
@@ -66,7 +67,8 @@ def test_no_accounts_at_all_is_alarm(fake):
 
 def test_multiple_candidates_go_to_llm_with_alarm(fake):
     state, wd = fake
-    state["text"] = "переводы между ACC-1111 и ACC-2222"
+    # Цитата WHOSE обязана находиться в тексте, иначе кандидат не подтверждён.
+    state["text"] = "договор с заёмщиком ACC-1111, переводы между ACC-1111 и ACC-2222"
     art = route.route_doc(wd, Path("x.pdf"), TARGETS, ALL_ACCOUNTS)
     assert art["account_id"] == "ACC-1111"
     assert art["routing_quote"] == "договор с заёмщиком ACC-1111"
@@ -85,3 +87,20 @@ def test_llm_answer_outside_candidates_is_quarantine(fake, monkeypatch):
     monkeypatch.setattr(route.llm, "call", bad_call)
     art = route.route_doc(wd, Path("x.pdf"), TARGETS, ALL_ACCOUNTS)
     assert art["account_id"] is None and art["quarantined"] is True
+
+
+def test_unverified_whose_quote_quarantines(fake):
+    state, wd = fake
+    state["text"] = "переводы между ACC-1111 и ACC-2222"  # цитаты WHOSE в тексте нет
+    art = route.route_doc(wd, Path("x.pdf"), TARGETS, ALL_ACCOUNTS)
+    assert art["account_id"] is None and art["quarantined"] is True
+    assert any(a["kind"] == "quote_unverified" for a in art["alarms"])
+
+
+def test_mention_search_respects_boundaries(fake):
+    state, wd = fake
+    # ACC-111 не должен находиться внутри ACC-1111 подстрочным поиском.
+    state["text"] = "счёт заёмщика ACC-1111"
+    art = route.route_doc(wd, Path("x.pdf"), ["ACC-111", "ACC-1111"], ["ACC-111", "ACC-1111"])
+    assert art["mentions"] == ["ACC-1111"]
+    assert art["account_id"] == "ACC-1111"

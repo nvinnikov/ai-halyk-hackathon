@@ -367,10 +367,8 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
         try:
             cov = _write_borrower_trace(wd, scenario, rows, template["answers"][scenario], facts_source)
             if cov["alarm"] != "none":
-                print(
-                    f"ALARM category_coverage {scenario}: {cov['alarm']} other_share={cov['other_share']:.4f}",
-                    flush=True,
-                )
+                share = f"{cov['other_share']:.4f}"
+                print(f"ALARM category_coverage {scenario}: {cov['alarm']} other_share={share}", flush=True)
         except Exception as exc:
             print(f"ALARM borrower_trace_failed {scenario}: {exc!r}", flush=True)
         for clause in sorted(template["answers"][scenario]):

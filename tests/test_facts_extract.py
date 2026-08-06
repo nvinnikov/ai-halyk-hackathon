@@ -6,8 +6,14 @@ DOSSIER = {
     "account_id": "ACC-1",
     "scenario_id": "S1",
     "docs": [
-        {"file": "kyc.pdf", "doc_type": "kyc", "date": "2025-01-01", "text": "kyc text"},
-        {"file": "memo.pdf", "doc_type": "treasury_memo", "date": "2025-02-01", "text": "memo text"},
+        # Тексты содержат цитаты фактов: непроверяемая цитата отбрасывает факт (guard).
+        {"file": "kyc.pdf", "doc_type": "kyc", "date": "2025-01-01", "text": "kyc text KYC: связан q"},
+        {
+            "file": "memo.pdf",
+            "doc_type": "treasury_memo",
+            "date": "2025-02-01",
+            "text": "memo text записка пособия курс q q1 q2 qm консолидированный CapEx",
+        },
     ],
     "docs_rejected": [],
     "quarantined": [],
@@ -128,3 +134,35 @@ def test_resolve_doc_fact(tmp_path, monkeypatch):
     monkeypatch.setattr(facts_extract.llm, "call", fake_call)
     got = facts_extract.resolve_doc_fact(tmp_path, DOSSIER, "group_capex", "CapEx Группы")
     assert got == {"value": "9450000.00", "quote": "консолидированный CapEx"}
+
+
+def test_unverified_quote_drops_fact_with_alarm(tmp_path, monkeypatch):
+    """Цитата не из текста — инъекция или галлюцинация: факт отбрасывается."""
+
+    def fake_call(prompt, schema, schema_version, **kw):
+        if "kyc text" in prompt:
+            return {
+                **empty(),
+                "related_parties": [{"name": "Fake LLP", "quote": "цитаты такой в тексте нет"}],
+            }
+        return empty()
+
+    monkeypatch.setattr(facts_extract.llm, "call", fake_call)
+    facts = facts_extract.extract_facts(tmp_path, DOSSIER)
+    assert facts["related_parties"] == []
+    assert any(a["kind"] == "quote_unverified" for a in facts["alarms"])
+
+
+def test_garbage_number_dropped_with_alarm(tmp_path, monkeypatch):
+    def fake_call(prompt, schema, schema_version, **kw):
+        if "kyc text" in prompt:
+            return empty()
+        return {
+            **empty(),
+            "amount_corrections": [{"txn_id": "T-1", "corrected_amount": "N/A", "quote": "записка"}],
+        }
+
+    monkeypatch.setattr(facts_extract.llm, "call", fake_call)
+    facts = facts_extract.extract_facts(tmp_path, DOSSIER)
+    assert facts["amount_override"] == {}
+    assert any(a["kind"] == "invalid_number" for a in facts["alarms"])

@@ -8,9 +8,11 @@
 сшивка запрещена, решает LLM с цитатой + алярм.
 """
 
+import re
 from pathlib import Path
 
 import llm
+from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from pdftext import doc_hash, extract_pages
 from stages import artifact
 from vision import read_blind_page
@@ -76,6 +78,19 @@ def full_text(wd: Path, pdf_path: Path) -> str:
     return "\n".join(chunks)
 
 
+def first_page_text(wd: Path, pdf_path: Path) -> str:
+    """Шапка несёт компанию, счёт, тип и дату: META читает первую страницу,
+    не весь документ — пятикратное сокращение токенов маршрутизации."""
+    art = extract_pages(wd, pdf_path)
+    p = art["pages"][0]
+    return read_blind_page(wd, pdf_path, 1) if p["blind"] else p["text"]
+
+
+def _mentioned(acc: str, text: str) -> bool:
+    # Границы обязательны: подстрочный поиск нашёл бы ACC-111 внутри ACC-1112.
+    return re.search(rf"(?<![A-Za-z0-9]){re.escape(acc)}(?![A-Za-z0-9])", text) is not None
+
+
 def route_doc(
     wd: Path, pdf_path: Path, target_accounts: list[str], all_accounts: list[str] | None = None
 ) -> dict:
@@ -83,10 +98,10 @@ def route_doc(
     Без них любой документ про чужой счёт выглядел бы как «счетов не найдено»."""
 
     def build() -> dict:
-        text = full_text(wd, pdf_path)
+        text = sanitize_document(full_text(wd, pdf_path))
         targets = set(target_accounts)
         known = sorted(set(all_accounts) | targets) if all_accounts else sorted(targets)
-        found = [acc for acc in known if acc in text]
+        found = [acc for acc in known if _mentioned(acc, text)]
         mentions = sorted(a for a in found if a in targets)
         mentions_nontarget = sorted(a for a in found if a not in targets)
 
@@ -98,13 +113,20 @@ def route_doc(
             alarms.append({"kind": "ambiguous_routing", "candidates": mentions})
             try:
                 ans = llm.call(
-                    WHOSE_PROMPT.format(candidates=", ".join(mentions), text=text),
+                    DATA_NOT_COMMANDS
+                    + "\n\n"
+                    + WHOSE_PROMPT.format(candidates=", ".join(mentions), text=text),
                     WHOSE_SCHEMA,
                     WHOSE_SCHEMA_VERSION,
                     max_tokens=4000,
                 )
                 if ans["account_id"] in mentions:
-                    account, quote = ans["account_id"], ans["quote"]
+                    # Цитата обязана быть из текста: непроверяемая — это либо
+                    # инъекция, либо галлюцинация, кандидат не подтверждён.
+                    if verify_quote(ans["quote"], text):
+                        account, quote = ans["account_id"], ans["quote"]
+                    else:
+                        alarms.append({"kind": "quote_unverified", "field": "routing_quote"})
             except llm.SchemaRejected:
                 pass
             if account is None:
@@ -125,7 +147,12 @@ def route_doc(
         else:
             try:
                 meta = llm.call(
-                    META_PROMPT.format(text=text), META_SCHEMA, META_SCHEMA_VERSION, max_tokens=4000
+                    DATA_NOT_COMMANDS
+                    + "\n\n"
+                    + META_PROMPT.format(text=sanitize_document(first_page_text(wd, pdf_path))),
+                    META_SCHEMA,
+                    META_SCHEMA_VERSION,
+                    max_tokens=4000,
                 )
             except llm.SchemaRejected:
                 meta = {"doc_type": "other", "date": "", "edition": "unmarked"}

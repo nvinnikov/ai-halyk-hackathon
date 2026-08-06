@@ -5,6 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import llm
+from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
@@ -197,16 +198,44 @@ def _empty_facts() -> dict:
     }
 
 
-def _merge_doc(facts: dict, raw: dict, doc: dict) -> None:
+def _number_ok(value: str) -> bool:
+    try:
+        Decimal(value)
+        return True
+    except Exception:
+        return False
+
+
+def _merge_doc(facts: dict, raw: dict, doc: dict, text: str) -> None:
+    def verified(quote: str, kind: str) -> bool:
+        """Факт без цитаты из текста не принимается: это либо инъекция, либо
+        галлюцинация — контракт guard (задача 3a)."""
+        if verify_quote(quote, text):
+            return True
+        facts["alarms"].append({"kind": "quote_unverified", "field": kind, "file": doc["file"]})
+        return False
+
+    def number_ok(value: str, kind: str) -> bool:
+        if _number_ok(value):
+            return True
+        facts["alarms"].append({"kind": "invalid_number", "field": kind, "value": value})
+        return False
+
     for item in raw["related_parties"]:
+        if not verified(item["quote"], "related_parties"):
+            continue
         if item["name"] not in facts["related_parties"]:
             facts["related_parties"].append(item["name"])
         facts["related_quotes"].setdefault(item["name"], item["quote"])
     for item in raw["unrestricted_subsidiaries"]:
+        if not verified(item["quote"], "unrestricted_subsidiaries"):
+            continue
         if item["name"] not in facts["unrestricted_subsidiaries"]:
             facts["unrestricted_subsidiaries"].append(item["name"])
         facts["subsidiary_quotes"].setdefault(item["name"], item["quote"])
     for rc in raw["reclassifications"]:
+        if not verified(rc["quote"], "reclass"):
+            continue
         if rc["to_category"] not in LEAVES:
             # Выдуманная категория исчезла бы из всех агрегатов, минуя даже
             # OTHER, — отчёт покрытия такой строки не увидит. Реклассификация
@@ -224,13 +253,23 @@ def _merge_doc(facts: dict, raw: dict, doc: dict) -> None:
             }
         )
     for ex in raw["excluded_txns"]:
+        if not verified(ex["quote"], "exclude"):
+            continue
         if ex["txn_id"] not in facts["exclude"]:
             facts["exclude"].append(ex["txn_id"])
         facts["exclude_quotes"].setdefault(ex["txn_id"], ex["quote"])
     for corr in raw["amount_corrections"]:
+        if not verified(corr["quote"], "amount_override"):
+            continue
+        if not number_ok(corr["corrected_amount"], "amount_override"):
+            continue
         facts["amount_override"][corr["txn_id"]] = corr["corrected_amount"]
         facts["override_quotes"][corr["txn_id"]] = corr["quote"]
     for fx in raw["fx_rates"]:
+        if not verified(fx["source_quote"], "fx_rates"):
+            continue
+        if not number_ok(fx["usd_per_unit"], "fx_rates"):
+            continue
         facts["fx_rates"].append(
             {
                 **fx,
@@ -241,6 +280,10 @@ def _merge_doc(facts: dict, raw: dict, doc: dict) -> None:
     addbacks, materiality = [], None
     for nf in raw["numeric_facts"]:
         key = nf["key"]
+        if not verified(nf["quote"], f"doc_facts:{key}"):
+            continue
+        if not number_ok(nf["value"], f"doc_facts:{key}"):
+            continue
         if key.startswith("ebitda_addback_") and key != "ebitda_addback_materiality":
             addbacks.append(nf["value"])
             continue
@@ -268,11 +311,16 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
     def build() -> dict:
         facts = _empty_facts()
         for doc in dossier_art["docs"]:
-            prompt = FACTS_PROMPT.format(
-                focus=FOCUS.get(doc["doc_type"], FOCUS["other"]),
-                taxonomy=", ".join(sorted(LEAVES)),
-                doc_type=doc["doc_type"],
-                text=doc["text"],
+            text = sanitize_document(doc["text"])
+            prompt = (
+                DATA_NOT_COMMANDS
+                + "\n\n"
+                + FACTS_PROMPT.format(
+                    focus=FOCUS.get(doc["doc_type"], FOCUS["other"]),
+                    taxonomy=", ".join(sorted(LEAVES)),
+                    doc_type=doc["doc_type"],
+                    text=text,
+                )
             )
             try:
                 raw = llm.call(prompt, FACTS_SCHEMA, SCHEMA_VERSION, max_tokens=16000)
@@ -281,7 +329,7 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
                     {"kind": "facts_extraction_failed", "file": doc["file"], "error": str(exc)}
                 )
                 continue
-            _merge_doc(facts, raw, doc)
+            _merge_doc(facts, raw, doc, text)
         for key in ("related_parties", "unrestricted_subsidiaries", "exclude"):
             facts[key] = sorted(facts[key])
         # Численная сортировка: лексикографическая ставит "1000000.00" перед
@@ -296,14 +344,16 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
 def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) -> dict | None:
     """Адресное извлечение числа под doc()-ключ спеки, которого нет в doc_facts."""
     documents = "\n".join(
-        f'<document type="{d["doc_type"]}" file="{d["file"]}">\n{d["text"]}\n</document>'
+        f'<document type="{d["doc_type"]}" file="{d["file"]}">\n{sanitize_document(d["text"])}\n</document>'
         for d in dossier_art["docs"]
     )
 
     def build() -> dict:
         try:
             ans = llm.call(
-                RESOLVE_PROMPT.format(key=key, description=description, documents=documents),
+                DATA_NOT_COMMANDS
+                + "\n\n"
+                + RESOLVE_PROMPT.format(key=key, description=description, documents=documents),
                 RESOLVE_SCHEMA,
                 RESOLVE_SCHEMA_VERSION,
                 max_tokens=16000,
@@ -315,4 +365,7 @@ def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) ->
     art = artifact(wd / "facts" / f"{dossier_art['account_id']}.doc.{key}.json", FACTS_VERSION, build)
     if not art.get("found"):
         return None
+    combined = "\n".join(sanitize_document(d["text"]) for d in dossier_art["docs"])
+    if not verify_quote(art["quote"], combined) or not _number_ok(art["value"]):
+        return None  # непроверяемая цитата или мусорное число — факта нет
     return {"value": art["value"], "quote": art["quote"]}
