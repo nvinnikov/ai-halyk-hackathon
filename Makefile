@@ -15,10 +15,13 @@ install:
 extract: install
 	uv run python solution/extract.py
 
-# Основной прогон: пишет solution/submission.json и печатает скор по публичному
-# ground_truth.
+# Основной прогон через единственную точку входа: пишет out/submission.json и
+# печатает скор по публичному ground_truth. Архив переопределяется:
+# `make solve ARCHIVE=private.zip`.
+ARCHIVE ?= 6a741640c31eb032062683.zip
+
 solve: install
-	uv run python solution/solve.py
+	./run.sh $(ARCHIVE)
 
 score: solve
 
