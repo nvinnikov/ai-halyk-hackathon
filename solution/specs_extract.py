@@ -28,6 +28,7 @@ SCHEMA_VERSION = "specs-1"
 _OUTLIER_FACTOR = Decimal(10)
 
 _CLAUSE_NUM = re.compile(r"\d+(?:\.\d+)*")
+_NON_WORD_OR_DIGIT = re.compile(r"[\d\W]+", re.UNICODE)
 
 SPECS_SCHEMA = {
     "type": "object",
@@ -100,11 +101,26 @@ snake_case ключ, он будет извлечён отдельно.
 
 def _normalize_clause(raw: str) -> tuple[str, bool]:
     """Номер пункта из ответа модели то голый, то с префиксом «Пункт»/«п.»/
-    «Article» — ключ ячейки берётся только из цифровой части."""
+    «Article» — ключ ячейки берётся только из цифровой части.
+
+    Второй элемент — found: цифровая часть вообще нашлась в ответе модели
+    (не «клауза совпала с шаблоном» — совпадение с шаблоном не отсюда)."""
     m = _CLAUSE_NUM.search(raw)
     if m:
         return m.group(), True
     return raw, False
+
+
+def _title_key(quote: str) -> str:
+    """Языконезависимый ключ заголовка пункта (план: матч по заголовку —
+    основной путь, 19 заголовков ↔ 19 метрик; сигнатурный DSL-матч — резерв).
+
+    Нижний регистр, без цифр и пунктуации, схлопнутые пробелы: номер пункта
+    и его дословная обвязка у разных заёмщиков разные, а формулировка
+    обязательства близка — цифры и пунктуация в ключе только мешали бы."""
+    norm = " ".join(quote.lower().split())
+    stripped = _NON_WORD_OR_DIGIT.sub(" ", norm)
+    return " ".join(stripped.split())
 
 
 def _strip_trailing_zeros(s: str) -> str:
@@ -130,7 +146,7 @@ def _limit_in_quote(limit: str, quote: str) -> bool:
     return any(form in quote for form in _limit_forms(limit))
 
 
-def _check(sp: dict, fact_keys: set[str], agreement_text: str) -> dict:
+def _check(sp: dict, fact_keys: set[str], agreement_text: str) -> tuple[dict, object | None]:
     out = {
         **sp,
         "valid": False,
@@ -138,12 +154,13 @@ def _check(sp: dict, fact_keys: set[str], agreement_text: str) -> dict:
         "template": None,
         "missing_doc_keys": [],
         "trigger_discarded": False,
+        "title_key": _title_key(sp["quote"]),
     }
     try:
         node = parse(sp["metric"])
     except DslError as exc:
         out["errors"].append(f"metric: {exc}")
-        return out
+        return out, None
     missing = sorted({n.key for n in walk(node) if isinstance(n, Doc)} - fact_keys)
     out["missing_doc_keys"] = missing
     errors = [e for e in validate(node, fact_keys) if "doc-ключ" not in e]
@@ -175,7 +192,7 @@ def _check(sp: dict, fact_keys: set[str], agreement_text: str) -> dict:
     out["errors"] = errors
     out["valid"] = not errors and not missing
     out["template"] = match_signature(node) if out["valid"] else None
-    return out
+    return out, node
 
 
 def _median(values: list[Decimal]) -> Decimal:
@@ -185,18 +202,18 @@ def _median(values: list[Decimal]) -> Decimal:
     return vs[mid] if n % 2 else (vs[mid - 1] + vs[mid]) / 2
 
 
-def _flag_outliers(clauses: dict, alarms: list[dict]) -> None:
+def _flag_outliers(clauses: dict, parsed_nodes: dict[str, object], alarms: list[dict]) -> None:
     """Порог, отличающийся на порядок и более от медианы своей семьи метрики
-    в этом прогоне, не роняет ячейку — только помечает её на глаза."""
+    в этом прогоне, не роняет ячейку — только помечает её на глаза.
+
+    parsed_nodes — узлы, уже распарсенные в _check; повторный parse() тут не нужен."""
     parsed: dict[str, tuple[object, Decimal]] = {}
-    for key in sorted(clauses):
-        sp = clauses[key]
+    for key in sorted(parsed_nodes):
         try:
-            node = parse(sp["metric"])
-            limit = Decimal(sp["limit"])
-        except (DslError, InvalidOperation):
+            limit = Decimal(clauses[key]["limit"])
+        except InvalidOperation:
             continue
-        parsed[key] = (node, limit)
+        parsed[key] = (parsed_nodes[key], limit)
     by_family: dict[str, list[Decimal]] = {}
     for node, limit in parsed.values():
         fam = family_of(node, limit)
@@ -244,19 +261,22 @@ def extract_specs(wd: Path, dossier_art: dict, fact_keys: set[str]) -> dict:
 
     alarms = list(raw_art["alarms"])
     clauses: dict[str, dict] = {}
+    parsed_nodes: dict[str, object] = {}
     for sp in raw_art["covenants"]:
-        clause_key, matched = _normalize_clause(sp["clause"])
-        if not matched:
+        clause_key, found = _normalize_clause(sp["clause"])
+        if not found:
             alarms.append({"kind": "clause_unmatched", "clause": sp["clause"]})
         if clause_key in clauses:
             alarms.append({"kind": "duplicate_clause", "clause": clause_key})
             continue
-        checked = _check({**sp, "clause": clause_key}, fact_keys, agreement_text)
+        checked, node = _check({**sp, "clause": clause_key}, fact_keys, agreement_text)
         if checked.pop("trigger_discarded", False):
             alarms.append({"kind": "trigger_discarded", "clause": clause_key})
         clauses[clause_key] = checked
+        if node is not None:
+            parsed_nodes[clause_key] = node
         if not checked["valid"] and not checked["missing_doc_keys"]:
             alarms.append({"kind": "invalid_spec", "clause": clause_key, "errors": checked["errors"]})
 
-    _flag_outliers(clauses, alarms)
+    _flag_outliers(clauses, parsed_nodes, alarms)
     return {"clauses": clauses, "alarms": alarms}

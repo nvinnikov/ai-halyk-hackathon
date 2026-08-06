@@ -139,3 +139,22 @@ def test_limit_outlier_alarm_does_not_block_validity(tmp_path, monkeypatch):
     outliers = [a for a in art["alarms"] if a["kind"] == "limit_outlier"]
     assert [a["clause"] for a in outliers] == ["6.3"]
     assert art["clauses"]["6.3"]["valid"] is True
+
+
+def test_title_key_normalizes_heading_across_formatting(tmp_path, monkeypatch):
+    # Два пункта, сформулированных по-разному (регистр, пунктуация, номер),
+    # но с одинаковым заголовком обязательства — ключ должен совпасть: по нему
+    # (не по DSL-сигнатуре) идёт основной матч с шаблоном в solve (задача 24).
+    quote_a = "Пункт 6.1: капитальные затраты Группы к EBITDA"
+    quote_b = "Пункт 7.1. капитальные ЗАТРАТЫ группы к ebitda!"
+    monkeypatch.setattr(
+        specs_extract.llm, "call", lambda *a, **k: {"covenants": [covenant(clause="6.1", quote=quote_a)]}
+    )
+    art_a = specs_extract.extract_specs(tmp_path / "a", make_dossier(quote_a), set())
+    monkeypatch.setattr(
+        specs_extract.llm, "call", lambda *a, **k: {"covenants": [covenant(clause="7.1", quote=quote_b)]}
+    )
+    art_b = specs_extract.extract_specs(tmp_path / "b", make_dossier(quote_b), set())
+    key_a = art_a["clauses"]["6.1"]["title_key"]
+    key_b = art_b["clauses"]["7.1"]["title_key"]
+    assert key_a and key_a == key_b
