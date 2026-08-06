@@ -174,6 +174,7 @@ def run_cell(
                 family_of(cellspec["metric_ast"], cellspec["limit"]),
                 cellspec["limit"],
                 computed,
+                clause=clause,
             )
             trace.update(path="prior", tier=2, alarms=alarms)
             return cell, trace
@@ -188,13 +189,13 @@ def run_cell(
                 facts,
                 {"metric_ast": metric_ast, "direction": "max", "limit": Decimal(0), "trigger_ast": None},
             )
-            cell, alarms = fallback_cell(None, family_of(metric_ast, None), None, computed)
+            cell, alarms = fallback_cell(None, family_of(metric_ast, None), None, computed, clause=clause)
             cell["actual"] = q2(abs(res.value))
             trace.update(path="heuristic_template", tier=1, template=tpl, alarms=alarms)
             return cell, trace
         except Exception as exc:
             trace["heuristic_error"] = repr(exc)
-    cell, alarms = fallback_cell(None, None, None, computed)
+    cell, alarms = fallback_cell(None, None, None, computed, clause=clause)
     trace.update(path="prior", tier=2, alarms=alarms)
     return cell, trace
 
@@ -236,10 +237,12 @@ def scenario_inputs(archive: Path, scenario: str) -> tuple[list[dict], dict]:
 
 
 def skeleton(template_answers: dict) -> dict:
-    """Каждая ячейка скелета — нижний ярус лестницы (глобальный приор):
-    на этом этапе не известно ничего, кроме самого шаблона."""
-    cell, _ = fallback_cell(None, None, None, [])
-    return {sc: {cl: dict(cell) for cl in cells} for sc, cells in template_answers.items()}
+    """Каждая ячейка скелета — лестница без спеки: номер пункта известен уже
+    из шаблона, и приор by_clause точнее глобального (75% против 64%)."""
+    return {
+        sc: {cl: fallback_cell(None, None, None, [], clause=cl)[0] for cl in cells}
+        for sc, cells in template_answers.items()
+    }
 
 
 def dump_submission(sub: dict, template_answers: dict) -> None:
@@ -261,11 +264,11 @@ def _spec_only_fallback(scenario: str, clause: str, computed: list, exc: Excepti
     try:
         cs = legacy_spec_to_cellspec(SPECS[scenario][clause])
         cell, alarms = fallback_cell(
-            cs["direction"], family_of(cs["metric_ast"], cs["limit"]), cs["limit"], computed
+            cs["direction"], family_of(cs["metric_ast"], cs["limit"]), cs["limit"], computed, clause=clause
         )
     except Exception as spec_exc:
         trace["spec_error"] = repr(spec_exc)
-        cell, alarms = fallback_cell(None, None, None, computed)
+        cell, alarms = fallback_cell(None, None, None, computed, clause=clause)
     trace.update(path="prior", tier=2, alarms=alarms)
     return cell, trace
 
@@ -328,6 +331,10 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
     # отбросит, если факты досье не вернут им сумму. В индекс они не идут —
     # счёт сценария определяется по строкам, которые действительно посчитаны.
     scenario_rows = all_rows + dirty_rows_of(ledger_art)
+    # Алярмы леджера (отвергнутые категории, грязные суммы) — в лог прогона:
+    # на приватном наборе иначе они останутся невидимыми в трёхчасовом окне.
+    for alarm in ledger_art.get("alarms", []):
+        print(f"ALARM {alarm}", flush=True)
     for alarm in index["alarms"]:
         print(f"ALARM {alarm}", flush=True)
 

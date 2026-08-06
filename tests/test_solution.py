@@ -18,6 +18,10 @@ PUBLIC_ZIP = Path("6a741640c31eb032062683.zip")
 GT = json.loads(Path("dataset/agentic-bank-public/ground_truth.json").read_text())["scenarios"]
 TEMPLATE = json.loads(Path("dataset/agentic-bank-public/submission_template.json").read_text())
 BASELINE = 34.00
+# Потолок фундамента по LOBO-замеру: скор выше — признак подгонки под публичный
+# ключ, а не улучшения. Легитимный рост потолка поднимается осознанно, тем же
+# коммитом, что и его причина.
+MAX_SCORE = 34.00
 CELL_FIELDS = ("actual", "evidence_txn_id", "status")
 
 
@@ -42,6 +46,7 @@ def answers():
 def test_score_not_below_baseline(answers):
     total = score(answers, GT, verbose=True)
     assert total >= BASELINE, f"скор упал: {total:.2f} < {BASELINE:.2f}"
+    assert total <= MAX_SCORE + 1e-9, f"скор выше потолка: {total:.2f} > {MAX_SCORE:.2f} — подгонка?"
 
 
 def test_hash_printed_first(capsys):

@@ -50,10 +50,18 @@ def _argmax(counts: dict) -> str:
     return max(sorted(counts), key=lambda k: counts[k])
 
 
-def prior_status(prior: dict, direction: str | None, family: str | None) -> tuple[str, bool]:
+def prior_status(
+    prior: dict, direction: str | None, family: str | None, clause: str | None = None
+) -> tuple[str, bool]:
+    """Лестница приора: (направление, семья) → номер пункта → глобальная доля.
+
+    by_clause — вторая ступень (75% точности против 64% глобальной на публичном
+    ключе): номер пункта известен даже когда спека не распарсилась вовсе."""
     key = f"{direction}|{family}"
     if direction and family and key in prior["by"]:
         return _argmax(prior["by"][key]), True
+    if clause and clause in prior.get("by_clause", {}):
+        return _argmax(prior["by_clause"][clause]), True
     return _argmax(prior["global"]), False
 
 
@@ -72,9 +80,9 @@ def _median(values: list[float]) -> float:
     return vs[mid] if n % 2 else (vs[mid - 1] + vs[mid]) / 2
 
 
-def fallback_cell(direction, family, limit, computed) -> tuple[dict, list[str]]:
+def fallback_cell(direction, family, limit, computed, clause=None) -> tuple[dict, list[str]]:
     prior = load_prior()
-    status, conditional = prior_status(prior, direction, family)
+    status, conditional = prior_status(prior, direction, family, clause)
     alarms = ["fallback_used"] + ([] if conditional else ["fallback_coin_flip"])
     if limit is not None:
         actual = float(limit)

@@ -21,6 +21,22 @@ def test_prior_status_conditional_and_global():
     assert status in ("BREACH", "COMPLIANT") and conditional is False
 
 
+def test_prior_status_by_clause_between_family_and_global():
+    """Номер пункта известен даже без спеки: by_clause (75%) идёт до глобального
+    приора (64%), но проигрывает паре (направление, семья)."""
+    prior = {
+        "by": {"max|absolute": {"BREACH": 9, "COMPLIANT": 1}},
+        "by_clause": {"6.2": {"BREACH": 1, "COMPLIANT": 9}},
+        "global": {"BREACH": 9, "COMPLIANT": 1},
+    }
+    status, conditional = prior_status(prior, None, None, clause="6.2")
+    assert status == "COMPLIANT" and conditional is True
+    status, _ = prior_status(prior, "max", "absolute", clause="6.2")
+    assert status == "BREACH"  # семья главнее пункта
+    status, conditional = prior_status(prior, None, None, clause="9.9")
+    assert status == "BREACH" and conditional is False  # незнакомый пункт → глобальный
+
+
 def test_heuristic_template_keywords():
     assert heuristic_template("платежи связанным сторонам не превышают") == "related_abs"
     assert heuristic_template("capital expenditures shall not exceed") == "capex"
