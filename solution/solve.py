@@ -31,7 +31,7 @@ from fx import coverage_alarms, to_usd
 from ledger import dirty_rows_of, extract_archive, find_inputs, load_ledger, rows_of
 from scindex import INDEX_VERSION, build_index
 from stages import artifact
-from taxonomy import coverage_report
+from taxonomy import cell_other_alarm, coverage_report
 from templates import TEMPLATES
 from util import OUT, q2, stable_json, workdir
 
@@ -120,6 +120,12 @@ def _metric_categories(node) -> list[str]:
     METRIC_CATEGORIES: тот вёлся руками при формулах-лямбдах и уехал бы от
     формул при первой правке."""
     return sorted({n.category for n in walk(node) if isinstance(n, Agg) and n.sign != "in"})
+
+
+def _all_metric_categories(node) -> set[str]:
+    """Все категории метрики, включая доходные: потерянная строка REVENUE —
+    главный риск категоризации, а _metric_categories отбрасывает sign == in."""
+    return {n.category for n in walk(node) if isinstance(n, Agg)}
 
 
 def _metric_inputs(node, raw: list, facts: dict) -> dict:
@@ -406,6 +412,19 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
                             trace["sign_divergence"] = divergence
                     except Exception as exc:
                         trace["sign_divergence_error"] = repr(exc)
+                    # Неразнесённые строки глазами этой ячейки (5.3): диагностика,
+                    # вердикт не меняется. Падение обхода не стоит ячейки.
+                    try:
+                        oa = cell_other_alarm(rows, _all_metric_categories(cellspec_or_error["metric_ast"]))
+                        if oa is not None:
+                            trace["other_unassigned"] = oa
+                            print(
+                                f"ALARM other_unassigned {scenario} {clause}: "
+                                f"blind={','.join(oa['blind'])} severity={oa['severity']}",
+                                flush=True,
+                            )
+                    except Exception as exc:
+                        trace["other_unassigned_error"] = repr(exc)
                     if trace.get("tier") == 0:
                         computed.append((cellspec_or_error["direction"], cell["actual"]))
                     if cell["evidence_txn_id"] is not None:

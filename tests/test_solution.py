@@ -151,3 +151,53 @@ def test_trace_written_per_cell(answers):
 
 def test_deterministic(answers):
     assert answers == solve.main(PUBLIC_ZIP, facts_source="expected")
+
+
+def _cell_traces() -> list[Path]:
+    """Трейсы ячеек публичного прогона. Каталог адресуется отпечатком архива,
+    иначе сюда попали бы трейсы мутированного прогона (задача 4)."""
+    from util import dataset_hash, workdir
+
+    return sorted((workdir(dataset_hash(PUBLIC_ZIP)) / "trace").glob("*.*.json"))
+
+
+def test_other_unassigned_absent_on_public_set(answers):
+    """На публичном наборе OTHER пуст у всех целевых — алярма быть не должно.
+
+    Тест держит границу: срабатывание здесь означает, что категоризация
+    поехала, а не что алярм неверен."""
+    traces = _cell_traces()
+    assert traces, "трейсы ячеек не найдены — прогон не состоялся"
+    with_alarm = [t.name for t in traces if json.loads(t.read_text()).get("other_unassigned") is not None]
+    assert with_alarm == [], f"неожиданный other_unassigned: {with_alarm}"
+
+
+def test_other_unassigned_written_when_rows_lost(monkeypatch):
+    """Строка, ушедшая в OTHER, обязана поднять алярм в трейсе ячейки."""
+    original = solve.load_rows
+
+    def lossy(scenario, all_rows, index, facts, donor_rates):
+        raw, rows, alarms = original(scenario, all_rows, index, facts, donor_rates)
+        # Первая строка выручки «не опозналась»: ровно тот промах, ради
+        # которого алярм и вводится.
+        for r in rows:
+            if r["cat"] == "REVENUE":
+                r["cat"] = "OTHER"
+                break
+        return raw, rows, alarms
+
+    monkeypatch.setattr(solve, "load_rows", lossy)
+    try:
+        solve.main(PUBLIC_ZIP, facts_source="expected")
+        hit = [
+            a
+            for a in (json.loads(t.read_text()).get("other_unassigned") for t in _cell_traces())
+            if a is not None
+        ]
+        assert hit, "потерянная строка REVENUE не подняла ни одного алярма"
+        assert all(a["other_sum"] != "0" for a in hit)
+    finally:
+        # Трейсы на диске общие: испорченный прогон обязан быть переписан
+        # чистым, иначе соседний тест увидит чужой алярм.
+        monkeypatch.undo()
+        solve.main(PUBLIC_ZIP, facts_source="expected")
