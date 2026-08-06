@@ -1,0 +1,43 @@
+[project]
+name = "ai-halyk"
+version = "0.0.0"
+description = "Agentic Bank hackathon: категоризация леджера, факты из документов, проверка ковенантов"
+requires-python = ">=3.11"
+dependencies = [
+    "pypdf==5.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "ruff==0.9.6",
+    "mypy==1.15.0",
+]
+
+# Репозиторий — не библиотека, а набор скриптов, запускаемых из корня
+# (`python solution/solve.py`). Собирать и устанавливать нечего.
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["solution", "tests"]
+
+[tool.ruff.lint]
+# pyflakes(F), pycodestyle(E/W), isort(I), bugbear(B), pyupgrade(UP), comprehensions(C4)
+select = ["E", "F", "W", "I", "B", "UP", "C4"]
+# E402: модули solution/* делают sys.path.insert(0, "solution") до импортов —
+# это осознанный способ запускать их из корня без установки пакета.
+ignore = ["E402"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["solution", "tests"]
+# Код гоняется на скорость хакатона и почти не типизирован: проверяем то, что
+# можно проверить без аннотаций, вместо того чтобы глушить весь mypy.
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

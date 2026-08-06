@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.26"
+      - run: uv sync --extra dev --frozen
+      - name: Format check
+        run: uv run ruff format --check .
+      - name: Lint
+        run: uv run ruff check .
+
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.26"
+      - run: uv sync --extra dev --frozen
+      - name: mypy
+        run: uv run mypy
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.26"
+      - run: uv sync --extra dev --frozen
+      # Регрессия по публичному набору: скор не ниже baseline, форма ответа
+      # совпадает с submission_template.json, повторный прогон даёт то же самое.
+      - name: pytest (регрессия скора + форма submission)
+        run: uv run pytest
+      # Отдельно гоняем сам скрипт: тест дёргает solve() как функцию, а здесь
+      # проверяется путь `python solution/solve.py` — тот, которым сдаётся ответ.
+      - name: solve.py end-to-end
+        run: uv run python solution/solve.py
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    # gitleaks-action перечисляет коммиты PR через API; дефолтному GITHUB_TOKEN
+    # этого скоупа не хватает, иначе 403 "Resource not accessible by integration".
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

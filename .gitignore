@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Local agent config
+.claude/
+
+# Исходный архив задания — распакован в dataset/, в репозитории не нужен
+*.zip
+
+# Артефакты прогонов: кэш текста PDF пересобирается `make extract`
+solution/docs_text.json
+out/
+
+# macOS
+.DS_Store
