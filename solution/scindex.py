@@ -10,15 +10,19 @@ from collections import defaultdict
 INDEX_VERSION = 1
 
 
+def _target_hits(txn_id: str, target_set: set[str]) -> list[str]:
+    """Все целевые id на границах небуквенно-цифровых символов в txn_id."""
+    return sorted(
+        sc for sc in target_set if re.search(rf"(?<![A-Za-z0-9]){re.escape(sc)}(?![A-Za-z0-9])", txn_id)
+    )
+
+
 def target_scenario_of(txn_id: str, target_set: set[str]) -> str | None:
     """Определить целевой сценарий из txn_id по одному попаданию.
 
-    Ищет целевой id на границах небуквенно-цифровых символов в txn_id.
     Ровно одно совпадение → возвращает сценарий; иначе → None.
     """
-    hits = sorted(
-        sc for sc in target_set if re.search(rf"(?<![A-Za-z0-9]){re.escape(sc)}(?![A-Za-z0-9])", txn_id)
-    )
+    hits = _target_hits(txn_id, target_set)
     return hits[0] if len(hits) == 1 else None
 
 
@@ -43,16 +47,10 @@ def build_index(rows: list[dict], targets: list[str]) -> dict:
     ambiguous_txns = []
 
     for r in rows:
-        target = target_scenario_of(r["txn_id"], target_set)
-        if target is not None:
-            links[target].add(r["account_id"])
+        hits = _target_hits(r["txn_id"], target_set)
+        if len(hits) == 1:
+            links[hits[0]].add(r["account_id"])
         else:
-            # Проверяем, есть ли несколько совпадений (для алярма ambiguous_txn)
-            hits = sorted(
-                sc
-                for sc in target_set
-                if re.search(rf"(?<![A-Za-z0-9]){re.escape(sc)}(?![A-Za-z0-9])", r["txn_id"])
-            )
             if len(hits) > 1:
                 # Несколько целевых id в одной строке
                 ambiguous_txns.append(r["txn_id"])

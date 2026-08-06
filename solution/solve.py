@@ -372,7 +372,7 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
         except Exception as exc:
             print(f"ALARM borrower_trace_failed {scenario}: {exc!r}", flush=True)
         for clause in sorted(template["answers"][scenario]):
-            trace: dict = {"scenario": scenario, "clause": clause}
+            trace = {"scenario": scenario, "clause": clause}
             cell = answers[scenario][clause]  # скелет — фолбэк последней инстанции
             try:
                 try:
