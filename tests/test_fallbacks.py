@@ -22,9 +22,9 @@ def test_prior_status_conditional_and_global():
 
 
 def test_prior_status_clause_first_then_family_then_global():
-    """Пункт → семья → глобальный (LOBO: 27/36 против 22/36 у семья→пункт):
-    даже когда семья известна, пункт точнее — сдвиг 6.1/6.2 несёт сигнал,
-    а absolute размазана."""
+    """Пункт → семья → глобальный (LOBO: 27/36 против 25/36 у семья→пункт
+    при AST-семьях): даже когда семья известна, пункт точнее — сдвиг 6.1/6.2
+    несёт сигнал, а absolute размазана."""
     prior = {
         "by": {"max|absolute": {"BREACH": 9, "COMPLIANT": 1}},
         "by_clause": {"6.2": {"BREACH": 1, "COMPLIANT": 9}},
