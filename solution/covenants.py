@@ -5,6 +5,7 @@
 """
 
 import sys
+from decimal import Decimal
 
 sys.path.insert(0, "solution")
 from engine import inflow, norm, related_payments, revenue, totals
@@ -16,7 +17,7 @@ def ebitda(rows):
 
 
 def related_total(rows, f):
-    return sum(-r["amt"] for r in related_payments(rows, f))
+    return sum((-r["amt"] for r in related_payments(rows, f)), Decimal(0))
 
 
 # --- показатели -------------------------------------------------------------
@@ -92,7 +93,13 @@ def _(rows, f):
 
 @metric("adj_ebitda_margin")
 def _(rows, f):
-    addbacks = sum(a for a in f.get("ebitda_addbacks", []) if a >= f.get("addback_materiality", 0))
+    # Числовые факты досье приходят строками: Decimal + float — TypeError,
+    # а float в денежной сумме тянет двоичный шум в actual.
+    materiality = Decimal(str(f.get("addback_materiality", 0)))
+    addbacks = sum(
+        (a for a in (Decimal(str(x)) for x in f.get("ebitda_addbacks", [])) if a >= materiality),
+        Decimal(0),
+    )
     return (ebitda(rows) + addbacks) / revenue(rows)
 
 
@@ -109,7 +116,7 @@ def _(rows, f):
 
 @metric("staff_liabilities")  # оплата труда за период + обязательство по выходным пособиям
 def _(rows, f):
-    return totals(rows)["PAYROLL"] + f.get("severance_liability", 0.0)
+    return totals(rows)["PAYROLL"] + Decimal(str(f.get("severance_liability", 0)))
 
 
 @metric("revenue_cover_payroll_utilities")
@@ -122,12 +129,15 @@ def _(rows, f):
 def _(rows, f):
     subs = [norm(s) for s in f.get("unrestricted_subsidiaries", [])]
     moved = sum(
-        -r["amt"]
-        for r in rows
-        if r["cat"] == "CAPEX"
-        and r["amt"] < 0
-        and "subsidiary" in r["desc"].lower()
-        and any(s in norm(r["cp"]) or norm(r["cp"]) in s for s in subs)
+        (
+            -r["amt"]
+            for r in rows
+            if r["cat"] == "CAPEX"
+            and r["amt"] < 0
+            and "subsidiary" in r["description"].lower()
+            and any(s in norm(r["counterparty"]) or norm(r["counterparty"]) in s for s in subs)
+        ),
+        Decimal(0),
     )
     return moved / totals(rows)["CAPEX"]
 
@@ -142,6 +152,31 @@ def _(rows, f):
 def _(rows, f):
     t = totals(rows)
     return revenue(rows) - max(t["PAYROLL"], t["TAX"])
+
+
+# --- расходные категории, читаемые метрикой ----------------------------------
+# Нужны для диагностики знака: расходная категория берётся модулем расхода
+# (out), и расхождение с неттингом (net) означает сторно внутри неё. Список
+# ведётся вручную, потому что формулы выше — непрозрачные лямбды; вместе с M
+# он уходит в задачу 15, где категории берутся из разбора спеки.
+# ebitda() = выручка − OTHER_OPEX, поэтому OTHER_OPEX есть у всех, кто её зовёт.
+METRIC_CATEGORIES = {
+    "icr": ["OTHER_OPEX", "INTEREST"],
+    "max_overhead_line": ["PAYROLL", "UTILITIES"],
+    "related_share_opex": ["OTHER_OPEX"],
+    "capex": ["CAPEX"],
+    "capital_intensity": ["CAPEX", "OTHER_OPEX", "RENT"],
+    "sources_cover": ["OTHER_OPEX", "CAPEX"],
+    "springing_leverage": ["OTHER_OPEX"],
+    "adj_ebitda_margin": ["OTHER_OPEX"],
+    "group_capex_to_ebitda": ["CAPEX", "OTHER_OPEX"],
+    "tax_utility_to_ebitda": ["TAX", "UTILITIES", "OTHER_OPEX"],
+    "staff_liabilities": ["PAYROLL"],
+    "revenue_cover_payroll_utilities": ["PAYROLL", "UTILITIES"],
+    "unrestricted_transfer_share": ["CAPEX"],
+    "insurance_cover": ["INSURANCE", "RENT", "UTILITIES"],
+    "revenue_less_max_overhead": ["PAYROLL", "TAX"],
+}
 
 
 # --- строки, формирующие ограничиваемую величину -----------------------------
@@ -161,9 +196,9 @@ DRIVERS = {
         for r in rows
         if r["cat"] == "CAPEX"
         and r["amt"] < 0
-        and "subsidiary" in r["desc"].lower()
+        and "subsidiary" in r["description"].lower()
         and any(
-            norm(s) in norm(r["cp"]) or norm(r["cp"]) in norm(s)
+            norm(s) in norm(r["counterparty"]) or norm(r["counterparty"]) in norm(s)
             for s in f.get("unrestricted_subsidiaries", [])
         )
     ],

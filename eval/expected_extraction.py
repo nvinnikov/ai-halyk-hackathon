@@ -16,7 +16,9 @@ FACTS: dict[str, dict[str, Any]] = {
         "reclass": [{"txn": "TXN-B1-0020", "to": "INTEREST"}],
     },
     "B4": {  # ACC-7204 Shymkent Refinery JSC
-        "related_parties": ["Kazyna Capital LLP"],
+        # Shymkent Fuel Distributors — 48.0% голосов при пороге 30.0%; в
+        # related_abs не попадает: все её строки у B4 — поступления.
+        "related_parties": ["Kazyna Capital LLP", "Shymkent Fuel Distributors LLP"],
         "exclude": ["TXN-B4-0026"],  # отсечение: переход рисков в январе 2026
     },
     "P1": {  # ACC-7801 Aktau Port Services JSC
@@ -34,8 +36,8 @@ FACTS: dict[str, dict[str, Any]] = {
     },
     "P4": {  # ACC-7804 Aktobe Grain Terminal JSC  (таблица добавок — vision)
         "related_parties": ["Aral Capital Partners LLP"],
-        "ebitda_addbacks": [251338.94, 342905.28, 481247.63],
-        "addback_materiality": 300000.00,
+        "ebitda_addbacks": ["251338.94", "342905.28", "481247.63"],
+        "addback_materiality": "300000.00",
         "vision": ["2ed0b2ee4b57.pdf#p3,p4"],
     },
     "P5": {  # ACC-7805 Ekibastuz Power Services JSC
@@ -47,12 +49,12 @@ FACTS: dict[str, dict[str, Any]] = {
     },
     "P7": {  # ACC-7807 Atyrau Pipeline Services JSC
         "related_parties": ["Atyrau Holding Group LLP"],
-        "amount_override": {"TXN-P7-0033": -486204.19},  # записка казначейства
+        "amount_override": {"TXN-P7-0033": "-486204.19"},  # записка казначейства
     },
     "P8": {  # ACC-7808 Kyzylorda Drilling Services JSC
         "related_parties": ["Syrdarya Capital Holding LLP"],
-        "amount_override": {"TXN-P8-0031": -884204.16},
-        "severance_liability": 918447.52,
+        "amount_override": {"TXN-P8-0031": "-884204.16"},
+        "severance_liability": "918447.52",
     },
     "P9": {  # ACC-7809 Zhezkazgan Mining Services JSC  (таблица залога — vision)
         "related_parties": ["Ulytau Capital LLP"],

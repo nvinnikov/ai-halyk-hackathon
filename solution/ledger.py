@@ -30,7 +30,7 @@ class LedgerRow(TypedDict):
     cat_tier: int
 
 
-LEDGER_VERSION = 3
+LEDGER_VERSION = 4
 _NA = {"n/a", "na", "none", "-", "—", "--"}
 
 
@@ -111,14 +111,17 @@ def load_ledger(wd: Path, input_dir: Path, target_scenarios: list[str] | None = 
                     k: (r.get(k) or "").strip()
                     for k in ("txn_id", "date", "account_id", "counterparty", "description", "currency")
                 }
-                amt = parse_amount(r.get("amount") or "")
-                if amt is None:
-                    dirty.append({**rec, "raw_amount": r.get("amount")})
-                    continue
-                rec["amount"] = str(amt)
                 # Первый ярус: категоризация по правилам
                 rec["cat"] = categorize(rec["description"])
                 rec["cat_tier"] = 1
+                amt = parse_amount(r.get("amount") or "")
+                if amt is None:
+                    # Категория известна и здесь: сумму такой строке может
+                    # вернуть записка казначейства (amount_override), и тогда
+                    # она считается наравне с прочими.
+                    dirty.append({**rec, "raw_amount": r.get("amount")})
+                    continue
+                rec["amount"] = str(amt)
                 rows.append(rec)
 
         # Второй ярус: LLM для непокрытого (только для целевых заёмщиков)
@@ -153,3 +156,13 @@ def load_ledger(wd: Path, input_dir: Path, target_scenarios: list[str] | None = 
 
 def rows_of(art: dict) -> list[dict]:
     return [{**r, "amt": Decimal(r["amount"])} for r in art["rows"]]
+
+
+def dirty_rows_of(art: dict) -> list[dict]:
+    """Строки с неразобранной суммой, amt=None.
+
+    Считать их нельзя, но и потерять нельзя: TXN-P7-0033 и TXN-P8-0031 —
+    именно такие, сумму им возвращает amount_override из документов. Отсев
+    невосстановленных — в engine.prepare_rows, после применения фактов.
+    """
+    return [{**r, "amt": None} for r in art["dirty"]]

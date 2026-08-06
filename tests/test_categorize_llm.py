@@ -226,7 +226,9 @@ def test_load_ledger_adds_cat_tier_after_categorize(tmp_path, monkeypatch):
 
 
 def test_ledger_version_incremented(monkeypatch):
-    """LEDGER_VERSION поднята на 3."""
+    """Схема артефакта менялась — версия обязана расти, иначе на диске останется
+    кэш прошлой схемы: 3 — категории второго яруса, 4 — категория у строк с
+    неразобранной суммой."""
     from ledger import LEDGER_VERSION
 
-    assert LEDGER_VERSION == 3
+    assert LEDGER_VERSION >= 4

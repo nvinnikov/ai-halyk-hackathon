@@ -70,10 +70,10 @@ def test_cell_failure_does_not_kill_run(monkeypatch):
     original = solve.solve_cell
     victim = sorted(TEMPLATE["answers"])[0]
 
-    def sabotaged(scenario, clause, rows, facts):
+    def sabotaged(scenario, clause, rows, facts, raw):
         if scenario == victim:
             raise RuntimeError("искусственный сбой ячейки")
-        return original(scenario, clause, rows, facts)
+        return original(scenario, clause, rows, facts, raw)
 
     monkeypatch.setattr(solve, "solve_cell", sabotaged)
     answers = solve.main(PUBLIC_ZIP, facts_source="expected")
@@ -85,14 +85,14 @@ def test_scenario_load_failure_does_not_kill_run(monkeypatch):
     """Падение загрузки сценария не убивает прогон: его три ячейки остаются
     скелетом, остальные сценарии считаются."""
     victim = sorted(TEMPLATE["answers"])[0]
-    original = solve.load
+    original = solve.load_rows
 
-    def sabotaged(scenario):
+    def sabotaged(scenario, all_rows, index, facts):
         if scenario == victim:
             raise RuntimeError("искусственный сбой загрузки сценария")
-        return original(scenario)
+        return original(scenario, all_rows, index, facts)
 
-    monkeypatch.setattr(solve, "load", sabotaged)
+    monkeypatch.setattr(solve, "load_rows", sabotaged)
     answers = solve.main(PUBLIC_ZIP, facts_source="expected")
     for clause, cell in answers[victim].items():
         assert_cell_valid(cell, f"{victim} {clause}")

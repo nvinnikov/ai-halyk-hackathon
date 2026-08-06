@@ -22,10 +22,10 @@ sys.path.insert(0, "eval")
 
 from expected_extraction import FACTS, SPECS
 
-from covenants import DRIVERS, M
-from engine import inflow, load
+from covenants import DRIVERS, METRIC_CATEGORIES, M
+from engine import inflow, prepare_rows, select_rows, sign_divergence
 from engine import norm as norm_cp
-from ledger import extract_archive, find_inputs, load_ledger, rows_of
+from ledger import dirty_rows_of, extract_archive, find_inputs, load_ledger, rows_of
 from scindex import INDEX_VERSION, build_index
 from stages import artifact
 from util import OUT, ROOT, q2, stable_json, workdir
@@ -34,6 +34,31 @@ SUBMISSION_META = {"team": "", "contact_email": "", "model": ""}
 
 
 # --- легаси-ядро (заменяется задачами 15/16/24) ------------------------------
+
+
+def _to_usd(rows: list[dict], facts: dict) -> list[dict]:
+    """Временная валютная нормализация по курсам из фактов досье.
+
+    Отдельная стадия fx.py с курсом на дату операции — задача 12; этот блок
+    уходит вместе с ней.
+    """
+    fx = facts.get("fx", {})
+    out = []
+    for r in rows:
+        rate = fx.get(r["currency"]) if r["currency"] != "USD" else None
+        out.append({**r, "amt": r["amt"] * Decimal(str(rate))} if rate and r["amt"] is not None else r)
+    return out
+
+
+def load_rows(scenario: str, all_rows: list[dict], index: dict, facts: dict) -> tuple[list, list]:
+    """Строки сценария: отбор по счёту из индекса, курс, решения досье.
+
+    Возвращает пару (сырые, подготовленные). Сырые нужны улике: она откатывает
+    одно решение и пересобирает строки заново, а в подготовленных отсечённой
+    операции уже нет.
+    """
+    raw = _to_usd(select_rows(all_rows, index["scenario_to_account"][scenario]), facts)
+    return raw, prepare_rows(raw, facts)
 
 
 def _verdict(actual, direction, limit):
@@ -52,18 +77,17 @@ def _evaluate(scenario, clause, rows, facts):
     return _verdict(actual, direction, limit), actual
 
 
-def _flips(scenario, clause, status, alt, original):
-    FACTS[scenario] = alt
+def _flips(scenario, clause, status, alt, raw):
+    """Контрфактуал считается на тех же сырых строках с изменёнными фактами —
+    без подмены глобального FACTS: скрытое состояние сломало бы детерминизм
+    при параллельном счёте сценариев (задача 24)."""
     try:
-        alt_rows, _ = load(scenario)
-        return _evaluate(scenario, clause, alt_rows, alt)[0] != status
+        return _evaluate(scenario, clause, prepare_rows(raw, alt), alt)[0] != status
     except ZeroDivisionError:
         return False
-    finally:
-        FACTS[scenario] = original
 
 
-def _find_evidence(scenario, clause, status, rows, facts):
+def _find_evidence(scenario, clause, status, rows, facts, raw):
     """Улика — единственная операция, определяющая вердикт.
 
     Два случая: (1) ограничиваемая величина состоит ровно из одной операции;
@@ -78,35 +102,35 @@ def _find_evidence(scenario, clause, status, rows, facts):
     if driver:
         drivers = driver(rows, facts)
         if len(drivers) == 1:
-            return drivers[0]["id"]
+            return drivers[0]["txn_id"]
     for i in range(len(facts.get("reclass", []))):
         alt = copy.deepcopy(facts)
         item = alt["reclass"].pop(i)
-        if not _flips(scenario, clause, status, alt, facts):
+        if not _flips(scenario, clause, status, alt, raw):
             continue
         for r in rows:
-            if item.get("txn") == r["id"]:
-                return r["id"]
+            if item.get("txn") == r["txn_id"]:
+                return r["txn_id"]
             cp = item.get("counterparty")
-            if cp and norm_cp(cp) == norm_cp(r["cp"]):
-                return r["id"]
+            if cp and norm_cp(cp) == norm_cp(r["counterparty"]):
+                return r["txn_id"]
     for txn in sorted(list(facts.get("exclude", [])) + list(facts.get("amount_override", {}))):
         alt = copy.deepcopy(facts)
         alt["exclude"] = [t for t in alt.get("exclude", []) if t != txn]
         alt["amount_override"] = {k: v for k, v in alt.get("amount_override", {}).items() if k != txn}
-        if _flips(scenario, clause, status, alt, facts):
+        if _flips(scenario, clause, status, alt, raw):
             return txn
     return None
 
 
-def solve_cell(scenario: str, clause: str, rows: list, facts: dict) -> dict:
+def solve_cell(scenario: str, clause: str, rows: list, facts: dict, raw: list) -> dict:
     """Одна ячейка ответа. Точка подмены ядра задачами фаз 1–2: сигнатура и
     форма результата фиксированы, содержимое — нет."""
     status, actual = _evaluate(scenario, clause, rows, facts)
     return {
         "status": status,
         "actual": q2(Decimal(str(abs(actual)))),
-        "evidence_txn_id": _find_evidence(scenario, clause, status, rows, facts),
+        "evidence_txn_id": _find_evidence(scenario, clause, status, rows, facts, raw),
     }
 
 
@@ -169,12 +193,17 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
     ledger_art = load_ledger(wd, input_dir, target_scenarios=targets)
     all_rows = rows_of(ledger_art)
     index = artifact(wd / "index.json", INDEX_VERSION, lambda: build_index(all_rows, targets))
+    # Строки без разобранной суммы отбираются наравне с прочими: расчёт их
+    # отбросит, если факты досье не вернут им сумму. В индекс они не идут —
+    # счёт сценария определяется по строкам, которые действительно посчитаны.
+    scenario_rows = all_rows + dirty_rows_of(ledger_art)
     for alarm in index["alarms"]:
         print(f"ALARM {alarm}", flush=True)
 
     for scenario in targets:
+        facts = FACTS[scenario]
         try:
-            rows, facts = load(scenario)  # легаси-загрузка; задача 11 заменит
+            raw, rows = load_rows(scenario, scenario_rows, index, facts)
         except Exception as exc:  # fail-open: сценарий целиком остаётся скелетом
             print(f"ALARM scenario_failed {scenario}: {exc!r}", flush=True)
             for clause in sorted(template["answers"][scenario]):
@@ -187,8 +216,14 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
             continue
         for clause in sorted(template["answers"][scenario]):
             trace = {"scenario": scenario, "clause": clause, "path": "legacy"}
+            # Знак расходной категории: дефолт out, а расхождение с net значит
+            # сторно внутри читаемой категории — на приватном наборе такие
+            # ячейки видны сразу, а не после разбора расхождения в баллах.
+            divergence = sign_divergence(rows, METRIC_CATEGORIES.get(SPECS[scenario][clause][0], []))
+            if divergence:
+                trace["sign_divergence"] = divergence
             try:
-                cell = solve_cell(scenario, clause, rows, facts)
+                cell = solve_cell(scenario, clause, rows, facts, raw)
                 trace["cell"] = cell
             except Exception as exc:  # fail-open: ячейка остаётся фолбэком
                 trace["error"] = repr(exc)
