@@ -36,7 +36,7 @@ class LedgerRow(TypedDict):
     cat_tier: int
 
 
-LEDGER_VERSION = 4
+LEDGER_VERSION = 5
 _NA = {"n/a", "na", "none", "-", "—", "--"}
 
 
@@ -130,26 +130,26 @@ def load_ledger(wd: Path, input_dir: Path, target_scenarios: list[str] | None = 
                 rec["amount"] = str(amt)
                 rows.append(rec)
 
-        # Второй ярус: LLM для непокрытого (только для целевых заёмщиков)
+        # Второй ярус: LLM для непокрытого (только для целевых заёмщиков).
+        # dirty-строки участвуют наравне с rows: восстановленная через
+        # amount_override строка считается в агрегатах и не должна остаться
+        # OTHER только потому, что её сумма в CSV была грязной.
         if target_set:
-            # Собираем описания со статусом OTHER для целевых заёмщиков
-            target_other_descriptions: dict[str, list[str]] = {}
-            for r in rows:
-                if r["cat"] == "OTHER":
-                    target = target_scenario_of(r["txn_id"], target_set)
-                    if target:
-                        if r["description"] not in target_other_descriptions:
-                            target_other_descriptions[r["description"]] = []
-
-            if target_other_descriptions:
-                unique_descriptions = sorted(target_other_descriptions.keys())
-                llm_categories, cat_alarms = categorize_batch(unique_descriptions)
+            second_tier = rows + dirty
+            descriptions = sorted(
+                {
+                    r["description"]
+                    for r in second_tier
+                    if r["cat"] == "OTHER" and target_scenario_of(r["txn_id"], target_set)
+                }
+            )
+            if descriptions:
+                llm_categories, cat_alarms = categorize_batch(descriptions)
                 alarms.extend(cat_alarms)
 
-                for r in rows:
+                for r in second_tier:
                     if r["cat"] == "OTHER" and r["description"] in llm_categories:
-                        target = target_scenario_of(r["txn_id"], target_set)
-                        if target:
+                        if target_scenario_of(r["txn_id"], target_set):
                             r["cat"] = llm_categories[r["description"]]
                             r["cat_tier"] = 2
 

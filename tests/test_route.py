@@ -104,3 +104,20 @@ def test_mention_search_respects_boundaries(fake):
     art = route.route_doc(wd, Path("x.pdf"), ["ACC-111", "ACC-1111"], ["ACC-111", "ACC-1111"])
     assert art["mentions"] == ["ACC-1111"]
     assert art["account_id"] == "ACC-1111"
+
+
+def test_non_client_doc_type_not_bound(fake, monkeypatch):
+    """Методичка с целевым счётом внутри — не документ клиента: тип other
+    не привязывается даже при единственном кандидате."""
+    state, wd = fake
+
+    def call_other(prompt, schema, schema_version, **kw):
+        state["llm"].append(prompt)
+        return {"doc_type": "other", "date": "", "edition": "unmarked"}
+
+    monkeypatch.setattr(route.llm, "call", call_other)
+    state["text"] = "методичка комплаенса, упоминает ACC-1111"
+    art = route.route_doc(wd, Path("x.pdf"), TARGETS, ALL_ACCOUNTS)
+    assert art["account_id"] is None and art["quarantined"] is True
+    assert art["quarantine_reason"] == "non_client_doc_type"
+    assert not any(a["kind"] == "routing_quarantine" for a in art["alarms"])

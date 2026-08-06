@@ -15,8 +15,12 @@ from pdftext import doc_hash
 from route import full_text, route_doc
 from stages import artifact
 
-DOSSIER_VERSION = 1
+DOSSIER_VERSION = 2
 _EDITION_RANK = {"final": 0, "unmarked": 1, "draft": 2, "superseded": 3}
+# Редакционная фильтрация — только для перевыпускаемых целиком типов. Отчёты
+# и записки кумулятивны: каждый несёт своё документальное решение, и отброс
+# по дате терял бы реклассификации и исправления сумм (правка по замеру).
+CUMULATIVE_TYPES = frozenset({"audit_report", "treasury_memo", "financial_notes"})
 
 
 def _neg_date(date: str) -> str:
@@ -24,9 +28,16 @@ def _neg_date(date: str) -> str:
     return "".join(chr(0xFFFF - ord(c)) for c in d)  # сортировка по убыванию даты
 
 
-def _pick_active(docs: list[dict]) -> tuple[dict, list[dict]]:
-    """Маркер перебивает дату: сначала ранг редакции, затем дата по убыванию."""
-    ranked = sorted(docs, key=lambda d: (_EDITION_RANK[d["edition"]], _neg_date(d["date"]), d["file"]))
+def _pick_active(docs: list[dict]) -> tuple[dict | None, list[dict]]:
+    """Маркер перебивает дату: сначала ранг редакции, затем дата по убыванию.
+
+    Документ с маркером superseded не бывает действующим — даже единственный:
+    пометка «заменён» означает, что действующей редакции в досье нет."""
+    alive = [d for d in docs if d["edition"] != "superseded"]
+    dead = [d for d in docs if d["edition"] == "superseded"]
+    if not alive:
+        return None, [{"file": d["file"], "reason": "superseded_edition", "kept": None} for d in dead]
+    ranked = sorted(alive, key=lambda d: (_EDITION_RANK[d["edition"]], _neg_date(d["date"]), d["file"]))
     active, rejected = ranked[0], []
     for d in ranked[1:]:
         reason = (
@@ -35,6 +46,7 @@ def _pick_active(docs: list[dict]) -> tuple[dict, list[dict]]:
             else "superseded_by_date"
         )
         rejected.append({"file": d["file"], "reason": reason, "kept": active["file"]})
+    rejected.extend({"file": d["file"], "reason": "superseded_edition", "kept": active["file"]} for d in dead)
     return active, rejected
 
 
@@ -62,15 +74,23 @@ def build_dossiers(
             for r in mine:
                 by_type.setdefault(r["doc_type"], []).append(r)
             for dtype in sorted(by_type):
-                active, rej = _pick_active(by_type[dtype])
-                docs.append(
-                    {
-                        "file": active["file"],
-                        "doc_type": dtype,
-                        "date": active["date"],
-                        "text": full_text(wd, by_hash[active["doc_hash"]]),
-                    }
-                )
+                rej: list[dict] = []
+                if dtype in CUMULATIVE_TYPES:
+                    # Кумулятивные типы: в досье попадают все документы, их
+                    # факты сливает facts_extract.
+                    actives = sorted(by_type[dtype], key=lambda d: (d["date"], d["file"]))
+                else:
+                    active, rej = _pick_active(by_type[dtype])
+                    actives = [active] if active is not None else []
+                for active in actives:
+                    docs.append(
+                        {
+                            "file": active["file"],
+                            "doc_type": dtype,
+                            "date": active["date"],
+                            "text": full_text(wd, by_hash[active["doc_hash"]]),
+                        }
+                    )
                 docs_rejected.extend(rej)
             return {
                 "account_id": acc,

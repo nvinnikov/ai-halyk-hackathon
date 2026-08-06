@@ -80,3 +80,24 @@ def test_same_basename_in_different_dirs(monkeypatch, tmp_path):
     d = dossier.build_dossiers(tmp_path, pdfs, INDEX)["ACC-1"]
     # текст берётся у файла с совпавшим doc_hash — sub/x.pdf
     assert len(d["docs"]) == 1 and "sub" in d["docs"][0]["text"]
+
+
+def test_cumulative_types_keep_all_docs(monkeypatch, tmp_path):
+    """Записки казначейства кумулятивны: каждая несёт своё решение, отброс
+    по дате терял бы факты."""
+    routes = {
+        "m1.pdf": base("m1.pdf", dtype="treasury_memo", date="2025-01-01"),
+        "m2.pdf": base("m2.pdf", dtype="treasury_memo", date="2025-06-01"),
+    }
+    make_route(monkeypatch, routes, {})
+    d = dossier.build_dossiers(tmp_path, [Path("m1.pdf"), Path("m2.pdf")], INDEX)["ACC-1"]
+    assert [x["file"] for x in d["docs"]] == ["m1.pdf", "m2.pdf"]
+    assert d["docs_rejected"] == []
+
+
+def test_single_superseded_is_never_active(monkeypatch, tmp_path):
+    routes = {"a.pdf": base("a.pdf", edition="superseded")}
+    make_route(monkeypatch, routes, {})
+    d = dossier.build_dossiers(tmp_path, [Path("a.pdf")], INDEX)["ACC-1"]
+    assert d["docs"] == []
+    assert d["docs_rejected"][0]["reason"] == "superseded_edition"

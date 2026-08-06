@@ -108,6 +108,18 @@ def test_diagnostics_failure_does_not_kill_run(monkeypatch):
     assert total >= BASELINE  # ячейки посчитаны, диагностика потеряна — не наоборот
 
 
+def test_unknown_scenario_facts_do_not_kill_run(monkeypatch):
+    """Сценарий без фактов в эталоне (приватный набор): расчёт идёт по строкам
+    без документальных решений, остальные сценарии не страдают."""
+    victim = sorted(TEMPLATE["answers"])[0]
+    monkeypatch.delitem(solve.FACTS, victim)
+    answers = solve.main(PUBLIC_ZIP, facts_source="expected")
+    for clause, cell in answers[victim].items():
+        assert_cell_valid(cell, f"{victim} {clause}")
+    other = sorted(TEMPLATE["answers"])[1]
+    assert any(cell["evidence_txn_id"] is not None for cell in answers[other].values())
+
+
 def test_scenario_load_failure_does_not_kill_run(monkeypatch):
     """Падение загрузки сценария не убивает прогон: его три ячейки остаются
     скелетом, остальные сценарии считаются."""

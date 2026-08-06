@@ -8,34 +8,27 @@
 import json
 import sys
 from collections import defaultdict
+from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, "eval")
+sys.path.insert(0, "solution")
 from expected_extraction import SPECS
+
+from dsl import parse
+from fallbacks import family_of
+from templates import TEMPLATES
 
 GT = Path("dataset/agentic-bank-public/ground_truth.json")
 
-_RATIO = {
-    "icr",
-    "capital_intensity",
-    "sources_cover",
-    "springing_leverage",
-    "adj_ebitda_margin",
-    "group_capex_to_ebitda",
-    "tax_utility_to_ebitda",
-    "revenue_cover_payroll_utilities",
-    "insurance_cover",
-}
-_SHARE = {"related_share_revenue", "related_share_opex", "unrestricted_transfer_share"}
 
+def metric_family(metric_name: str, limit) -> str:
+    """Семья метрики — тем же кодом, что и потребитель (fallbacks.family_of).
 
-def metric_family(metric_name: str) -> str:
-    """Определить семью метрики."""
-    if metric_name in _RATIO:
-        return "ratio"
-    if metric_name in _SHARE:
-        return "share"
-    return "absolute"
+    Ручной список имён рассинхронизировался бы с AST-классификацией: ключи
+    вида min|share иначе никогда не появились бы в приоре, и семейная ступень
+    для таких метрик была бы мертва."""
+    return family_of(parse(TEMPLATES[metric_name]), Decimal(str(limit)))
 
 
 def build_prior() -> dict:
@@ -47,9 +40,9 @@ def build_prior() -> dict:
     for sc in sorted(gt):
         for cl in sorted(gt[sc]["covenants"]):
             status = gt[sc]["covenants"][cl]["status"]
-            metric, direction = SPECS[sc][cl][0], SPECS[sc][cl][1]
+            metric, direction, limit = SPECS[sc][cl][0], SPECS[sc][cl][1], SPECS[sc][cl][2]
             global_counts[status] += 1
-            by[f"{direction}|{metric_family(metric)}"][status] += 1
+            by[f"{direction}|{metric_family(metric, limit)}"][status] += 1
             by_clause[cl][status] += 1
     return {
         "global": dict(sorted(global_counts.items())),

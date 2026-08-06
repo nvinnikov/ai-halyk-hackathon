@@ -12,17 +12,20 @@ from decimal import Decimal
 sys.path.insert(0, "solution")
 from taxonomy import expand
 
-LEGAL_FORMS = frozenset({"llp", "llc", "jsc", "ltd", "inc", "corp", "lp", "gmbh", "plc"})
+LEGAL_FORMS = frozenset(
+    {"llp", "llc", "jsc", "ltd", "inc", "corp", "lp", "gmbh", "plc", "тоо", "ооо", "зао", "оао", "пао"}
+)
 
 
 def tokens(name: str) -> frozenset[str]:
     """Нормализованные токены: ≥3 символов, без юридических форм.
 
-    Разбиение по не-alnum идёт до фильтра юрформ, поэтому 'L.L.P.' и 'LLP'
-    дают один и тот же результат; старый norm() резал точки после regex и
-    оставлял от первого написания мусорные 'l l p'.
+    Разбиение по не-словарным символам идёт до фильтра юрформ, поэтому
+    'L.L.P.' и 'LLP' дают один и тот же результат. Класс \\w, а не [a-z0-9]:
+    кириллическое имя связанной стороны иначе давало бы пустой набор токенов
+    и никогда бы не матчилось.
     """
-    words = re.split(r"[^a-z0-9]+", name.lower())
+    words = re.split(r"[^\w]+", name.lower())
     return frozenset(w for w in words if len(w) >= 3 and w not in LEGAL_FORMS)
 
 

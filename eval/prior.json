@@ -5,10 +5,10 @@
    "COMPLIANT": 9
   },
   "max|ratio": {
-   "BREACH": 4
+   "BREACH": 2
   },
   "max|share": {
-   "BREACH": 4,
+   "BREACH": 6,
    "COMPLIANT": 2
   },
   "min|absolute": {
@@ -17,7 +17,10 @@
   },
   "min|ratio": {
    "BREACH": 2,
-   "COMPLIANT": 3
+   "COMPLIANT": 1
+  },
+  "min|share": {
+   "COMPLIANT": 2
   }
  },
  "by_clause": {

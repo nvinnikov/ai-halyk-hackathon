@@ -159,3 +159,12 @@ def test_prepare_rows_amount_override_revives_row_without_amount():
     assert prepare_rows(raw, {}) == []
     revived = prepare_rows(raw, {"amount_override": {"T-1": "-486204.19"}})
     assert [r["amt"] for r in revived] == [Decimal("-486204.19")]
+
+
+def test_tokens_cyrillic_names_match():
+    """Кириллическая связанная сторона не должна давать пустой набор токенов."""
+    from engine import is_related, tokens
+
+    assert tokens("ТОО «Эртис Капитал»") == frozenset({"эртис", "капитал"})
+    assert is_related("Эртис Капитал ТОО", ["ТОО «Эртис Капитал»"])
+    assert not is_related("ТОО", ["ООО"])  # одни юрформы не роднят весь леджер

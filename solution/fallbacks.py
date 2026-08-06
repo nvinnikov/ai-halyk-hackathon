@@ -53,15 +53,17 @@ def _argmax(counts: dict) -> str:
 def prior_status(
     prior: dict, direction: str | None, family: str | None, clause: str | None = None
 ) -> tuple[str, bool]:
-    """Лестница приора: (направление, семья) → номер пункта → глобальная доля.
+    """Лестница приора: номер пункта → (направление, семья) → глобальная доля.
 
-    by_clause — вторая ступень (75% точности против 64% глобальной на публичном
-    ключе): номер пункта известен даже когда спека не распарсилась вовсе."""
+    Пункт первым — по LOBO-замеру (27/36 против 22/36 у порядка семья→пункт):
+    сдвиг пунктов несёт почти весь сигнал (6.1 — 10/12 BREACH, 6.2 — 10/12
+    COMPLIANT), а самая населённая семья absolute размазана 7/14. Порядок
+    совпадает с докстрингом eval/prior.py."""
+    if clause and clause in prior.get("by_clause", {}):
+        return _argmax(prior["by_clause"][clause]), True
     key = f"{direction}|{family}"
     if direction and family and key in prior["by"]:
         return _argmax(prior["by"][key]), True
-    if clause and clause in prior.get("by_clause", {}):
-        return _argmax(prior["by_clause"][clause]), True
     return _argmax(prior["global"]), False
 
 

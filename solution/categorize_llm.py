@@ -77,8 +77,14 @@ def categorize_batch(descriptions: list[str]) -> tuple[dict[str, str], list[dict
             descriptions=descriptions_str,
         )
 
-        # Вызов LLM с кэшем
-        resp = llm.call(prompt, CAT_SCHEMA, SCHEMA_VERSION)
+        # Вызов LLM с кэшем. Fail-open: любой сбой (SchemaRejected, CassetteMiss,
+        # BudgetExhausted, сеть) стоит одного батча OTHER с алярмом, а не всего
+        # прогона до расчёта — второй ярус лишь уточняет первый.
+        try:
+            resp = llm.call(prompt, CAT_SCHEMA, SCHEMA_VERSION)
+        except Exception as exc:
+            alarms.append({"kind": "categorize_failed", "batch_start": batch[0], "error": repr(exc)})
+            continue
 
         # Парсим ответ и валидируем категорию против таксономии
         returned: dict[str, str] = {}

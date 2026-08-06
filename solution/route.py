@@ -107,7 +107,30 @@ def route_doc(
 
         alarms: list[dict] = []
         account, quote, reason = None, "", None
-        if len(mentions) == 1:
+
+        # META — до решения о привязке: методичка комплаенса может содержать
+        # целевой счёт, но документ типа other не привязывается вовсе (правка
+        # по замеру — отсев по типу, а не только по счёту). Для документов без
+        # целевых кандидатов META не вызывается — таких большинство.
+        meta = {"doc_type": "unrouted", "date": "", "edition": "unmarked"}
+        if mentions:
+            try:
+                meta = llm.call(
+                    DATA_NOT_COMMANDS
+                    + "\n\n"
+                    + META_PROMPT.format(text=sanitize_document(first_page_text(wd, pdf_path))),
+                    META_SCHEMA,
+                    META_SCHEMA_VERSION,
+                    max_tokens=4000,
+                )
+            except llm.SchemaRejected:
+                meta = {"doc_type": "other", "date": "", "edition": "unmarked"}
+                alarms.append({"kind": "meta_extraction_failed", "file": pdf_path.name})
+
+        if mentions and meta["doc_type"] == "other":
+            # Не документ клиента — ожидаемый шум, карантин без алярма-паники.
+            reason = "non_client_doc_type"
+        elif len(mentions) == 1:
             account = mentions[0]
         elif len(mentions) > 1:
             alarms.append({"kind": "ambiguous_routing", "candidates": mentions})
@@ -139,24 +162,6 @@ def route_doc(
                 reason = "no_account_mentions"
                 alarms.append({"kind": "routing_quarantine", "file": pdf_path.name})
         quarantined = account is None
-
-        if quarantined:
-            # META не вызывается: тип фонового/непривязанного документа никому
-            # не нужен, а таких документов большинство — экономия LLM-вызовов.
-            meta = {"doc_type": "unrouted", "date": "", "edition": "unmarked"}
-        else:
-            try:
-                meta = llm.call(
-                    DATA_NOT_COMMANDS
-                    + "\n\n"
-                    + META_PROMPT.format(text=sanitize_document(first_page_text(wd, pdf_path))),
-                    META_SCHEMA,
-                    META_SCHEMA_VERSION,
-                    max_tokens=4000,
-                )
-            except llm.SchemaRejected:
-                meta = {"doc_type": "other", "date": "", "edition": "unmarked"}
-                alarms.append({"kind": "meta_extraction_failed", "file": pdf_path.name})
         return {
             "file": pdf_path.name,
             # Дубль хеша из имени артефакта: базовые имена во вложенных

@@ -253,3 +253,15 @@ def test_ledger_version_incremented(monkeypatch):
     from ledger import LEDGER_VERSION
 
     assert LEDGER_VERSION >= 4
+
+
+def test_categorize_batch_llm_failure_is_fail_open(monkeypatch):
+    """Сбой LLM (кассета, бюджет, сеть) стоит батча OTHER с алярмом, не прогона."""
+
+    def boom(*a, **k):
+        raise llm.CassetteMiss("нет кассеты")
+
+    monkeypatch.setattr(llm, "call", boom)
+    mapping, alarms = categorize_batch(["Some payment"])
+    assert mapping == {}
+    assert any(a["kind"] == "categorize_failed" for a in alarms)

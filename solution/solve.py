@@ -65,9 +65,13 @@ def _facts_of(scenario: str) -> dict:
     Задача 24 подменит здесь источник на извлечённые LLM факты, не трогая
     вызывающих (в том числе сбор донорских курсов по чужим заёмщикам).
     Факты всегда проходят через _with_doc_facts: doc()-метрики DSL ждут
-    готовый doc_facts.
+    готовый doc_facts. Неизвестный сценарий (приватный набор) — пустые
+    факты с алярмом, а не KeyError: расчёт по строкам без документальных
+    решений лучше скелета.
     """
-    return _with_doc_facts(FACTS[scenario])
+    if scenario not in FACTS:
+        print(f"ALARM facts_missing {scenario}: расчёт без фактов досье", flush=True)
+    return _with_doc_facts(FACTS.get(scenario, {}))
 
 
 def load_rows(
@@ -345,8 +349,10 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
     # лестницы для ячеек без прочитанного порога.
     computed: list[tuple[str, float]] = []
     for scenario in targets:
-        facts = _facts_of(scenario)
         try:
+            # Внутри try: даже единственная точка чтения фактов не имеет права
+            # уронить цикл — сценарий уйдёт лестницей, остальные посчитаются.
+            facts = _facts_of(scenario)
             raw, rows, fx_alarms = load_rows(
                 scenario, scenario_rows, index, facts, _donor_rates(targets, scenario)
             )
