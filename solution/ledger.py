@@ -27,7 +27,7 @@ class LedgerRow(TypedDict):
     cat: str
 
 
-LEDGER_VERSION = 1
+LEDGER_VERSION = 2
 _NA = {"n/a", "na", "none", "-", "—", "--"}
 
 

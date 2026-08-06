@@ -25,7 +25,7 @@ FACTS: dict[str, dict[str, Any]] = {
     },
     "P2": {  # ACC-7802 Almaty Cold Chain JSC   (таблица KYC — vision)
         "related_parties": ["Zhetysu Capital Partners LLP"],
-        "reclass": [{"txn": None, "counterparty": "Tien Shan Advisory Bureau", "to": "OPEX"}],
+        "reclass": [{"txn": None, "counterparty": "Tien Shan Advisory Bureau", "to": "OTHER_OPEX"}],
         "vision": ["63e162bd710b.pdf#p2"],
     },
     "P3": {  # ACC-7803 Shymkent Refinery Services JSC

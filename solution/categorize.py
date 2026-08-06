@@ -29,7 +29,7 @@ RULES = [
     # именно их, и в EBITDA как «Операционные расходы» они не входят.
     ("CONSULTING", r"advisory engagement|management .*retainer|retainer fee"),
     (
-        "OPEX",
+        "OTHER_OPEX",
         r"operating and maintenance|servicing and operating|servicing contract|"
         r"servicing|remediation|cleaning and clearance|arbitration and legal",
     ),

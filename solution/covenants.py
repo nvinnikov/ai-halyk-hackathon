@@ -12,7 +12,7 @@ from engine import inflow, norm, related_payments, revenue, totals
 
 def ebitda(rows):
     t = totals(rows)
-    return revenue(rows) - t["OPEX"]
+    return revenue(rows) - t["OTHER_OPEX"]
 
 
 def related_total(rows, f):
@@ -55,7 +55,7 @@ def _(rows, f):
 
 @metric("related_share_opex")
 def _(rows, f):
-    return related_total(rows, f) / totals(rows)["OPEX"]
+    return related_total(rows, f) / totals(rows)["OTHER_OPEX"]
 
 
 @metric("revenue")
@@ -76,13 +76,13 @@ def _(rows, f):
 @metric("capital_intensity")  # CapEx / (OpEx + аренда)
 def _(rows, f):
     t = totals(rows)
-    return t["CAPEX"] / (t["OPEX"] + t["RENT"])
+    return t["CAPEX"] / (t["OTHER_OPEX"] + t["RENT"])
 
 
 @metric("sources_cover")  # (выручка + финансирование) / (OpEx + CapEx)
 def _(rows, f):
     t = totals(rows)
-    return (revenue(rows) + inflow(rows, "FINANCING")) / (t["OPEX"] + t["CAPEX"])
+    return (revenue(rows) + inflow(rows, "FINANCING")) / (t["OTHER_OPEX"] + t["CAPEX"])
 
 
 @metric("springing_leverage")  # поступления по финансированию / EBITDA
