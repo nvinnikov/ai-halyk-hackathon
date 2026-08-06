@@ -132,6 +132,9 @@ def route_doc(
                 alarms.append({"kind": "meta_extraction_failed", "file": pdf_path.name})
         return {
             "file": pdf_path.name,
+            # Дубль хеша из имени артефакта: базовые имена во вложенных
+            # каталогах могут коллидировать, потребители адресуются хешем.
+            "doc_hash": doc_hash(pdf_path),
             "account_id": account,
             "doc_type": meta["doc_type"],
             "date": meta["date"],
