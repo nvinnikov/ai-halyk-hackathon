@@ -2,16 +2,25 @@
 
 Решение кейса: из банковского леджера за 2025 год и PDF-документов заёмщиков
 считаются финансовые ковенанты (пункты 6.1 / 6.2 / 6.3) по каждому сценарию.
-Результат — `solution/submission.json`.
+Результат — `out/submission.json`.
 
 Текущий результат на публичном наборе: **34.00 / 36.00 (94.4%)**.
 
 ## Быстрый старт
 
 ```bash
-make solve     # посчитать ответ и вывести скор против ground_truth
-make check     # локальный CI-гейт: lint + typecheck + tests
+make public-archive                   # собрать публичный архив (в git не хранится)
+./run.sh 6a741640c31eb032062683.zip   # единственная точка входа: архив → out/submission.json
+make solve                            # то же самое через make (ARCHIVE=... переопределяет архив)
+make check                            # локальный CI-гейт: lint + typecheck + tests
 ```
+
+Вход пайплайна — zip-архив датасета, а `*.zip` в `.gitignore`, поэтому на свежем
+клоне публичный архив надо собрать: `make public-archive` пакует
+`dataset/agentic-bank-public/` в `6a741640c31eb032062683.zip`. Тем же кодом
+(`tools/public_archive.py`) пользуются CI и `tests/conftest.py` — иначе байты
+архива, а с ними и `dataset_hash`, разошлись бы. На боевом прогоне архив
+приходит аргументом и уже существует.
 
 Окружение поднимает [uv](https://docs.astral.sh/uv/) из `uv.lock`, Python пинится
 `.python-version`. Все скрипты рассчитаны на запуск **из корня репозитория** —
@@ -28,7 +37,8 @@ make check     # локальный CI-гейт: lint + typecheck + tests
 | `solution/categorize.py` | Категоризация транзакций по назначению платежа. |
 | `solution/engine.py` | Загрузка и нормализация леджера, агрегаты (выручка, расходы по категориям, платежи связанным сторонам). |
 | `solution/covenants.py` | Формулы ковенантов и их пороги по заёмщикам. |
-| `solution/solve.py` | Сборка `submission.json` + скоринг против `ground_truth.json`. |
+| `solution/solve.py` | Harness: скелет-первым `out/submission.json`, fail-open на ячейку, трейс в `work/<hash>/trace/`. |
+| `tools/public_archive.py` | Сборка публичного архива датасета — общий код для `make public-archive`, CI и `tests/conftest.py`. |
 | `docs/superpowers/specs/` | Проектная спека пайплайна. |
 
 ## Команды
@@ -36,8 +46,9 @@ make check     # локальный CI-гейт: lint + typecheck + tests
 | Команда | Что делает |
 | --- | --- |
 | `make install` | `uv sync --extra dev` |
+| `make public-archive` | Собрать `6a741640c31eb032062683.zip` из `dataset/agentic-bank-public/` |
 | `make extract` | Пересобрать кэш текста PDF |
-| `make solve` | Прогнать решение, записать `submission.json`, напечатать скор |
+| `make solve` | Прогнать решение (`./run.sh`), записать `out/submission.json`, напечатать скор |
 | `make lint` | `ruff format --check` + `ruff check` |
 | `make typecheck` | `mypy` |
 | `make test` | `pytest` |
@@ -46,7 +57,7 @@ make check     # локальный CI-гейт: lint + typecheck + tests
 ## CI
 
 - **`.github/workflows/ci.yml`** — на push и PR в `master`: lint, typecheck,
-  тесты и end-to-end прогон `solution/solve.py`, плюс сканирование секретов
+  тесты и end-to-end прогон `./run.sh`, плюс сканирование секретов
   (gitleaks, конфиг в `.gitleaks.toml`).
 - **`.github/workflows/claude-review.yml`** — автоматический review PR. Требует
   секрет репозитория `CLAUDE_CODE_OAUTH_TOKEN`; без него джоба скипается.

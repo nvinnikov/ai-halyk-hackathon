@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Решение кейса Agentic Bank (Halyk AI Challenge). Из леджера за 2025 год
 (`master_ledger_2025.csv`) и PDF-документов заёмщиков считаются финансовые
-ковенанты (пункты 6.1 / 6.2 / 6.3 по каждому сценарию), результат — `solution/submission.json`.
+ковенанты (пункты 6.1 / 6.2 / 6.3 по каждому сценарию), результат — `out/submission.json`.
 
 Приватный датасет открывается 9 августа 2026 в 11:00 (Астана), дедлайн 14:00 —
 окно 3 часа. Отсюда все решения в коде: воспроизводимость, fail-open, отсутствие
@@ -20,13 +20,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Команды
 
 ```bash
-make solve      # прогон: пишет solution/submission.json + печатает поячеечный скор
+./run.sh <архив.zip>   # единственная точка входа: архив → out/submission.json
+make solve      # то же через make (ARCHIVE=... переопределяет архив)
 make check      # локальное зеркало CI: lint + typecheck + test
 make extract    # пересобрать кэш текста PDF (solution/docs_text.json, в git не хранится)
 make install    # uv sync --extra dev
 ```
 
-Один тест: `uv run pytest tests/test_solution.py::test_solve_is_deterministic`.
+Один тест: `uv run pytest tests/test_solution.py::test_deterministic`.
 
 **Всё запускается из корня репозитория** — пути к датасету относительные
 (`dataset/agentic-bank-public/...`). Окружение — `uv` из `uv.lock`, Python пинится
@@ -53,8 +54,14 @@ make install    # uv sync --extra dev
 - **`covenants.py`** — `M` (реестр метрик через декоратор `@metric`), `SPECS`
   (`сценарий → пункт → (метрика, направление, порог[, опции])`) и `DRIVERS`
   (строки, формирующие ограничиваемую величину — нужны для поиска улики).
-- **`solve.py`** — harness: `evaluate` считает вердикт, `find_evidence` ищет улику,
-  `score` печатает сверку с `ground_truth.json`.
+- **`solve.py`** — harness: `main(archive)` печатает `dataset_hash` первой строкой,
+  кладёт на диск скелет submission из приора (`eval/prior.json`) сразу после чтения
+  шаблона и перезаписывает его по одной посчитанной ячейке — на любой секунде
+  прогона `out/submission.json` валиден. Сбой ячейки или загрузки сценария
+  fail-open: печатается `ALARM`, ячейка остаётся фолбэком, прогон продолжается.
+  Каждая ячейка пишет трейс `work/<hash>/trace/<сценарий>.<пункт>.json`
+  (разбирать имя как `stem.split(".", 1)`). Вычислительное ядро — `solve_cell`,
+  точка подмены для фаз 1–2; `score` печатает сверку с `ground_truth.json`.
 - **`dossier.py`** — детерминированная маршрутизация документов (тип, `ACC-\d+`,
   отсев недействующих редакций). Пока не подключён к расчёту; работает по кэшу
   `docs_text.json` от `extract.py`.
@@ -78,8 +85,9 @@ make install    # uv sync --extra dev
 - `dataset/agentic-bank-public/` — пакет от организаторов, **не редактируется**.
 - Регрессионный порог скора — `BASELINE` в `tests/test_solution.py`. Улучшили
   решение — поднимите порог тем же коммитом, иначе откат назад не поймается.
-- Форма ответа сверяется с `submission_template.json`; `solve()` должен быть
-  детерминирован (тест `test_solve_is_deterministic`).
+- Форма ответа сверяется с `submission_template.json` (инвариант проверяется в
+  `dump_submission` перед каждой записью); `main()` должен быть детерминирован
+  (тест `test_deterministic`).
 - Известные грабли, зафиксированные в спеке: `round()` — банковское округление
   (для `actual` нужен `Decimal.quantize(ROUND_HALF_UP)`); итерация по `set` и
   суммирование `float` в порядке словаря ломают воспроизводимость — сортировать

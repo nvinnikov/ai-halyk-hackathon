@@ -42,14 +42,19 @@ jobs:
         with:
           version: "0.11.26"
       - run: uv sync --extra dev --frozen
+      # Архив задания в git не хранится (*.zip в .gitignore), а вход пайплайна —
+      # именно архив. Собираем тем же кодом, что `make public-archive` и
+      # tests/conftest.py: другая упаковка дала бы другой dataset_hash.
+      - name: Собрать архив датасета
+        run: uv run python tools/public_archive.py
       # Регрессия по публичному набору: скор не ниже baseline, форма ответа
       # совпадает с submission_template.json, повторный прогон даёт то же самое.
       - name: pytest (регрессия скора + форма submission)
         run: uv run pytest
-      # Отдельно гоняем сам скрипт: тест дёргает solve() как функцию, а здесь
-      # проверяется путь `python solution/solve.py` — тот, которым сдаётся ответ.
-      - name: solve.py end-to-end
-        run: uv run python solution/solve.py
+      # Отдельно гоняем сам скрипт: тест дёргает main() как функцию, а здесь
+      # проверяется путь `./run.sh <архив>` — тот, которым сдаётся ответ.
+      - name: run.sh end-to-end
+        run: ./run.sh 6a741640c31eb032062683.zip
 
   secret-scan:
     name: Secret scan
