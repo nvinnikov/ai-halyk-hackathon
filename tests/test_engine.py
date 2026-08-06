@@ -127,6 +127,38 @@ def test_prepare_rows_facts_and_overrides():
     assert "T-3" not in {r["txn_id"] for r in dropped}
 
 
+def test_prepare_rows_conflicting_reclass_prefers_specific_category_over_other():
+    # Два документа реклассифицировали одну и ту же операцию по-разному: один
+    # даёт содержательную категорию (INTEREST), второй — «сумма отобрана для
+    # проверки, вывод — в другом отчёте» с вынужденным OTHER (схема требует
+    # to_category всегда, даже когда документ не называет реальную категорию).
+    # OTHER — корзина неизвестного (taxonomy.py): решение, реклассифицирующее
+    # В OTHER, не должно молча забивать содержательное решение по одной и той
+    # же операции только потому, что оказалось позже в списке фактов.
+    raw = [row("T-1", "CONSULTING", "-10", cp="Irtysh Advisory Bureau")]
+    facts = {
+        "reclass": [
+            {"txn": None, "counterparty": "Irtysh Advisory Bureau", "to": "INTEREST"},
+            {"txn": None, "counterparty": "Irtysh Advisory Bureau", "to": "OTHER"},
+        ]
+    }
+    assert prepare_rows(raw, facts)[0]["cat"] == "INTEREST"
+    # Порядок документов не должен решать: тот же результат в обратном порядке.
+    facts_rev = {"reclass": list(reversed(facts["reclass"]))}
+    assert prepare_rows(raw, facts_rev)[0]["cat"] == "INTEREST"
+
+
+def test_prepare_rows_conflicting_reclass_prefers_txn_match_over_counterparty():
+    # Более специфичное решение (конкретная операция) важнее решения по
+    # контрагенту, которое зацепило бы все его операции без разбора — вне
+    # зависимости от порядка следования решений в списке фактов.
+    raw = [row("T-1", "CONSULTING", "-10", cp="Irtysh Advisory Bureau")]
+    by_cp = {"txn": None, "counterparty": "Irtysh Advisory Bureau", "to": "OTHER_OPEX"}
+    by_txn = {"txn": "T-1", "counterparty": None, "to": "INTEREST"}
+    assert prepare_rows(raw, {"reclass": [by_cp, by_txn]})[0]["cat"] == "INTEREST"
+    assert prepare_rows(raw, {"reclass": [by_txn, by_cp]})[0]["cat"] == "INTEREST"
+
+
 def test_prepare_rows_reclass_needs_nonempty_tokens():
     """Реклассификация, заданная одной юрформой, не должна накрыть весь леджер."""
     raw = [row("T-1", "CAPEX", "-10", cp="LLP")]

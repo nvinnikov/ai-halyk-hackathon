@@ -69,15 +69,26 @@ def prepare_rows(raw_rows: list[dict], facts: dict, overrides: dict | None = Non
             rec["amt"] = Decimal(str(override))
         if rec["amt"] is None:
             continue  # сумма не восстановлена — строка непригодна
+        matches = []
         for i, rc in enumerate(facts.get("reclass", [])):
             if i in ov.get("undo_reclass", set()):
                 continue
             # Совпадение контрагента — по непустым токенам: реклассификация,
             # заданная одной юрформой, иначе накрыла бы все безымянные строки.
+            is_txn_match = rc.get("txn") is not None and rc["txn"] == rec["txn_id"]
             rct = tokens(rc["counterparty"]) if rc.get("counterparty") else frozenset()
-            hit = rc.get("txn") == rec["txn_id"] or (rct and rct == tokens(rec["counterparty"]))
-            if hit:
-                rec["cat"] = rc["to"]
+            is_cp_match = bool(rct) and rct == tokens(rec["counterparty"])
+            if is_txn_match or is_cp_match:
+                matches.append((i, rc, is_txn_match))
+        if matches:
+            # Несколько документов могут переклассифицировать одну и ту же
+            # операцию по-разному — побеждает не последний по списку, а самый
+            # специфичный (конкретный txn важнее совпадения по контрагенту);
+            # при равной специфичности — содержательная категория важнее
+            # OTHER (корзина неизвестного, а не реальное решение документа);
+            # финальный тай-брейк — по индексу, для детерминизма.
+            _, winner, _ = min(matches, key=lambda m: (not m[2], m[1]["to"] == "OTHER", m[0]))
+            rec["cat"] = winner["to"]
         out.append(rec)
     return out
 
