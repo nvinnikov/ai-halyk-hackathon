@@ -936,13 +936,18 @@ git commit -m "feat: замер восстановления по трём пе�
 
 - [ ] `make check` зелёный, `test_score_not_below_baseline` — 34.00 без изменений
 
-- [ ] Греп-гейт вручную: словарь замен и описания из леджера не протекли в `solution/`
+- [ ] Греп-гейт вручную: словарь замен не протёк в `solution/`
+
+Гейт ищет **новые** формулировки из словаря замен, а не исходные триггеры. Исходные
+(`sales settlement`, `facility drawdown`, `retainer fee`) — это и есть тело правил
+`solution/categorize.py`, они там законны; греп по ним даёт гарантированное ложное
+срабатывание.
 
 ```bash
-grep -rniE "sales settlement|facility drawdown|sewer discharge|retainer|revenue recognised" solution/ && echo "ПРОТЕЧКА" || echo "чисто"
+grep -rniE --include='*.py' "revenue recognised on customer contracts|credit line disbursement|capital acquisition of|consulting mandate for|executive consulting|upkeep and running costs|desilting" solution/ && echo "ПРОТЕЧКА" || echo "чисто"
 ```
 
-Expected: `чисто` — все данные набора живут в `eval/` и `tests/`
+Expected: `чисто` — словарь замен и мутированные описания живут только в `eval/` и `tests/`
 
 - [ ] Публичный архив пересобирается байт в байт после правки `tools/public_archive.py` (Task 3, Step 3)
 - [ ] В `docs/superpowers/specs/2026-08-06-categorization-holdout-design.md` не осталось пунктов без задачи
