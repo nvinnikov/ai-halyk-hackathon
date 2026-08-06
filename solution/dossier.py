@@ -5,6 +5,15 @@
 каталогах приватного архива могут коллидировать. Маршрутизация независима по
 файлам и идёт пулом потоков (SOLVE_WORKERS, дефолт 4) — ограничитель здесь
 rate limit LLM; результаты собираются в детерминированном порядке.
+
+Fail-open на двух уровнях (задача 24, ревью раунда 1): сбой чтения/
+маршрутизации одного документа (LLM, vision на слепой странице, битый PDF) не
+роняет весь пул — документ уходит в карантин с алярмом routing_failed;
+сбой сборки досье одного заёмщика (например, vision внутри full_text при
+подстановке активных документов) не роняет остальных заёмщиков — его досье
+приходит пустым с алярмом dossier_build_failed. Раньше оба сбоя всплывали как
+исключение из build_dossiers() целиком и убивали solve.main() до записи
+скелета.
 """
 
 import os
@@ -15,7 +24,7 @@ from pdftext import doc_hash
 from route import full_text, route_doc
 from stages import artifact
 
-DOSSIER_VERSION = 2
+DOSSIER_VERSION = 3
 _EDITION_RANK = {"final": 0, "unmarked": 1, "draft": 2, "superseded": 3}
 # Редакционная фильтрация — только для перевыпускаемых целиком типов. Отчёты
 # и записки кумулятивны: каждый несёт своё документальное решение, и отброс
@@ -50,6 +59,35 @@ def _pick_active(docs: list[dict]) -> tuple[dict | None, list[dict]]:
     return active, rejected
 
 
+def _route_or_quarantine(wd: Path, p: Path, targets: list[str], all_accounts: list[str] | None) -> dict:
+    """route_doc ловит SchemaRejected вокруг своих LLM-вызовов, но не бюджет
+    (llm.BudgetExhausted), не сетевые/авторизационные сбои и не vision внутри
+    full_text() при чтении слепой страницы. Сбой одного документа не должен
+    ронять список результатов для всех остальных — документ уходит в карантин
+    с алярмом routing_failed вместо исключения из pool.map()."""
+    try:
+        return route_doc(wd, p, targets, all_accounts)
+    except Exception as exc:
+        try:
+            h = doc_hash(p)
+        except Exception:
+            h = ""
+        return {
+            "file": p.name,
+            "doc_hash": h,
+            "account_id": None,
+            "doc_type": "unrouted",
+            "date": "",
+            "edition": "unmarked",
+            "mentions": [],
+            "mentions_nontarget": [],
+            "quarantined": True,
+            "quarantine_reason": "routing_failed",
+            "alarms": [{"kind": "routing_failed", "file": p.name, "error": repr(exc)}],
+            "routing_quote": "",
+        }
+
+
 def build_dossiers(
     wd: Path, pdfs: list[Path], index: dict, all_accounts: list[str] | None = None
 ) -> dict[str, dict]:
@@ -59,7 +97,7 @@ def build_dossiers(
     ordered = sorted(pdfs, key=lambda x: (x.name, str(x)))
     workers = int(os.environ.get("SOLVE_WORKERS", "4"))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        results = list(pool.map(lambda p: route_doc(wd, p, targets, all_accounts), ordered))
+        results = list(pool.map(lambda p: _route_or_quarantine(wd, p, targets, all_accounts), ordered))
     routed = [r for r in results if not r["quarantined"]]
     quarantined = [r for r in results if r["quarantined"]]
     by_hash = {doc_hash(p): p for p in ordered}
@@ -68,41 +106,55 @@ def build_dossiers(
     for acc in targets:
 
         def build(acc=acc) -> dict:
-            mine = [r for r in routed if r["account_id"] == acc]
-            docs, docs_rejected = [], []
-            by_type: dict[str, list[dict]] = {}
-            for r in mine:
-                by_type.setdefault(r["doc_type"], []).append(r)
-            for dtype in sorted(by_type):
-                rej: list[dict] = []
-                if dtype in CUMULATIVE_TYPES:
-                    # Кумулятивные типы: в досье попадают все документы, их
-                    # факты сливает facts_extract.
-                    actives = sorted(by_type[dtype], key=lambda d: (d["date"], d["file"]))
-                else:
-                    active, rej = _pick_active(by_type[dtype])
-                    actives = [active] if active is not None else []
-                for active in actives:
-                    docs.append(
-                        {
-                            "file": active["file"],
-                            "doc_type": dtype,
-                            "date": active["date"],
-                            "text": full_text(wd, by_hash[active["doc_hash"]]),
-                        }
-                    )
-                docs_rejected.extend(rej)
-            return {
-                "account_id": acc,
-                "scenario_id": index["account_to_scenario"][acc],
-                "docs": docs,
-                # Причины отказов и карантина потребляет borrower-трейс (задача 17).
-                "docs_rejected": docs_rejected,
-                "quarantined": [
-                    {"file": q["file"], "reason": q.get("quarantine_reason")}
-                    for q in sorted(quarantined, key=lambda x: x["file"])
-                ],
-            }
+            try:
+                mine = [r for r in routed if r["account_id"] == acc]
+                docs, docs_rejected = [], []
+                by_type: dict[str, list[dict]] = {}
+                for r in mine:
+                    by_type.setdefault(r["doc_type"], []).append(r)
+                for dtype in sorted(by_type):
+                    rej: list[dict] = []
+                    if dtype in CUMULATIVE_TYPES:
+                        # Кумулятивные типы: в досье попадают все документы, их
+                        # факты сливает facts_extract.
+                        actives = sorted(by_type[dtype], key=lambda d: (d["date"], d["file"]))
+                    else:
+                        active, rej = _pick_active(by_type[dtype])
+                        actives = [active] if active is not None else []
+                    for active in actives:
+                        docs.append(
+                            {
+                                "file": active["file"],
+                                "doc_type": dtype,
+                                "date": active["date"],
+                                "text": full_text(wd, by_hash[active["doc_hash"]]),
+                            }
+                        )
+                    docs_rejected.extend(rej)
+                return {
+                    "account_id": acc,
+                    "scenario_id": index["account_to_scenario"][acc],
+                    "docs": docs,
+                    # Причины отказов и карантина потребляет borrower-трейс (задача 17).
+                    "docs_rejected": docs_rejected,
+                    "quarantined": [
+                        {"file": q["file"], "reason": q.get("quarantine_reason")}
+                        for q in sorted(quarantined, key=lambda x: x["file"])
+                    ],
+                }
+            except Exception as exc:
+                # Сбой чтения текста документа (например, vision на слепой
+                # странице) для этого заёмщика не должен рушить досье
+                # остальных: заёмщик остаётся без документов, но с алярмом,
+                # а не обрывает build_dossiers целиком.
+                return {
+                    "account_id": acc,
+                    "scenario_id": index["account_to_scenario"][acc],
+                    "docs": [],
+                    "docs_rejected": [],
+                    "quarantined": [],
+                    "alarms": [{"kind": "dossier_build_failed", "account": acc, "error": repr(exc)}],
+                }
 
         out[acc] = artifact(wd / "dossier" / f"{acc}.json", DOSSIER_VERSION, build)
     return out

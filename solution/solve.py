@@ -255,11 +255,27 @@ def _extracted_inputs(
     BudgetExhausted это тоже Exception) не имеет права остановить прогон до
     записи уже посчитанных ячеек: заёмщик получает пустые факты и алярм
     extraction_failed, его ячейки уходят по лестнице run_cell, остальные
-    заёмщики считаются как обычно."""
-    pdfs = find_inputs(input_dir)["pdfs"]
-    dossiers = build_dossiers(wd, pdfs, index)
+    заёмщики считаются как обычно.
+
+    build_dossiers сама по себе fail-open по документу и по заёмщику (задача
+    24, ревью раунда 1), но защита не абсолютна (например find_inputs может
+    упасть до маршрутизации) — здесь дополнительный рубеж: полный отказ
+    построить досье не должен утащить прогон, все заёмщики уходят на пустые
+    факты вместо падения main() до записи скелета."""
     facts_by_sc: dict[str, dict] = {}
     specs_by_sc: dict[str, dict] = {}
+    try:
+        pdfs = find_inputs(input_dir)["pdfs"]
+        dossiers = build_dossiers(wd, pdfs, index)
+    except Exception as exc:
+        print(f"ALARM dossier_build_failed: {exc!r}", flush=True)
+        for sc in targets:
+            facts_by_sc[sc] = _with_doc_facts(facts_extract._empty_facts())
+            specs_by_sc[sc] = {
+                "clauses": {},
+                "alarms": [{"kind": "dossier_build_failed", "error": repr(exc)}],
+            }
+        return facts_by_sc, specs_by_sc
     for sc in targets:
         acc = index["scenario_to_account"].get(sc)
         if acc is None:
@@ -481,7 +497,15 @@ def main(archive: Path, facts_source: str = "extracted") -> dict:
     facts_by_sc: dict[str, dict] = {}
     specs_by_sc: dict[str, dict] = {}
     if facts_source == "extracted":
-        facts_by_sc, specs_by_sc = _extracted_inputs(wd, input_dir, index, targets)
+        try:
+            facts_by_sc, specs_by_sc = _extracted_inputs(wd, input_dir, index, targets)
+        except Exception as exc:  # fail-open последней инстанции: документный конвейер целиком
+            print(f"ALARM extracted_inputs_failed: {exc!r}", flush=True)
+            facts_by_sc = {sc: _with_doc_facts(facts_extract._empty_facts()) for sc in targets}
+            specs_by_sc = {
+                sc: {"clauses": {}, "alarms": [{"kind": "extracted_inputs_failed", "error": repr(exc)}]}
+                for sc in targets
+            }
 
     def _facts_for(scenario: str) -> dict:
         return facts_by_sc[scenario] if facts_source == "extracted" else _facts_of(scenario)
