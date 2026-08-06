@@ -24,7 +24,7 @@ from pdftext import doc_hash
 from route import full_text, route_doc
 from stages import artifact
 
-DOSSIER_VERSION = 3
+DOSSIER_VERSION = 4  # v4: TEXT_VERSION 2 снимает футер-номер страницы из full_text
 _EDITION_RANK = {"final": 0, "unmarked": 1, "draft": 2, "superseded": 3}
 # Редакционная фильтрация — только для перевыпускаемых целиком типов. Отчёты
 # и записки кумулятивны: каждый несёт своё документальное решение, и отброс

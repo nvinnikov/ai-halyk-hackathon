@@ -41,3 +41,14 @@ def test_artifact_reused(tmp_path):
     b = extract_pages(tmp_path, p)
     assert a["pages"] == b["pages"]
     assert (tmp_path / "text" / f"{doc_hash(p)}.json").exists()
+
+
+def test_page_footer_number_is_stripped(tmp_path):
+    # Футер PDF (голый номер страницы) иначе остаётся приклеенным к концу
+    # текста страницы; join страниц в route.full_text протаскивает его в
+    # середину предложения на странице, где договорное условие делится
+    # ровно по границе страницы — и цитата модели перестаёт совпадать с
+    # текстом (verify_quote падает на «лишней» цифре).
+    art = extract_pages(tmp_path, DOCS / "61dfc54675dc.pdf")
+    for p in art["pages"]:
+        assert not p["text"].endswith(f" {p['n']}"), (p["n"], p["text"][-20:])
