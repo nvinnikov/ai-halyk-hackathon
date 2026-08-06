@@ -24,6 +24,24 @@ def test_parse_literal_set_and_desc_filter():
     assert node.filters[1].s == "subsidiary"
 
 
+def test_parse_counterparty_in_quoted_set_name_equals_bare_keyword():
+    # Модель иногда путает две формы аргумента counterparty_in и кавычит имя
+    # известного множества вместо голого идентификатора: counterparty_in
+    # ('related_parties') вместо counterparty_in(related_parties). Строка,
+    # совпадающая с именем множества, — то же множество, а не буквальный
+    # контрагент с таким именем.
+    quoted = parse("agg(ALL, out, counterparty_in('related_parties'))")
+    bare = parse("agg(ALL, out, counterparty_in(related_parties))")
+    assert quoted == bare
+
+
+def test_parse_counterparty_in_quoted_single_name_is_singleton_list():
+    # Кавычка вокруг обычного имени — не опечатка формы множества, а список
+    # из одного контрагента.
+    node = parse("agg(ALL, out, counterparty_in('Acme LLP'))")
+    assert node.filters[0].setname == ("Acme LLP",)
+
+
 def test_parse_doc_const_cmp():
     assert parse("doc(severance_liability)").key == "severance_liability"
     assert parse("const(4000000)").value == Decimal("4000000")
