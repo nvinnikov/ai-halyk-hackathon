@@ -80,12 +80,11 @@ def categorize_batch(descriptions: list[str]) -> tuple[dict[str, str], list[dict
         # Вызов LLM с кэшем
         resp = llm.call(prompt, CAT_SCHEMA, SCHEMA_VERSION)
 
-        # Парсим ответ и валидируем
+        # Парсим ответ и валидируем категорию против таксономии
+        returned: dict[str, str] = {}
         for item in resp.get("categories", []):
             desc = item.get("description", "")
             cat = item.get("category", "")
-
-            # Валидация против таксономии
             if cat not in LEAVES:
                 alarms.append(
                     {
@@ -95,7 +94,17 @@ def categorize_batch(descriptions: list[str]) -> tuple[dict[str, str], list[dict
                     }
                 )
                 cat = "OTHER"
+            returned[desc] = cat
 
-            result[desc] = cat
+        # Round-trip: ответ сверяется с батчем. Пропущенное или переписанное
+        # моделью описание — алярм, а не молчаливый OTHER: тихий провал здесь —
+        # ровно то, ради чего ярус вводился.
+        for desc in batch:
+            if desc in returned:
+                result[desc] = returned.pop(desc)
+            else:
+                alarms.append({"kind": "category_missing", "description": desc})
+        for desc in sorted(returned):
+            alarms.append({"kind": "category_unmatched_description", "returned": desc})
 
     return result, alarms

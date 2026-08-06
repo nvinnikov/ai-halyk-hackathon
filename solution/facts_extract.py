@@ -207,6 +207,14 @@ def _merge_doc(facts: dict, raw: dict, doc: dict) -> None:
             facts["unrestricted_subsidiaries"].append(item["name"])
         facts["subsidiary_quotes"].setdefault(item["name"], item["quote"])
     for rc in raw["reclassifications"]:
+        if rc["to_category"] not in LEAVES:
+            # Выдуманная категория исчезла бы из всех агрегатов, минуя даже
+            # OTHER, — отчёт покрытия такой строки не увидит. Реклассификация
+            # отбрасывается, строка остаётся в исходной категории.
+            facts["alarms"].append(
+                {"kind": "invalid_reclass_category", "returned": rc["to_category"], "quote": rc["quote"]}
+            )
+            continue
         facts["reclass"].append(
             {
                 "txn": rc["txn_id"],

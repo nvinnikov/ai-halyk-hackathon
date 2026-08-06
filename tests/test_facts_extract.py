@@ -81,6 +81,26 @@ def test_addbacks_assembled_in_numeric_order(tmp_path, monkeypatch):
     assert facts["addback_materiality"] == "300000.00"
 
 
+def test_invalid_reclass_category_dropped_with_alarm(tmp_path, monkeypatch):
+    """Выдуманная категория не должна тихо выкидывать строку из всех агрегатов."""
+
+    def fake_call(prompt, schema, schema_version, **kw):
+        if "kyc text" in prompt:
+            return empty()
+        return {
+            **empty(),
+            "reclassifications": [
+                {"txn_id": "T-1", "counterparty": None, "to_category": "MADE_UP", "quote": "q"},
+                {"txn_id": "T-2", "counterparty": None, "to_category": "INTEREST", "quote": "q2"},
+            ],
+        }
+
+    monkeypatch.setattr(facts_extract.llm, "call", fake_call)
+    facts = facts_extract.extract_facts(tmp_path, DOSSIER)
+    assert [rc["txn"] for rc in facts["reclass"]] == ["T-2"]
+    assert any(a["kind"] == "invalid_reclass_category" for a in facts["alarms"])
+
+
 def test_conflicting_numeric_fact_alarms(tmp_path, monkeypatch):
     def fake_call(prompt, schema, schema_version, **kw):
         val = "1" if "kyc text" in prompt else "2"

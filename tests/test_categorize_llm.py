@@ -94,6 +94,27 @@ def test_categorize_batch_out_of_taxonomy_stays_other(monkeypatch):
     assert alarms[0]["returned"] == "UNKNOWN_CATEGORY"
 
 
+def test_categorize_batch_roundtrip_missing_and_rewritten(monkeypatch):
+    """Ответ сверяется с батчем: пропущенное описание — алярм category_missing,
+    переписанное моделью — category_unmatched_description, не молчаливый OTHER."""
+
+    def fake_call(prompt, schema, schema_version, document_b64=None, max_tokens=8000):
+        return {
+            "categories": [
+                {"description": "Electricity bills", "category": "UTILITIES"},
+                {"description": "Electricity bills (rewritten)", "category": "UTILITIES"},
+            ]
+        }
+
+    monkeypatch.setattr(llm, "call", fake_call)
+    mapping, alarms = categorize_batch(["Electricity bills", "Payroll advance"])
+    assert mapping == {"Electricity bills": "UTILITIES"}
+    kinds = sorted(a["kind"] for a in alarms)
+    assert kinds == ["category_missing", "category_unmatched_description"]
+    missing = next(a for a in alarms if a["kind"] == "category_missing")
+    assert missing["description"] == "Payroll advance"
+
+
 def test_categorize_batch_deterministic_sorting(monkeypatch):
     """Детерминизм: batching режет отсортированный список уникальных описаний."""
     batches = []

@@ -114,8 +114,12 @@ def check_trigger(node, ctx: Ctx) -> bool:
 
 def verdict(res: EvalResult, direction: str, limit: Decimal) -> tuple[str, list[str]]:
     alarms = sorted(res.flags)
-    if "negative_denominator" in res.flags and direction == "max":
+    if direction == "max" and res.flags & {"negative_denominator", "zero_denominator"}:
+        # Ноль в знаменателе — бесконечное отношение, а не нулевое: подставленный
+        # evaluate ноль дал бы ложный COMPLIANT при любом положительном пороге.
         return "BREACH", alarms
     if direction == "max":
         return ("BREACH" if res.value > limit else "COMPLIANT"), alarms
+    # Для min подставленный ноль ниже любого положительного порога — BREACH:
+    # неопределённая метрика трактуется как нарушение, не как соблюдение.
     return ("BREACH" if res.value < limit else "COMPLIANT"), alarms

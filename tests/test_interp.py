@@ -63,6 +63,15 @@ def test_ratio_zero_denominator_flagged():
     assert "zero_denominator" in res.flags
 
 
+def test_zero_denominator_max_is_breach():
+    # Бесконечное отношение не должно засчитываться как соблюдение потолка.
+    from interp import EvalResult
+
+    status, alarms = verdict(EvalResult(Decimal(0), frozenset({"zero_denominator"})), "max", Decimal("3.00"))
+    assert status == "BREACH"
+    assert "zero_denominator" in alarms
+
+
 def test_negative_denominator_max_is_breach():
     rows = [
         row("T-01", "REVENUE", "100"),
