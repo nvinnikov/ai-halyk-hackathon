@@ -136,20 +136,35 @@ def diff_facts(got: dict, want: dict) -> list[str]:
         if mismatches:
             out.append(f"ebitda_addbacks: {', '.join(mismatches)}")
 
-    # addback_materiality — точное сравнение (гардим, т.к. скаляр)
-    g_mat = got.get("addback_materiality")
-    w_mat = want.get("addback_materiality")
-    if g_mat is not None and w_mat is not None:
+    # addback_materiality — нормализация для дефолта "0" из _empty_facts
+    # Если want.ebitda_addbacks пусто/отсутствует, то got.addback_materiality может быть дефолтным "0"
+    # (не ошибка); если got содержит ненулевое значение без эталона addbacks — это галлюцинация.
+    w_has_addbacks = bool(want.get("ebitda_addbacks"))
+    if w_has_addbacks:
+        # Есть addbacks в want — проверяем materiality точно
+        g_mat = got.get("addback_materiality")
+        w_mat = want.get("addback_materiality")
+        if g_mat is not None and w_mat is not None:
+            try:
+                g_d = Decimal(str(g_mat))
+                w_d = Decimal(str(w_mat))
+                if g_d != w_d:
+                    out.append(f"addback_materiality: got {g_mat} != want {w_mat}")
+            except (ValueError, TypeError):
+                if g_mat != w_mat:
+                    out.append(f"addback_materiality: got {g_mat} != want {w_mat}")
+        elif (g_mat is None) != (w_mat is None):
+            out.append(f"addback_materiality: got {g_mat} != want {w_mat}")
+    else:
+        # Нет addbacks в want — materiality должен быть дефолтным (нулевым)
+        g_mat = got.get("addback_materiality", "0")
         try:
             g_d = Decimal(str(g_mat))
-            w_d = Decimal(str(w_mat))
-            if g_d != w_d:
-                out.append(f"addback_materiality: got {g_mat} != want {w_mat}")
+            if g_d != Decimal("0"):
+                out.append(f"addback_materiality: got {g_mat} != want 0 (no addbacks expected)")
         except (ValueError, TypeError):
-            if g_mat != w_mat:
-                out.append(f"addback_materiality: got {g_mat} != want {w_mat}")
-    elif (g_mat is None) != (w_mat is None):
-        out.append(f"addback_materiality: got {g_mat} != want {w_mat}")
+            if g_mat not in ("0", None, ""):
+                out.append(f"addback_materiality: got {g_mat} != want 0 (no addbacks expected)")
 
     # doc_facts.severance_liability — точное сравнение (гардим, т.к. скаляр)
     # Проверяем наличие severance_liability в want перед вычитанием

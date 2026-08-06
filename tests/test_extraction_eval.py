@@ -120,11 +120,12 @@ def test_diff_facts_ebitda_addbacks_multiset():
 
 
 def test_diff_facts_addback_materiality_exact():
-    want = {"addback_materiality": "300000.00"}
-    got = {"addback_materiality": "300000.00"}
+    # Materiality проверяется только если есть want.ebitda_addbacks
+    want = {"ebitda_addbacks": ["100.00", "200.00"], "addback_materiality": "300000.00"}
+    got = {"ebitda_addbacks": ["100.00", "200.00"], "addback_materiality": "300000.00"}
     assert diff_facts(got, want) == []
 
-    got_bad = {"addback_materiality": "300000.01"}
+    got_bad = {"ebitda_addbacks": ["100.00", "200.00"], "addback_materiality": "300000.01"}
     d = diff_facts(got_bad, want)
     assert any("addback_materiality" in x for x in d)
 
@@ -160,3 +161,30 @@ def test_diff_facts_hallucination_ebitda_addbacks():
     got = {"ebitda_addbacks": ["1000.00", "2000.00"]}
     d = diff_facts(got, want)
     assert any("ebitda_addbacks" in x for x in d)
+
+
+def test_diff_facts_addback_materiality_default_when_no_addbacks():
+    """Дефолт addback_materiality='0' допущен при отсутствии want.ebitda_addbacks."""
+    # Реальный сценарий: got из _empty_facts имеет "0", want не требует addbacks
+    want = {}  # Нет ключа ebitda_addbacks
+    got = {"addback_materiality": "0"}
+    assert diff_facts(got, want) == []
+
+
+def test_diff_facts_addback_materiality_hallucination_without_addbacks():
+    """Ненулевой materiality без эталонных addbacks — галлюцинация."""
+    want = {}  # Нет ebitda_addbacks
+    got = {"addback_materiality": "0.05"}
+    d = diff_facts(got, want)
+    assert any("addback_materiality" in x for x in d)
+
+
+def test_diff_facts_addback_materiality_with_addbacks():
+    """Materiality проверяется точно при наличии want.ebitda_addbacks."""
+    want = {"ebitda_addbacks": ["100.00"], "addback_materiality": "50000.00"}
+    got = {"ebitda_addbacks": ["100.00"], "addback_materiality": "50000.00"}
+    assert diff_facts(got, want) == []
+
+    got_bad = {"ebitda_addbacks": ["100.00"], "addback_materiality": "60000.00"}
+    d = diff_facts(got_bad, want)
+    assert any("addback_materiality" in x for x in d)
