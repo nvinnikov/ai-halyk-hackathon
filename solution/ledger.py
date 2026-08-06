@@ -43,18 +43,41 @@ def extract_archive(archive: Path) -> tuple[str, Path]:
 
 
 def find_inputs(input_dir: Path) -> dict:
-    """Файлы датасета ищутся, а не зашиваются именами (раздел 9)."""
+    """Файлы датасета ищутся, а не зашиваются именами (раздел 9).
+
+    Брифо требует ровно один CSV, но публичный набор содержит два CSV:
+    один в root (ledger), второй в documents/ (логи). Логика выбора:
+    (1) если ровно один CSV в root — берём его;
+    (2) если нет — фолбэк на rglob, исключив файлы в каталогах с PDF;
+    (3) иначе (несколько CSV любом уровне) — AssertionError.
+    """
     templates = sorted(input_dir.rglob("submission_template.json"))
     assert len(templates) == 1, f"шаблонов найдено {len(templates)}"
     root = templates[0].parent
-    # Ищем CSV файлы только в корневой папке, исключая подпапки
+    pdfs = sorted(root.rglob("*.pdf"))
+    pdf_dirs = {p.parent for p in pdfs}
+
+    # Попытка 1: CSV только в root
     csvs = sorted(root.glob("*.csv"))
-    assert len(csvs) >= 1, f"csv в корне найдено {len(csvs)}: {csvs}"
+    if len(csvs) == 1:
+        return {
+            "root": root,
+            "template": templates[0],
+            "ledger_csv": csvs[0],
+            "pdfs": pdfs,
+        }
+    if len(csvs) > 1:
+        raise AssertionError(f"в root найдено {len(csvs)} CSV: {csvs}")
+
+    # Попытка 2: фолбэк — rglob исключив каталоги с PDF
+    all_csvs = sorted(root.rglob("*.csv"))
+    csvs = [c for c in all_csvs if c.parent not in pdf_dirs]
+    assert len(csvs) == 1, f"найдено {len(csvs)} CSV вне pdf-каталогов: {csvs}; все CSV: {all_csvs}"
     return {
         "root": root,
         "template": templates[0],
         "ledger_csv": csvs[0],
-        "pdfs": sorted(root.rglob("*.pdf")),
+        "pdfs": pdfs,
     }
 
 
