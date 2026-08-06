@@ -5,10 +5,12 @@ import json
 import sys
 
 sys.path.insert(0, "solution")
-from covenants import DRIVERS, SPECS, M
+from covenants import DRIVERS, M
 from engine import inflow, load
 from engine import norm as norm_cp
-from facts import FACTS
+
+sys.path.insert(0, "eval")
+from expected_extraction import FACTS, SPECS
 
 
 def verdict(actual, direction, limit):

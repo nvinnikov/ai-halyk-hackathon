@@ -7,7 +7,9 @@ from collections import defaultdict
 
 sys.path.insert(0, "solution")
 from categorize import categorize
-from facts import FACTS
+
+sys.path.insert(0, "eval")
+from expected_extraction import FACTS
 
 LEDGER = "dataset/agentic-bank-public/master_ledger_2025.csv"
 

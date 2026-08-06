@@ -18,3 +18,7 @@ out/
 
 # macOS
 .DS_Store
+
+# Ключи API и рабочие артефакты пайплайна
+.env
+work/
