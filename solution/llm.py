@@ -26,7 +26,7 @@ import jsonschema
 
 from util import ROOT, stable_json
 
-MODEL = "claude-sonnet-5"
+MODEL = "claude-haiku-4-5-20251001"
 CACHE = ROOT / "work" / "llm_cache"
 CASSETTE = ROOT / "eval" / "cassette"
 # Суммарный потолок сетевых обращений на один call() — раздел 6 спеки.
