@@ -8,14 +8,15 @@ Submission пишется задом наперёд (раздел 6): снача
 файл вместо пустоты.
 
 Вычислительное ядро — лестница run_cell (5.7): спека в DSL → эвристика по
-цитате пункта → приор; null в actual не существует как состояние. Спеки и
-факты пока эталонные (мост legacy_spec_to_cellspec), задача 24 подменит их
-на извлечённые, не трогая harness.
-"""
+цитате пункта → приор; null в actual не существует как состояние. Источник
+спек и фактов задаёт facts_source: "expected" — эталон (мост
+legacy_spec_to_cellspec, регрессия/eval), "extracted" (дефолт, задача 24) —
+документный конвейер: досье → факты → спеки, LLM трогает только чтение,
+арифметика ковенанта — DSL и код."""
 
 import json
 import sys
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 sys.path.insert(0, "solution")
@@ -24,15 +25,19 @@ sys.path.insert(0, "eval")
 from expected_extraction import FACTS, SPECS
 
 import evidence
-from dsl import Agg, Ratio, parse, walk
+import facts_extract
+from dossier import build_dossiers
+from dsl import Agg, DslError, Ratio, parse, walk
 from engine import agg, prepare_rows, select_rows, sign_divergence
+from facts_extract import extract_facts, resolve_doc_fact
 from fallbacks import fallback_cell, family_of, heuristic_template
 from fx import coverage_alarms, to_usd
 from ledger import dirty_rows_of, extract_archive, find_inputs, load_ledger, rows_of
 from scindex import INDEX_VERSION, build_index
+from specs_extract import extract_specs
 from stages import artifact
 from taxonomy import coverage_report
-from templates import TEMPLATES
+from templates import TEMPLATES, match_heading
 from util import OUT, q2, stable_json, workdir
 
 SUBMISSION_META = {"team": "", "contact_email": "", "model": ""}
@@ -204,13 +209,15 @@ def run_cell(
     return cell, trace
 
 
-def _donor_rates(targets: list[str], scenario: str) -> list[dict]:
+def _donor_rates(targets: list[str], scenario: str, facts_of) -> list[dict]:
     """Донорская ступень лестницы: курсы всех прочих целевых заёмщиков.
 
-    Порядок доноров фиксирован, чтобы выбор не зависел от порядка сценариев
-    в шаблоне; окончательный тай-брейк — в fx.pick_rate."""
+    facts_of — функция сценарий → факты досье: expected-режим читает эталон
+    (_facts_of), extracted — уже посчитанный facts_by_sc.get. Порядок доноров
+    фиксирован, чтобы выбор не зависел от порядка сценариев в шаблоне;
+    окончательный тай-брейк — в fx.pick_rate."""
     return sorted(
-        (r for other in targets if other != scenario for r in _facts_of(other).get("fx_rates", [])),
+        (r for other in targets if other != scenario for r in facts_of(other).get("fx_rates", [])),
         key=lambda r: (r.get("doc_date") or "", r.get("doc_hash") or "", str(r.get("usd_per_unit"))),
     )
 
@@ -233,8 +240,117 @@ def scenario_inputs(archive: Path, scenario: str) -> tuple[list[dict], dict]:
     index = artifact(wd / "index.json", INDEX_VERSION, lambda: build_index(all_rows, targets))
     scenario_rows = all_rows + dirty_rows_of(ledger_art)
     facts = _facts_of(scenario)
-    raw, _rows, _alarms = load_rows(scenario, scenario_rows, index, facts, _donor_rates(targets, scenario))
+    raw, _rows, _alarms = load_rows(
+        scenario, scenario_rows, index, facts, _donor_rates(targets, scenario, _facts_of)
+    )
     return raw, facts
+
+
+def _extracted_inputs(
+    wd: Path, input_dir: Path, index: dict, targets: list[str]
+) -> tuple[dict[str, dict], dict[str, dict]]:
+    """Документный конвейер: досье → факты → спеки, всё артефактами.
+
+    Сбой на одном заёмщике (в том числе исчерпание LLM-бюджета — llm.
+    BudgetExhausted это тоже Exception) не имеет права остановить прогон до
+    записи уже посчитанных ячеек: заёмщик получает пустые факты и алярм
+    extraction_failed, его ячейки уходят по лестнице run_cell, остальные
+    заёмщики считаются как обычно."""
+    pdfs = find_inputs(input_dir)["pdfs"]
+    dossiers = build_dossiers(wd, pdfs, index)
+    facts_by_sc: dict[str, dict] = {}
+    specs_by_sc: dict[str, dict] = {}
+    for sc in targets:
+        acc = index["scenario_to_account"].get(sc)
+        if acc is None:
+            # индекс не связал сценарий со счётом: пустые факты, ячейки уйдут по лестнице
+            facts_by_sc[sc] = _with_doc_facts(facts_extract._empty_facts())
+            specs_by_sc[sc] = {"clauses": {}, "alarms": []}
+            continue
+        try:
+            facts = extract_facts(wd, dossiers[acc])
+            spec_art = extract_specs(wd, dossiers[acc], set(facts["doc_facts"]))
+            for _cl, sp in sorted(spec_art["clauses"].items()):
+                for key in sp.get("missing_doc_keys", []):
+                    resolved = resolve_doc_fact(wd, dossiers[acc], key, sp["quote"])
+                    if resolved is not None:
+                        facts["doc_facts"][key] = resolved["value"]
+                        facts["doc_fact_quotes"][key] = resolved["quote"]
+            # Перепроверка с пополненными doc_facts: extract_specs гоняет
+            # _check при каждом чтении (задача 23), повторного похода к
+            # модели не требует.
+            spec_art = extract_specs(wd, dossiers[acc], set(facts["doc_facts"]))
+            facts_by_sc[sc] = _with_doc_facts(facts)
+            specs_by_sc[sc] = spec_art
+        except Exception as exc:
+            print(f"ALARM extraction_failed {sc}: {exc!r}", flush=True)
+            facts_by_sc[sc] = _with_doc_facts(facts_extract._empty_facts())
+            specs_by_sc[sc] = {
+                "clauses": {},
+                "alarms": [{"kind": "extraction_failed", "scenario": sc, "error": repr(exc)}],
+            }
+    return facts_by_sc, specs_by_sc
+
+
+def _clause_suffix(clause: str) -> str:
+    return clause.rsplit(".", 1)[-1]
+
+
+def _match_clauses(target_clauses: list[str], extracted_keys: list[str]) -> tuple[dict[str, str], list[str]]:
+    """Сопоставление ячеек шаблона извлечённым номерам пунктов (правка 4).
+
+    Основной путь — точное совпадение номера пункта (ключи spec_art["clauses"]
+    уже нормализованы specs_extract). Если это не покрыло все ячейки, а число
+    ячеек шаблона равно числу извлечённых пунктов — доматчить оставшиеся по
+    числовому суффиксу (последний сегмент после точки: пункт из другого
+    раздела договора матчится ячейкой с тем же порядковым номером в подпункте).
+    Непокрытые ячейки возвращаются вторым элементом — алярм clause_unmatched,
+    ячейка уходит по лестнице."""
+    extracted_set = set(extracted_keys)
+    mapping: dict[str, str] = {t: t for t in target_clauses if t in extracted_set}
+    remaining = [t for t in target_clauses if t not in mapping]
+    if remaining and len(target_clauses) == len(extracted_keys):
+        by_suffix: dict[str, list[str]] = {}
+        for e in sorted(extracted_set - set(mapping.values())):
+            by_suffix.setdefault(_clause_suffix(e), []).append(e)
+        still: list[str] = []
+        for t in remaining:
+            candidates = by_suffix.get(_clause_suffix(t), [])
+            if len(candidates) == 1:
+                mapping[t] = candidates[0]
+                by_suffix[_clause_suffix(t)] = []
+            else:
+                still.append(t)
+        remaining = still
+    return mapping, remaining
+
+
+def _extracted_cellspec(sp: dict | None, clause: str) -> tuple[object, str]:
+    """Cellspec-или-ошибка + цитата пункта из извлечённой спеки (правка 3).
+
+    Матч реализации: сначала заголовок пункта (match_heading — основной
+    путь, 19 заголовков однозначно определяют метрику), при промахе —
+    DSL-сигнатура (sp["template"], её уже посчитал specs_extract), при
+    промахе — сырой DSL спеки. Невалидная/ненайденная спека → ошибка,
+    лестница run_cell подхватывает цитату для эвристики."""
+    if sp is None:
+        return LookupError(f"clause {clause} не найден в договоре"), ""
+    quote = sp.get("quote", "")
+    if not sp["valid"]:
+        return ValueError(f"невалидная спека: {sp['errors'] or sp['missing_doc_keys']}"), quote
+    try:
+        template = match_heading(sp["title_key"]) or sp["template"]
+        metric_text = TEMPLATES[template] if template else sp["metric"]
+        cellspec = {
+            "metric_ast": parse(metric_text),
+            "metric_text": metric_text,
+            "direction": sp["direction"],
+            "limit": Decimal(sp["limit"]),
+            "trigger_ast": parse(sp["trigger"]) if sp["trigger"] else None,
+        }
+        return cellspec, quote
+    except (DslError, InvalidOperation, KeyError) as exc:
+        return exc, quote
 
 
 # --- harness -----------------------------------------------------------------
@@ -261,12 +377,29 @@ def dump_submission(sub: dict, template_answers: dict) -> None:
     tmp.replace(OUT / "submission.json")
 
 
-def _spec_only_fallback(scenario: str, clause: str, computed: list, exc: Exception) -> tuple[dict, dict]:
-    """Сценарий не загрузился: строк нет, но спека известна — лестница
-    сохраняет прочитанные направление и порог вместо скелета."""
+def _spec_only_fallback(
+    scenario: str,
+    clause: str,
+    computed: list,
+    exc: Exception,
+    facts_source: str,
+    specs_by_sc: dict[str, dict] | None,
+    clause_map: dict[str, str],
+) -> tuple[dict, dict]:
+    """Сценарий не загрузился: строк нет, но спека может быть известна —
+    лестница сохраняет прочитанные направление и порог вместо скелета."""
     trace: dict = {"scenario": scenario, "clause": clause, "error": repr(exc)}
     try:
-        cs = legacy_spec_to_cellspec(SPECS[scenario][clause])
+        cs: dict
+        if facts_source == "extracted":
+            sp = specs_by_sc[scenario]["clauses"].get(clause_map.get(clause, clause)) if specs_by_sc else None
+            cs_or_error, _quote = _extracted_cellspec(sp, clause)
+            if isinstance(cs_or_error, Exception):
+                raise cs_or_error
+            assert isinstance(cs_or_error, dict)
+            cs = cs_or_error
+        else:
+            cs = legacy_spec_to_cellspec(SPECS[scenario][clause])
         cell, alarms = fallback_cell(
             cs["direction"], family_of(cs["metric_ast"], cs["limit"]), cs["limit"], computed, clause=clause
         )
@@ -312,8 +445,8 @@ def _write_trace(wd: Path, scenario: str, clause: str, payload: dict) -> None:
     (d / f"{scenario}.{clause}.json").write_text(stable_json(payload))
 
 
-def main(archive: Path, facts_source: str = "expected") -> dict:
-    assert facts_source == "expected", f"источник фактов {facts_source!r} появится в задаче 24"
+def main(archive: Path, facts_source: str = "extracted") -> dict:
+    assert facts_source in ("expected", "extracted"), f"неизвестный источник фактов {facts_source!r}"
     archive = Path(archive)
     ds_hash, input_dir = extract_archive(archive)
     print(f"dataset_hash: {ds_hash}", flush=True)
@@ -342,6 +475,17 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
     for alarm in index["alarms"]:
         print(f"ALARM {alarm}", flush=True)
 
+    # Документный конвейер — до цикла по заёмщикам: параллелизм LLM-вызовов
+    # живёт внутри него (build_dossiers, задача 21), сам цикл по ячейкам
+    # ниже — последовательный и детерминированный.
+    facts_by_sc: dict[str, dict] = {}
+    specs_by_sc: dict[str, dict] = {}
+    if facts_source == "extracted":
+        facts_by_sc, specs_by_sc = _extracted_inputs(wd, input_dir, index, targets)
+
+    def _facts_for(scenario: str) -> dict:
+        return facts_by_sc[scenario] if facts_source == "extracted" else _facts_of(scenario)
+
     # Диагностика 5.6: общее число непустых улик и доля на коэффициентных
     # метриках — резкий рост второй цифры значит, что D собрано слишком широко.
     emitted = ratio_emitted = 0
@@ -349,17 +493,26 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
     # лестницы для ячеек без прочитанного порога.
     computed: list[tuple[str, float]] = []
     for scenario in targets:
+        clause_map: dict[str, str] = {}
+        if facts_source == "extracted":
+            clause_map, unmatched = _match_clauses(
+                sorted(template["answers"][scenario]), sorted(specs_by_sc[scenario]["clauses"])
+            )
+            for clause in unmatched:
+                print(f"ALARM clause_unmatched {scenario} {clause}", flush=True)
         try:
             # Внутри try: даже единственная точка чтения фактов не имеет права
             # уронить цикл — сценарий уйдёт лестницей, остальные посчитаются.
-            facts = _facts_of(scenario)
+            facts = _facts_for(scenario)
             raw, rows, fx_alarms = load_rows(
-                scenario, scenario_rows, index, facts, _donor_rates(targets, scenario)
+                scenario, scenario_rows, index, facts, _donor_rates(targets, scenario, _facts_for)
             )
         except Exception as exc:  # fail-open: ячейки приходят лестницей без строк
             print(f"ALARM scenario_failed {scenario}: {exc!r}", flush=True)
             for clause in sorted(template["answers"][scenario]):
-                cell, trace = _spec_only_fallback(scenario, clause, computed, exc)
+                cell, trace = _spec_only_fallback(
+                    scenario, clause, computed, exc, facts_source, specs_by_sc, clause_map
+                )
                 answers[scenario][clause] = cell
                 try:
                     dump_submission(sub, template["answers"])
@@ -381,11 +534,16 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
             trace = {"scenario": scenario, "clause": clause}
             cell = answers[scenario][clause]  # скелет — фолбэк последней инстанции
             try:
+                quote = ""
                 try:
-                    cellspec_or_error: object = legacy_spec_to_cellspec(SPECS[scenario][clause])
+                    if facts_source == "extracted":
+                        sp = specs_by_sc[scenario]["clauses"].get(clause_map.get(clause, clause))
+                        cellspec_or_error, quote = _extracted_cellspec(sp, clause)
+                    else:
+                        cellspec_or_error = legacy_spec_to_cellspec(SPECS[scenario][clause])
                 except Exception as exc:
                     cellspec_or_error = exc
-                cell, trace = run_cell(scenario, clause, raw, facts, cellspec_or_error, computed)
+                cell, trace = run_cell(scenario, clause, raw, facts, cellspec_or_error, computed, quote=quote)
                 if trace.get("tier") != 0:
                     print(
                         f"ALARM cell_fallback {scenario} {clause}: tier={trace.get('tier')}",

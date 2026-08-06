@@ -18,7 +18,7 @@ from fallbacks import family_of
 from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
-from templates import match_signature
+from templates import match_signature, title_key
 
 SPECS_STAGE_VERSION = 1
 SCHEMA_VERSION = "specs-1"
@@ -28,7 +28,6 @@ SCHEMA_VERSION = "specs-1"
 _OUTLIER_FACTOR = Decimal(10)
 
 _CLAUSE_NUM = re.compile(r"\d+(?:\.\d+)*")
-_NON_WORD_OR_DIGIT = re.compile(r"[\d\W]+", re.UNICODE)
 
 SPECS_SCHEMA = {
     "type": "object",
@@ -111,18 +110,6 @@ def _normalize_clause(raw: str) -> tuple[str, bool]:
     return raw, False
 
 
-def _title_key(quote: str) -> str:
-    """Языконезависимый ключ заголовка пункта (план: матч по заголовку —
-    основной путь, 19 заголовков ↔ 19 метрик; сигнатурный DSL-матч — резерв).
-
-    Нижний регистр, без цифр и пунктуации, схлопнутые пробелы: номер пункта
-    и его дословная обвязка у разных заёмщиков разные, а формулировка
-    обязательства близка — цифры и пунктуация в ключе только мешали бы."""
-    norm = " ".join(quote.lower().split())
-    stripped = _NON_WORD_OR_DIGIT.sub(" ", norm)
-    return " ".join(stripped.split())
-
-
 def _strip_trailing_zeros(s: str) -> str:
     return s.rstrip("0").rstrip(".") if "." in s else s
 
@@ -154,7 +141,7 @@ def _check(sp: dict, fact_keys: set[str], agreement_text: str) -> tuple[dict, ob
         "template": None,
         "missing_doc_keys": [],
         "trigger_discarded": False,
-        "title_key": _title_key(sp["quote"]),
+        "title_key": title_key(sp["quote"]),
     }
     try:
         node = parse(sp["metric"])
