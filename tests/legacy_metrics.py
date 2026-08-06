@@ -1,10 +1,12 @@
-"""Формулы ковенантов по заёмщикам.
+"""Легаси-формулы ковенантов — эталон для парити-теста DSL (test_templates).
 
-Каждая функция возвращает фактическое значение показателя (положительное).
-Направление сравнения и порог заданы отдельно в SPECS.
+Из runtime-пути ушли в задаче 16: боевой расчёт — интерпретатор DSL по
+шаблонам. Каждая функция возвращает фактическое значение показателя
+(положительное); направление сравнения и порог заданы отдельно в SPECS.
 """
 
 import sys
+from decimal import Decimal
 
 sys.path.insert(0, "solution")
 from engine import inflow, norm, related_payments, revenue, totals
@@ -12,11 +14,11 @@ from engine import inflow, norm, related_payments, revenue, totals
 
 def ebitda(rows):
     t = totals(rows)
-    return revenue(rows) - t["OPEX"]
+    return revenue(rows) - t["OTHER_OPEX"]
 
 
 def related_total(rows, f):
-    return sum(-r["amt"] for r in related_payments(rows, f))
+    return sum((-r["amt"] for r in related_payments(rows, f)), Decimal(0))
 
 
 # --- показатели -------------------------------------------------------------
@@ -55,7 +57,7 @@ def _(rows, f):
 
 @metric("related_share_opex")
 def _(rows, f):
-    return related_total(rows, f) / totals(rows)["OPEX"]
+    return related_total(rows, f) / totals(rows)["OTHER_OPEX"]
 
 
 @metric("revenue")
@@ -76,13 +78,13 @@ def _(rows, f):
 @metric("capital_intensity")  # CapEx / (OpEx + аренда)
 def _(rows, f):
     t = totals(rows)
-    return t["CAPEX"] / (t["OPEX"] + t["RENT"])
+    return t["CAPEX"] / (t["OTHER_OPEX"] + t["RENT"])
 
 
 @metric("sources_cover")  # (выручка + финансирование) / (OpEx + CapEx)
 def _(rows, f):
     t = totals(rows)
-    return (revenue(rows) + inflow(rows, "FINANCING")) / (t["OPEX"] + t["CAPEX"])
+    return (revenue(rows) + inflow(rows, "FINANCING")) / (t["OTHER_OPEX"] + t["CAPEX"])
 
 
 @metric("springing_leverage")  # поступления по финансированию / EBITDA
@@ -92,7 +94,13 @@ def _(rows, f):
 
 @metric("adj_ebitda_margin")
 def _(rows, f):
-    addbacks = sum(a for a in f.get("ebitda_addbacks", []) if a >= f.get("addback_materiality", 0))
+    # Числовые факты досье приходят строками: Decimal + float — TypeError,
+    # а float в денежной сумме тянет двоичный шум в actual.
+    materiality = Decimal(str(f.get("addback_materiality", 0)))
+    addbacks = sum(
+        (a for a in (Decimal(str(x)) for x in f.get("ebitda_addbacks", [])) if a >= materiality),
+        Decimal(0),
+    )
     return (ebitda(rows) + addbacks) / revenue(rows)
 
 
@@ -109,7 +117,7 @@ def _(rows, f):
 
 @metric("staff_liabilities")  # оплата труда за период + обязательство по выходным пособиям
 def _(rows, f):
-    return totals(rows)["PAYROLL"] + f.get("severance_liability", 0.0)
+    return totals(rows)["PAYROLL"] + Decimal(str(f.get("severance_liability", 0)))
 
 
 @metric("revenue_cover_payroll_utilities")
@@ -122,12 +130,15 @@ def _(rows, f):
 def _(rows, f):
     subs = [norm(s) for s in f.get("unrestricted_subsidiaries", [])]
     moved = sum(
-        -r["amt"]
-        for r in rows
-        if r["cat"] == "CAPEX"
-        and r["amt"] < 0
-        and "subsidiary" in r["desc"].lower()
-        and any(s in norm(r["cp"]) or norm(r["cp"]) in s for s in subs)
+        (
+            -r["amt"]
+            for r in rows
+            if r["cat"] == "CAPEX"
+            and r["amt"] < 0
+            and "subsidiary" in r["description"].lower()
+            and any(s in norm(r["counterparty"]) or norm(r["counterparty"]) in s for s in subs)
+        ),
+        Decimal(0),
     )
     return moved / totals(rows)["CAPEX"]
 
@@ -142,29 +153,3 @@ def _(rows, f):
 def _(rows, f):
     t = totals(rows)
     return revenue(rows) - max(t["PAYROLL"], t["TAX"])
-
-
-# --- строки, формирующие ограничиваемую величину -----------------------------
-# Нужны для поиска улики: если ограничиваемый набор состоит ровно из одной
-# операции, именно она определяет вердикт.
-def _cat(cat):
-    return lambda rows, f: [r for r in rows if r["cat"] == cat and r["amt"] < 0]
-
-
-DRIVERS = {
-    "related_abs": lambda rows, f: related_payments(rows, f),
-    "related_share_revenue": lambda rows, f: related_payments(rows, f),
-    "related_share_opex": lambda rows, f: related_payments(rows, f),
-    "capex": _cat("CAPEX"),
-    "unrestricted_transfer_share": lambda rows, f: [
-        r
-        for r in rows
-        if r["cat"] == "CAPEX"
-        and r["amt"] < 0
-        and "subsidiary" in r["desc"].lower()
-        and any(
-            norm(s) in norm(r["cp"]) or norm(r["cp"]) in norm(s)
-            for s in f.get("unrestricted_subsidiaries", [])
-        )
-    ],
-}

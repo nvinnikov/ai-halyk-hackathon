@@ -1,69 +1,108 @@
-"""Маршрутизация документов по заёмщикам и извлечение значимых разделов.
+"""Сшивка досье: маршрутизированные документы группируются по целевым счетам,
+среди редакций одного типа остаётся действующая (5.2.1).
 
-Детерминированный слой: определяет тип документа, отбрасывает недействующие
-редакции и черновики, привязывает документ к account_id.
+Документы адресуются doc_hash, а не именем файла: базовые имена во вложенных
+каталогах приватного архива могут коллидировать. Маршрутизация независима по
+файлам и идёт пулом потоков (SOLVE_WORKERS, дефолт 4) — ограничитель здесь
+rate limit LLM; результаты собираются в детерминированном порядке.
 """
 
-import json
-import re
+import os
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
-STALE_MARKERS = (
-    "НЕДЕЙСТВУЮЩАЯ РЕДАКЦИЯ",
-    "Заменена и изложена",
-    "ПРОЕКТ — ПРОМЕЖУТОЧНАЯ",
-    "НЕ ЯВЛЯЕТСЯ ОКОНЧАТЕЛЬНОЙ",
-    "заменяется отчётом",
-    "полностью заменяется",
-)
+from pdftext import doc_hash
+from route import full_text, route_doc
+from stages import artifact
 
-
-def is_stale(text: str) -> bool:
-    return any(m in text for m in STALE_MARKERS)
-
-
-def doc_type(text: str) -> str:
-    if "ИСПОЛНИТЕЛЬНЫЙ ЭКЗЕМПЛЯР" in text and "ДОГОВОР БАНКОВСКОГО ЗАЙМА" in text:
-        return "agreement"
-    if "Отчёт о выполнении согласованных процедур" in text:
-        return "agreed_procedures"
-    if "Примечания к финансовой отчётности" in text:
-        return "audit_notes"
-    if "Досье «Знай своего клиента»" in text or "KYC" in text[:800]:
-        return "kyc"
-    if "казначейств" in text.lower() and "Служебная записка" in text:
-        return "treasury"
-    return "noise"
+DOSSIER_VERSION = 2
+_EDITION_RANK = {"final": 0, "unmarked": 1, "draft": 2, "superseded": 3}
+# Редакционная фильтрация — только для перевыпускаемых целиком типов. Отчёты
+# и записки кумулятивны: каждый несёт своё документальное решение, и отброс
+# по дате терял бы реклассификации и исправления сумм (правка по замеру).
+CUMULATIVE_TYPES = frozenset({"audit_report", "treasury_memo", "financial_notes"})
 
 
-def account_of(text: str) -> str | None:
-    m = re.search(r"ACC-\d+", text)
-    return m.group() if m else None
+def _neg_date(date: str) -> str:
+    d = date or "0000-00-00"
+    return "".join(chr(0xFFFF - ord(c)) for c in d)  # сортировка по убыванию даты
 
 
-def build(cache_path="solution/docs_text.json"):
-    docs = json.load(open(cache_path))
-    dossiers = {}
-    for name, text in docs.items():
-        kind = doc_type(text)
-        if kind == "noise":
-            continue
-        acc = account_of(text)
-        if acc is None:
-            continue
-        rec = {"file": name, "type": kind, "stale": is_stale(text), "text": text}
-        dossiers.setdefault(acc, []).append(rec)
-    return dossiers
+def _pick_active(docs: list[dict]) -> tuple[dict | None, list[dict]]:
+    """Маркер перебивает дату: сначала ранг редакции, затем дата по убыванию.
 
-
-if __name__ == "__main__":
-    d = build()
-    for acc in sorted(d):
-        live = [r for r in d[acc] if not r["stale"]]
-        dead = [r for r in d[acc] if r["stale"]]
-        print(
-            acc,
-            "|",
-            ", ".join(f"{r['type']}:{r['file'][:8]}" for r in live),
-            "|| отброшено:",
-            ", ".join(f"{r['type']}:{r['file'][:8]}" for r in dead),
+    Документ с маркером superseded не бывает действующим — даже единственный:
+    пометка «заменён» означает, что действующей редакции в досье нет."""
+    alive = [d for d in docs if d["edition"] != "superseded"]
+    dead = [d for d in docs if d["edition"] == "superseded"]
+    if not alive:
+        return None, [{"file": d["file"], "reason": "superseded_edition", "kept": None} for d in dead]
+    ranked = sorted(alive, key=lambda d: (_EDITION_RANK[d["edition"]], _neg_date(d["date"]), d["file"]))
+    active, rejected = ranked[0], []
+    for d in ranked[1:]:
+        reason = (
+            "edition_marker"
+            if _EDITION_RANK[d["edition"]] != _EDITION_RANK[active["edition"]]
+            else "superseded_by_date"
         )
+        rejected.append({"file": d["file"], "reason": reason, "kept": active["file"]})
+    rejected.extend({"file": d["file"], "reason": "superseded_edition", "kept": active["file"]} for d in dead)
+    return active, rejected
+
+
+def build_dossiers(
+    wd: Path, pdfs: list[Path], index: dict, all_accounts: list[str] | None = None
+) -> dict[str, dict]:
+    """all_accounts — все счета леджера: по ним route отличает фоновый документ
+    от документа без счетов вовсе (карантин без алярма против карантина с ним)."""
+    targets = sorted(index["account_to_scenario"])
+    ordered = sorted(pdfs, key=lambda x: (x.name, str(x)))
+    workers = int(os.environ.get("SOLVE_WORKERS", "4"))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(lambda p: route_doc(wd, p, targets, all_accounts), ordered))
+    routed = [r for r in results if not r["quarantined"]]
+    quarantined = [r for r in results if r["quarantined"]]
+    by_hash = {doc_hash(p): p for p in ordered}
+
+    out: dict[str, dict] = {}
+    for acc in targets:
+
+        def build(acc=acc) -> dict:
+            mine = [r for r in routed if r["account_id"] == acc]
+            docs, docs_rejected = [], []
+            by_type: dict[str, list[dict]] = {}
+            for r in mine:
+                by_type.setdefault(r["doc_type"], []).append(r)
+            for dtype in sorted(by_type):
+                rej: list[dict] = []
+                if dtype in CUMULATIVE_TYPES:
+                    # Кумулятивные типы: в досье попадают все документы, их
+                    # факты сливает facts_extract.
+                    actives = sorted(by_type[dtype], key=lambda d: (d["date"], d["file"]))
+                else:
+                    active, rej = _pick_active(by_type[dtype])
+                    actives = [active] if active is not None else []
+                for active in actives:
+                    docs.append(
+                        {
+                            "file": active["file"],
+                            "doc_type": dtype,
+                            "date": active["date"],
+                            "text": full_text(wd, by_hash[active["doc_hash"]]),
+                        }
+                    )
+                docs_rejected.extend(rej)
+            return {
+                "account_id": acc,
+                "scenario_id": index["account_to_scenario"][acc],
+                "docs": docs,
+                # Причины отказов и карантина потребляет borrower-трейс (задача 17).
+                "docs_rejected": docs_rejected,
+                "quarantined": [
+                    {"file": q["file"], "reason": q.get("quarantine_reason")}
+                    for q in sorted(quarantined, key=lambda x: x["file"])
+                ],
+            }
+
+        out[acc] = artifact(wd / "dossier" / f"{acc}.json", DOSSIER_VERSION, build)
+    return out

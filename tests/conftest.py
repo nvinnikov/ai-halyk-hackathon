@@ -12,10 +12,10 @@ sys.path.insert(0, str(ROOT / "solution"))
 sys.path.insert(0, str(ROOT / "eval"))
 sys.path.insert(0, str(ROOT / "tools"))
 
-from public_archive import DATASET, build_public_archive
+# Собрать архив датасета для CI, если его нет (в git он не хранится).
+# Сборка одна на всех потребителей: другой способ упаковки дал бы другие
+# байты, другой dataset_hash и другой каталог work/.
+from public_archive import build_public_archive
 
-# Архив датасета в git не хранится (*.zip в .gitignore) — на свежем клоне и в CI
-# собираем из закоммиченного датасета. Той же функцией, что `make public-archive`:
-# другая упаковка дала бы другие байты и другой dataset_hash.
-if DATASET.is_dir():
+if (ROOT / "dataset" / "agentic-bank-public").is_dir():
     build_public_archive()

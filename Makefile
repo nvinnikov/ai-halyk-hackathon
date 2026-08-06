@@ -1,6 +1,6 @@
 # Все цели идут через `uv run` ради воспроизводимого окружения из uv.lock.
 # `check` — локальное зеркало CI-гейта.
-.PHONY: install public-archive extract solve score lint typecheck test check
+.PHONY: install public-archive solve score lint typecheck test check
 
 install:
 	uv sync --extra dev
@@ -9,11 +9,6 @@ install:
 # работали без отдельного шага: сам по себе `uv run` ставит только основные
 # зависимости, а pytest/ruff/mypy живут в extra `dev`. Повторный sync —
 # быстрый no-op, и make выполнит его один раз за вызов.
-
-# Пересобирает кэш текста PDF (solution/docs_text.json, в git не хранится).
-# Нужен только для dossier.py при разборе документов; solve.py работает без него.
-extract: install
-	uv run python solution/extract.py
 
 # Публичный архив в git не хранится (*.zip в .gitignore), а вход пайплайна —
 # именно архив. Собирается из закоммиченного датасета тем же кодом, что зовут

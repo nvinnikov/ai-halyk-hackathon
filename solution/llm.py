@@ -26,7 +26,7 @@ import jsonschema
 
 from util import ROOT, stable_json
 
-MODEL = "claude-sonnet-5"
+MODEL = "claude-haiku-4-5-20251001"
 CACHE = ROOT / "work" / "llm_cache"
 CASSETTE = ROOT / "eval" / "cassette"
 # Суммарный потолок сетевых обращений на один call() — раздел 6 спеки.
@@ -125,10 +125,13 @@ def _request(blocks: list, schema: dict, max_tokens: int, delay: float, attempts
         attempt_no = MAX_ATTEMPTS - attempts_left
         attempts_left -= 1
         try:
+            # Поле thinking не передаётся: haiku-4-5 не принимает adaptive
+            # (400 «not supported on this model»), а модели 4.6+ при пропуске
+            # поля включают adaptive сами. Задача модели здесь — чтение и
+            # переписывание текста, thinking для неё не нужен.
             resp = _create(
                 model=MODEL,
                 max_tokens=max_tokens,
-                thinking={"type": "adaptive"},
                 messages=[{"role": "user", "content": blocks}],
                 tools=[
                     {

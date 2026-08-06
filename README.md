@@ -31,15 +31,15 @@ make check                            # локальный CI-гейт: lint + t
 | Путь | Что внутри |
 | --- | --- |
 | `dataset/agentic-bank-public/` | Пакет задания от организаторов: условие (`CASE.*.md`), леджер, 203 PDF, `ground_truth.json`, шаблон ответа. Не редактируется. |
-| `solution/extract.py` | Вытаскивает текст из всех PDF в кэш `solution/docs_text.json` (в git не хранится, пересобирается `make extract`). |
-| `solution/dossier.py` | Маршрутизация документов по заёмщикам, поиск значимых разделов, отсев устаревших версий. |
-| `solution/facts.py` | Факты, извлечённые из досье: реклассификации, связанные стороны, FX, отсечения периода. Вход для расчёта. |
-| `solution/categorize.py` | Категоризация транзакций по назначению платежа. |
-| `solution/engine.py` | Загрузка и нормализация леджера, агрегаты (выручка, расходы по категориям, платежи связанным сторонам). |
-| `solution/covenants.py` | Формулы ковенантов и их пороги по заёмщикам. |
+| `solution/ledger.py`, `fx.py`, `engine.py` | Распаковка архива, устойчивый разбор и категоризация леджера (`categorize*.py`), валютная нормализация, Decimal-агрегация. |
+| `solution/dsl.py`, `interp.py`, `templates.py` | Грамматика метрик, интерпретатор со знаковым вердиктом, библиотека шаблонов с сигнатурным матчем. |
+| `solution/evidence.py`, `fallbacks.py` | Улика откатом документального решения; лестница фолбэков (спека → эвристика → приор). |
+| `solution/pdftext.py`, `vision.py`, `route.py`, `dossier.py`, `facts_extract.py` | Документный слой: постраничный текст, vision по слепым страницам, маршрутизация, сшивка досье, факты с цитатами. |
+| `solution/guard.py`, `llm.py`, `stages.py` | Защита от prompt-injection и галлюцинаций цитат; LLM-клиент с content-addressed кэшем; идемпотентные стадии. |
 | `solution/solve.py` | Harness: скелет-первым `out/submission.json`, fail-open на ячейку, трейс в `work/<hash>/trace/`. |
+| `eval/` | Эталоны и метрики: `expected_extraction.py` (бывшие FACTS/SPECS), приор статусов, мутации. |
 | `tools/public_archive.py` | Сборка публичного архива датасета — общий код для `make public-archive`, CI и `tests/conftest.py`. |
-| `docs/superpowers/specs/` | Проектная спека пайплайна. |
+| `docs/superpowers/specs/`, `docs/superpowers/plans/` | Дизайн-спека и план реализации пайплайна. |
 
 ## Команды
 
@@ -47,7 +47,6 @@ make check                            # локальный CI-гейт: lint + t
 | --- | --- |
 | `make install` | `uv sync --extra dev` |
 | `make public-archive` | Собрать `6a741640c31eb032062683.zip` из `dataset/agentic-bank-public/` |
-| `make extract` | Пересобрать кэш текста PDF |
 | `make solve` | Прогнать решение (`./run.sh`), записать `out/submission.json`, напечатать скор |
 | `make lint` | `ruff format --check` + `ruff check` |
 | `make typecheck` | `mypy` |

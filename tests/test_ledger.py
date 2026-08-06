@@ -120,3 +120,36 @@ def test_find_inputs_error_multiple_csv_in_root(tmp_path, monkeypatch):
     ds_hash, input_dir = extract_archive(archive)
     with pytest.raises(AssertionError, match="в root найдено 2 CSV"):
         find_inputs(input_dir)
+
+
+def test_dirty_rows_get_second_tier(monkeypatch, tmp_path):
+    """Строка с грязной суммой, оживающая через amount_override, не должна
+    оставаться OTHER: второй ярус обязан видеть и dirty."""
+    import csv as _csv
+
+    import ledger as ledger_mod
+
+    root = tmp_path / "input"
+    root.mkdir()
+    (root / "submission_template.json").write_text('{"answers": {}}')
+    with open(root / "ledger.csv", "w", newline="") as fh:
+        w = _csv.DictWriter(
+            fh,
+            fieldnames=["txn_id", "date", "account_id", "counterparty", "description", "currency", "amount"],
+        )
+        w.writeheader()
+        w.writerow(
+            {
+                "txn_id": "TXN-S1-0001",
+                "date": "2025-01-01",
+                "account_id": "A-1",
+                "counterparty": "X",
+                "description": "Mystery payment",
+                "currency": "USD",
+                "amount": "n/a",
+            }
+        )
+    monkeypatch.setattr(ledger_mod, "categorize_batch", lambda descs: ({d: "CONSULTING" for d in descs}, []))
+    art = ledger_mod.load_ledger(tmp_path, root, target_scenarios=["S1"])
+    assert art["dirty"][0]["cat"] == "CONSULTING"
+    assert art["dirty"][0]["cat_tier"] == 2
