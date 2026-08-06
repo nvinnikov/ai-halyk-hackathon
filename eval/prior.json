@@ -20,6 +20,20 @@
    "COMPLIANT": 3
   }
  },
+ "by_clause": {
+  "6.1": {
+   "BREACH": 10,
+   "COMPLIANT": 2
+  },
+  "6.2": {
+   "BREACH": 2,
+   "COMPLIANT": 10
+  },
+  "6.3": {
+   "BREACH": 5,
+   "COMPLIANT": 7
+  }
+ },
  "global": {
   "BREACH": 17,
   "COMPLIANT": 19
