@@ -287,6 +287,12 @@ def test_run_invariants_wires_route_and_dossier(tmp_path, monkeypatch):
 # --- интеграция: run_invariants на реальном expected-прогоне ----------------
 
 
+def _snapshot_out(out_dir: Path) -> dict[str, bytes]:
+    if not out_dir.is_dir():
+        return {}
+    return {p.name: p.read_bytes() for p in sorted(out_dir.glob("*.json"))}
+
+
 @pytest.fixture(scope="module")
 def public_run():
     answers = solve.main(PUBLIC_ZIP, facts_source="expected")
@@ -299,6 +305,34 @@ def test_run_invariants_clean_on_public_expected(public_run):
     answers, wd = public_run
     fails = run_invariants(PUBLIC_ZIP, wd, answers, TEMPLATE["answers"])
     assert fails == [], fails
+
+
+def test_invariants_main_does_not_touch_real_out(monkeypatch):
+    """make eval-offline зовёт invariants.main — без изоляции solve.OUT его
+    прогон писал бы submission поверх боевого out/ (см. тот же приём снапшота
+    в tests/test_mutations.py). Здесь solve.main подменён: проверяется адрес
+    записи, а не расчёт."""
+    import invariants
+
+    seen_out: list[Path] = []
+
+    def fake_solve_main(archive_, **kw):
+        seen_out.append(solve.OUT)
+        solve.OUT.mkdir(parents=True, exist_ok=True)
+        (solve.OUT / "submission.json").write_text("{}")
+        return {}
+
+    monkeypatch.setattr(solve, "main", fake_solve_main)
+    monkeypatch.setattr(invariants, "run_invariants", lambda *a, **k: [])
+
+    real_out = Path("out")
+    before = _snapshot_out(real_out)
+
+    assert invariants.main(PUBLIC_ZIP) == 0
+
+    assert len(seen_out) == 1
+    assert seen_out[0].resolve() != real_out.resolve(), "solve.OUT указывал на боевой out/"
+    assert _snapshot_out(real_out) == before, "боевой out/ изменился — изоляция не сработала"
 
 
 # --- _collect_report_alarms: видимость отравленных facts/specs (задача 31) --

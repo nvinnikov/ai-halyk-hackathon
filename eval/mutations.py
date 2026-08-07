@@ -75,11 +75,12 @@ FX_RATE = Decimal("1.16")  # сколько USD за 1 EUR
 
 
 @contextmanager
-def _isolated_solve_out(archive: Path):
+def isolated_solve_out(archive: Path):
     """solve.OUT биндится по имени при импорте (`from util import OUT` в
-    solve.py), поэтому без подмены каждый сравнительный прогон mutations
-    писал бы submission.json/run-report.json поверх боевого out/ (тот же
-    приём изоляции, что в tests/test_faults.py). Каталог — подкаталог
+    solve.py), поэтому без подмены каждый прогон eval-скрипта писал бы
+    submission.json/run-report.json поверх боевого out/ (тот же приём
+    изоляции, что у фикстуры isolated_out в tests/conftest.py). Имя
+    публичное: контекстом пользуются и lobo.py, и invariants.py. Каталог — подкаталог
     work/<hash своего архива>, а не общий tmp: у baseline и мутации разные
     dataset_hash, они не должны затирать друг друга при последовательных
     вызовах."""
@@ -379,12 +380,12 @@ def main(archive: Path, which: str) -> bool:
     import solve
 
     archive = Path(archive)
-    with _isolated_solve_out(archive):
+    with isolated_solve_out(archive):
         baseline = solve.main(archive, facts_source="extracted")
 
     if which == "rename":
         mutated_archive = build_renamed(archive)
-        with _isolated_solve_out(mutated_archive):
+        with isolated_solve_out(mutated_archive):
             mutated = solve.main(mutated_archive, facts_source="extracted")
         mismatches = _diff_answers(baseline, mutated)
         if mismatches:
@@ -405,7 +406,7 @@ def main(archive: Path, which: str) -> bool:
         expected_status = predict_status(gt_actual, direction, new)
 
         mutated_archive = shift_threshold(archive, scenario, clause)
-        with _isolated_solve_out(mutated_archive):
+        with isolated_solve_out(mutated_archive):
             mutated = solve.main(mutated_archive, facts_source="extracted")
 
         mismatches = []
@@ -427,7 +428,7 @@ def main(archive: Path, which: str) -> bool:
 
     if which == "fx":
         mutated_archive = build_fx(archive)
-        with _isolated_solve_out(mutated_archive):
+        with isolated_solve_out(mutated_archive):
             mutated = solve.main(mutated_archive, facts_source="extracted")
         mismatches = _diff_answers(baseline, mutated)
         if mismatches:

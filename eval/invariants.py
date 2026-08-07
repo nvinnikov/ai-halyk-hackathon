@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, "solution")
 
-from mutations import _isolated_solve_out
+from mutations import isolated_solve_out
 
 import solve
 from dsl import Agg, walk
@@ -381,7 +381,7 @@ def main(archive, facts_source: str = "expected") -> int:
     archive = Path(archive)
     ds_hash, input_dir = solve.extract_archive(archive)
     wd = solve.workdir(ds_hash)
-    with _isolated_solve_out(archive):
+    with isolated_solve_out(archive):
         answers = solve.main(archive, facts_source=facts_source)
     template = json.loads(solve.find_inputs(input_dir)["template"].read_text())
 

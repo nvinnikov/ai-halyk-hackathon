@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, "solution")
 sys.path.insert(0, "eval")
 
-from mutations import _isolated_solve_out  # изоляция solve.OUT от боевого out/
+from mutations import isolated_solve_out  # изоляция solve.OUT от боевого out/
 
 import solve
 from score import score
@@ -28,11 +28,11 @@ GT_PATH = Path("dataset/agentic-bank-public/ground_truth.json")
 
 def main(archive: Path) -> int:
     gt = json.loads(GT_PATH.read_text())["scenarios"]
-    with _isolated_solve_out(archive):
+    with isolated_solve_out(archive):
         base = solve.main(archive, facts_source="extracted")
     worst = []
     for sc in sorted(gt):
-        with _isolated_solve_out(archive):
+        with isolated_solve_out(archive):
             lobo = solve.main(archive, facts_source="extracted", hide_templates=frozenset({sc}))
         gt_one = {sc: gt[sc]}
         with_tpl = score({sc: base[sc]}, gt_one, verbose=False)
