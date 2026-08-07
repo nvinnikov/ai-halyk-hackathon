@@ -19,10 +19,11 @@ from pathlib import Path
 
 sys.path.insert(0, "solution")
 
+from mutations import _isolated_solve_out
+
 import solve
 from dsl import Agg, walk
 from engine import prepare_rows, tokens
-from mutations import _isolated_solve_out
 from taxonomy import coverage_report
 
 _MARGIN_DEFAULT = 0.10

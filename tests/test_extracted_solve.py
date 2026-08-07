@@ -10,10 +10,11 @@ import json
 from decimal import Decimal
 from pathlib import Path
 
+from mutations import _isolated_solve_out
+
 import solve
 from dsl import parse
 from ledger import extract_archive, find_inputs, load_ledger, rows_of
-from mutations import _isolated_solve_out
 from scindex import INDEX_VERSION, build_index
 from stages import artifact
 from templates import TEMPLATES, title_key
