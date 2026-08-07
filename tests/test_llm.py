@@ -418,6 +418,98 @@ def test_gemini_anthropic_provider_never_unwraps_emit(monkeypatch):
         llm.call("p", SCHEMA, "v1")
 
 
+# --- bare-array квирк (фикс-раунд 2, живой баг задачи 28) ---
+
+# Схема вида object с РОВНО ОДНИМ required array-свойством — форма
+# SPECS_SCHEMA (solution/specs_extract.py): {"covenants": [...]}.
+ARRAY_SCHEMA = {
+    "type": "object",
+    "properties": {"covenants": {"type": "array"}},
+    "required": ["covenants"],
+    "additionalProperties": False,
+}
+
+
+def test_gemini_wraps_bare_array_into_single_array_property(monkeypatch):
+    """Живой баг (задача 28, мутационный прогон c6cbf2ea0d5c58dd): под gemini
+    specs_extract получил ГОЛЫЙ JSON-массив ковенантов верхнего уровня вместо
+    {"covenants": [...]} — jsonschema.validate падает на 'is not of type
+    object' (see work/c6cbf2ea0d5c58dd/specs/ACC-7201.json). call() должен
+    обернуть list в единственное required array-свойство схемы."""
+    bare_list = [{"clause": "6.1"}, {"clause": "6.2"}]
+
+    def fake_gemini_create(model, body):
+        return gemini_ok(bare_list)
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    assert llm.call("p", ARRAY_SCHEMA, "v1") == {"covenants": bare_list}
+
+
+def test_gemini_wraps_emit_wrapped_array_into_single_array_property(monkeypatch):
+    """Вариант с обеими квирками разом: {"emit": [...]} — emit-разворот даёт
+    list, а не dict, дальше он же оборачивается в array-свойство схемы."""
+    bare_list = [{"clause": "6.1"}]
+
+    def fake_gemini_create(model, body):
+        return gemini_ok({"emit": bare_list})
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    assert llm.call("p", ARRAY_SCHEMA, "v1") == {"covenants": bare_list}
+
+
+def test_gemini_does_not_wrap_bare_array_when_schema_has_two_array_props(monkeypatch):
+    """Негатив (ревью, п.2): схема с ДВУМЯ required array-свойствами —
+    неоднозначно, в какое из них заворачивать list, эвристика не применяется,
+    наружу уходит оригинальная ошибка."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "covenants": {"type": "array"},
+            "other_list": {"type": "array"},
+        },
+        "required": ["covenants", "other_list"],
+        "additionalProperties": False,
+    }
+
+    def fake_gemini_create(model, body):
+        return gemini_ok([{"clause": "6.1"}])
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    with pytest.raises(llm.SchemaRejected):
+        llm.call("p", schema, "v1")
+
+
+def test_gemini_fixes_real_specs_schema_bare_array_bug(monkeypatch):
+    """Регрессия на РЕАЛЬНЫЙ баг: та же SPECS_SCHEMA, что использует
+    solution/specs_extract.py (не абстрактная копия) — воспроизводит форму
+    из живого прогона, а не только упрощённую ARRAY_SCHEMA выше."""
+    import specs_extract
+
+    covenant = {
+        "clause": "6.1",
+        "quote": "Пункт 6.1 ...",
+        "metric": "agg(ALL, out, period(2025-01-01,2025-12-31))",
+        "direction": "max",
+        "limit": "500000.00",
+        "trigger": None,
+        "confidence": 1.0,
+    }
+
+    def fake_gemini_create(model, body):
+        return gemini_ok([covenant])
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    assert llm.call("p", specs_extract.SPECS_SCHEMA, "v1") == {"covenants": [covenant]}
+
+
 def test_gemini_response_skips_thought_parts(monkeypatch):
     def fake_gemini_create(model, body):
         return gemini_ok({"a": 7}, extra_parts=[{"text": "рассуждение...", "thought": True}])

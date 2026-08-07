@@ -228,6 +228,47 @@ def _safe_error_text(resp: httpx.Response, limit: int = 500) -> str:
     return text[:limit]
 
 
+def _gemini_schema_single_array_prop(schema: dict) -> str | None:
+    """Если schema — object с РОВНО ОДНИМ required-свойством типа array,
+    вернуть имя этого свойства, иначе None."""
+    if schema.get("type") != "object":
+        return None
+    required = schema.get("required")
+    if not isinstance(required, list) or len(required) != 1:
+        return None
+    prop = required[0]
+    prop_schema = schema.get("properties", {}).get(prop)
+    if not isinstance(prop_schema, dict) or prop_schema.get("type") != "array":
+        return None
+    return prop
+
+
+def _gemini_unwrap_candidates(result: object, schema: dict) -> list:
+    """Кандидаты на разворот известных gemini-квирков — см. комментарий у
+    места вызова в call(). Каждый кандидат — самостоятельная гипотеза о
+    настоящей форме ответа; вызывающая сторона валидирует их по очереди (в
+    порядке этого списка) и берёт первую, что пройдёт schema.
+
+    (а) {"emit": X} → X (X — dict или list, тот же квирк, что и раньше, но
+        без ограничения "только dict");
+    (б) list (сам result ИЛИ X из (а)) при схеме вида object с РОВНО ОДНИМ
+        required array-свойством "prop" → {prop: list}. Наблюдалось живьём в
+        specs_extract: модель вернула голый JSON-массив ковенантов вместо
+        {"covenants": [...]}.
+    """
+    candidates: list = []
+    value = result
+    if isinstance(result, dict) and list(result.keys()) == ["emit"]:
+        value = result["emit"]
+        if isinstance(value, dict):
+            candidates.append(value)
+    if isinstance(value, list):
+        prop = _gemini_schema_single_array_prop(schema)
+        if prop is not None:
+            candidates.append({prop: value})
+    return candidates
+
+
 def _gemini_create(model: str, body: dict) -> httpx.Response:
     """Единственная точка HTTP-обращения к Gemini — подменяется в тестах."""
     global _gemini_client
@@ -440,25 +481,31 @@ def call(
     try:
         jsonschema.validate(result, schema)
     except jsonschema.ValidationError as exc:
-        # «emit»-обёртка: часть промптов пишет «верни результат через emit» —
-        # артефакт anthropic-конвенции принудительного tool-calling (см.
-        # tool_choice={"name": "emit"} в _request() выше). Промпты не трогаем
-        # (условие задачи), а у gemini без настоящего tool это читается
-        # буквально — модель заворачивает ответ в {"emit": {...}}. Живым
-        # smoke-вызовом (test_gemini_live_smoke) воспроизведено: {"answer": 4}
-        # пришёл как {"emit": {"answer": 4}}.
+        # gemini-квирки формы ответа: часть промптов пишет «верни результат
+        # через emit» — артефакт anthropic-конвенции принудительного
+        # tool-calling (см. tool_choice={"name": "emit"} в _request() выше).
+        # Промпты не трогаем (условие задачи), а у gemini без настоящего tool
+        # это читается буквально: либо заворачивает в {"emit": {...}} (живой
+        # smoke test_gemini_live_smoke: {"answer": 4} → {"emit": {"answer": 4}}),
+        # либо для схем вида object-с-одним-array-полем отдаёт голый JSON-
+        # массив вместо {prop: [...]} (живой прогон specs_extract под
+        # мутациями — see _gemini_unwrap_candidates).
         # Validate-first: разворачиваем ТОЛЬКО когда прямая валидация уже
-        # провалилась, и только если развёрнутое проходит схему — иначе
-        # наружу уходит оригинальная ошибка, а не ошибка по обёртке.
-        unwrapped = result["emit"] if isinstance(result, dict) and list(result.keys()) == ["emit"] else None
-        if provider == "gemini" and isinstance(unwrapped, dict):
-            try:
-                jsonschema.validate(unwrapped, schema)
-            except jsonschema.ValidationError:
-                raise SchemaRejected(str(exc)) from exc
-            result = unwrapped
-        else:
+        # провалилась, перебирая кандидатов по очереди, и берём первого, что
+        # проходит схему — иначе наружу уходит ОРИГИНАЛЬНАЯ ошибка, а не
+        # ошибка по кандидату.
+        fixed = None
+        if provider == "gemini":
+            for candidate in _gemini_unwrap_candidates(result, schema):
+                try:
+                    jsonschema.validate(candidate, schema)
+                except jsonschema.ValidationError:
+                    continue
+                fixed = candidate
+                break
+        if fixed is None:
             raise SchemaRejected(str(exc)) from exc
+        result = fixed
 
     CACHE.mkdir(parents=True, exist_ok=True)
     tmp = cache_path.with_name(f"{cache_path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
