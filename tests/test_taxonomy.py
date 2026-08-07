@@ -129,3 +129,21 @@ def test_deterministic_output():
     assert a == b
     assert a["blind"] == ["CAPEX", "REVENUE"]
     assert a["txn_ids"] == ["T-1", "T-9"]
+
+
+def test_unfiltered_coverage_marked_when_metric_has_filters():
+    """Метрика с фильтрами видит часть строк, алярм считан по всем — severity
+    верхняя оценка, и трейс обязан это сказать."""
+    rows = [_row("T-1", "REVENUE", "100"), _row("T-2", "OTHER", "-25")]
+    a = cell_other_alarm(rows, {"REVENUE"}, ("Quarter", "CounterpartyIn", "Quarter"))
+    assert a is not None
+    assert a["coverage"] == "unfiltered"
+    assert a["ignored_filters"] == ["CounterpartyIn", "Quarter"]
+
+
+def test_no_coverage_note_when_metric_unfiltered():
+    """Без фильтров охват полный — лишней пометки в трейсе быть не должно."""
+    rows = [_row("T-1", "REVENUE", "100"), _row("T-2", "OTHER", "-25")]
+    a = cell_other_alarm(rows, {"REVENUE"})
+    assert a is not None
+    assert "coverage" not in a and "ignored_filters" not in a

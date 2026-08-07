@@ -122,6 +122,21 @@ def _metric_categories(node) -> list[str]:
     return sorted({n.category for n in walk(node) if isinstance(n, Agg) and n.sign != "in"})
 
 
+def _metric_filters(*nodes) -> tuple[str, ...]:
+    """Имена фильтров Agg-узлов: алярм неразнесённых строк их не применяет,
+    поэтому перечисляет в трейсе — иначе severity читалась бы как точная."""
+    return tuple(
+        sorted(
+            type(f).__name__
+            for node in nodes
+            if node is not None
+            for n in walk(node)
+            if isinstance(n, Agg)
+            for f in n.filters
+        )
+    )
+
+
 def _all_metric_categories(node) -> set[str]:
     """Все категории метрики, включая доходные: потерянная строка REVENUE —
     главный риск категоризации, а _metric_categories отбрасывает sign == in."""
@@ -423,7 +438,13 @@ def main(archive: Path, facts_source: str = "expected") -> dict:
                         alarm_categories = _all_metric_categories(cellspec_or_error["metric_ast"])
                         if cellspec_or_error["trigger_ast"] is not None:
                             alarm_categories |= _all_metric_categories(cellspec_or_error["trigger_ast"])
-                        oa = cell_other_alarm(rows, alarm_categories)
+                        oa = cell_other_alarm(
+                            rows,
+                            alarm_categories,
+                            _metric_filters(
+                                cellspec_or_error["metric_ast"], cellspec_or_error["trigger_ast"]
+                            ),
+                        )
                         if oa is not None:
                             trace["other_unassigned"] = oa
                             print(

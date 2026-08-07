@@ -91,7 +91,9 @@ def coverage_report(rows: list[dict], referenced: set[str] | None = None) -> dic
     }
 
 
-def cell_other_alarm(rows: list[dict], referenced: set[str]) -> dict | None:
+def cell_other_alarm(
+    rows: list[dict], referenced: set[str], metric_filters: tuple[str, ...] = ()
+) -> dict | None:
     """Потерянная строка глазами одной ячейки (5.3): что метрика не увидит.
 
     Слепа та категория, чьё развёртывание не содержит OTHER. Метрика,
@@ -101,6 +103,15 @@ def cell_other_alarm(rows: list[dict], referenced: set[str]) -> dict | None:
     вообще видит: 18 млн в OTHER при EBITDA 2.3 млн — катастрофа, при
     выручке 500 млн — шум. Порога у severity нет: алярм срабатывает при
     любой ненулевой сумме, severity задаёт лишь порядок разбора.
+
+    Охват — по категории, но НЕ по фильтрам Agg-узлов: строки берутся все,
+    хотя метрика с quarter(4) или desc_contains видит лишь часть. Отсюда
+    два перекоса на таких ячейках — ложное срабатывание (потерянная строка
+    Q1 поднимает алярм на квартальной метрике) и мягкая severity (в
+    знаменателе годовая сумма вместо квартальной). Учесть фильтры точно
+    значит считать алярм поузлово с предикатом interp, то есть завести в
+    таксономию знание об AST; вместо этого metric_filters перечисляет
+    неучтённые фильтры в трейсе, чтобы severity не читали как точную.
     """
     if not referenced:
         return None
@@ -132,10 +143,17 @@ def cell_other_alarm(rows: list[dict], referenced: set[str]) -> dict | None:
             continue
     inputs_sum = sum((abs(r["amt"]) for r in ordered if r["cat"] in blind_leaves), Decimal(0))
     severity = str((other_sum / inputs_sum).quantize(Decimal("0.000001"))) if inputs_sum else None
-    return {
+    out = {
         "blind": blind,
         "other_sum": str(other_sum),
         "inputs_sum": str(inputs_sum),
         "severity": severity,
         "txn_ids": [r["txn_id"] for r in other_rows],
     }
+    if metric_filters:
+        # Метрика видит часть строк, алярм посчитан по всем: severity — верхняя
+        # оценка охвата, а само срабатывание может относиться к строке, которую
+        # метрика не читает. Разбирать такую ячейку — после нефильтрованных.
+        out["coverage"] = "unfiltered"
+        out["ignored_filters"] = sorted(set(metric_filters))
+    return out
