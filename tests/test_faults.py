@@ -6,6 +6,14 @@ work/<hash> для публичного архива в этом репозит�
 тронет сеть вовсе, тесты ниже ничего бы не проверили. isolated_workdir
 уводит util.WORK/llm.CACHE/llm.CASSETTE в tmp_path, так что документный
 конвейер строится с нуля и реально бьётся об монкепатченный llm._create.
+
+solve.py биндит OUT именем при импорте (`from util import OUT`), поэтому
+патч util.WORK его не трогает — без отдельного monkeypatch.setattr(solve,
+"OUT", ...) фолт-тесты писали бы деградированный submission поверх
+РЕАЛЬНОГО out/submission.json и out/run-report.json (найдено ревью раунда
+1 по md5). isolated_workdir патчит solve.OUT и сама проверяет, что реальный
+out/ не изменился ни байтом — страховка на все тесты, использующие фикстуру,
+а не только на один.
 """
 
 import json
@@ -32,10 +40,24 @@ def isolated_workdir(tmp_path, monkeypatch):
     monkeypatch.setattr(llm, "CACHE", tmp_path / "llm_cache")
     monkeypatch.setattr(llm, "CASSETTE", tmp_path / "cassette")
     monkeypatch.delenv("LLM_OFFLINE", raising=False)
+    out_dir = tmp_path / "out"
+    monkeypatch.setattr(solve, "OUT", out_dir)
+
+    real_out = Path("out")
+    before = _snapshot(real_out)
+    yield out_dir
+    after = _snapshot(real_out)
+    assert before == after, "фолт-тест задел РЕАЛЬНЫЙ out/ — изоляция solve.OUT не сработала"
 
 
-def _assert_submission_complete():
-    sub = json.loads(Path("out/submission.json").read_text())
+def _snapshot(out_dir: Path) -> dict[str, bytes]:
+    if not out_dir.is_dir():
+        return {}
+    return {p.name: p.read_bytes() for p in sorted(out_dir.glob("*.json"))}
+
+
+def _assert_submission_complete(out_dir: Path):
+    sub = json.loads((out_dir / "submission.json").read_text())
     assert sorted(sub["answers"]) == sorted(TEMPLATE["answers"])
     for cells in sub["answers"].values():
         for cell in cells.values():
@@ -47,7 +69,7 @@ def test_zero_budget_run_still_submittable(isolated_workdir, monkeypatch):
     """Экстрагирующий прогон без единого доступного вызова API: всё — фолбэки."""
     monkeypatch.setattr(llm, "_budget", {"spent_usd": 99.0, "ceiling_usd": 0.0})
     solve.main(PUBLIC_ZIP, facts_source="extracted")
-    _assert_submission_complete()
+    _assert_submission_complete(isolated_workdir)
 
 
 def test_dead_network_mid_run(isolated_workdir, monkeypatch):
@@ -60,7 +82,7 @@ def test_dead_network_mid_run(isolated_workdir, monkeypatch):
     monkeypatch.setattr(llm, "_create", dying)
     monkeypatch.setattr(llm.time, "sleep", lambda s: None)
     solve.main(PUBLIC_ZIP, facts_source="extracted")
-    _assert_submission_complete()
+    _assert_submission_complete(isolated_workdir)
     assert calls["n"] > 0  # монкепатч реально был на пути вызова, не в обход кэша
     # провал не отравил кэш
     assert not any("error" in p.read_text() for p in llm.CACHE.glob("*.json"))
