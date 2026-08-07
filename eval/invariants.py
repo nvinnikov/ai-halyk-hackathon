@@ -174,6 +174,25 @@ def check_fallback_rate(traces: dict, baseline_path: Path | None, margin: float 
     return []
 
 
+def _baseline_path() -> Path:
+    return Path(__file__).resolve().parent / "public_baseline.json"
+
+
+def _print_fallback_rate_status(baseline_path: Path) -> None:
+    """Видимый сигнал пропуска check_fallback_rate. Тихий [] от отсутствия
+    baseline неотличим от «инвариант проверен и чист» — разрыв с
+    fail-open-конвенцией остальной кодовой базы (solve печатает ALARM на
+    каждый деградировавший путь, не молчит). check_fallback_rate сам
+    остаётся чистой функцией без побочных эффектов — печать вынесена
+    сюда, вызывающий (main) решает, когда её показать."""
+    if not baseline_path.exists():
+        print(
+            f"ALARM fallback_rate_baseline_missing: {baseline_path} отсутствует — "
+            "инвариант пропущен (появится в задаче 30)",
+            flush=True,
+        )
+
+
 def check_fx_alarms(all_fx_alarms):
     return [_fail("fx", alarm=a) for a in all_fx_alarms if str(a.get("kind", "")).startswith("fx_uncovered")]
 
@@ -199,12 +218,17 @@ def check_single_agreement(route_docs, target_accounts):
     """Не по dossier.docs: там _pick_active гарантированно оставляет ровно
     один (или ноль) документ, и проверка после фильтрации никогда не
     срабатывает даже при настоящей поломке апстрима. Здесь фильтр редакции
-    (edition != superseded) реализован независимо от dossier._pick_active —
+    (edition != "superseded") реализован независимо от dossier._pick_active —
     второй счёт тем же критерием, не переиспользующий её код, поэтому
     способен разойтись с dossier.docs, если _pick_active выбрала не ту
     редакцию. superseded — штатный случай (перевыпущенный договор), его не
     считаем; n == 0 — счёт остался без действующей редакции; n > 1 —
-    несколько действующих одновременно (неотфильтрованная редакция)."""
+    несколько действующих одновременно (неотфильтрованная редакция).
+
+    Литерал "superseded" — не общий символ, а копия значения из
+    solution/dossier.py (_EDITION_RANK и сравнение в _pick_active): если
+    там появится новое имя редакции для «неактивна», эту строку придётся
+    поправить синхронно."""
     counts = {acc: 0 for acc in target_accounts}
     for d in route_docs:
         acc = d.get("account_id")
@@ -288,8 +312,7 @@ def run_invariants(archive: Path, wd: Path, answers: dict, template_answers: dic
     all_fx_alarms = [a for t in traces.values() for a in t.get("fx_alarms", [])]
     fails += check_fx_alarms(all_fx_alarms)
 
-    baseline_path = Path(__file__).resolve().parent / "public_baseline.json"
-    fails += check_fallback_rate(traces, baseline_path)
+    fails += check_fallback_rate(traces, _baseline_path())
 
     route_dir = wd / "route"
     if route_dir.is_dir():
@@ -355,6 +378,7 @@ def main(archive, facts_source: str = "expected") -> int:
 
     for alarm in _collect_report_alarms(wd):
         print(f"ALARM {alarm}", flush=True)
+    _print_fallback_rate_status(_baseline_path())
 
     fails = run_invariants(archive, wd, answers, template["answers"])
     for f in fails:

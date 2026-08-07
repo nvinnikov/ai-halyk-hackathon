@@ -216,6 +216,73 @@ def test_fallback_rate_against_baseline(tmp_path):
     assert check_fallback_rate(all_tier0, baseline_path) == []
 
 
+def test_fallback_rate_baseline_alarm_printed_when_missing(tmp_path, capsys):
+    from invariants import _print_fallback_rate_status
+
+    _print_fallback_rate_status(tmp_path / "public_baseline.json")
+    out = capsys.readouterr().out
+    assert "ALARM fallback_rate_baseline_missing" in out
+
+
+def test_fallback_rate_baseline_alarm_silent_when_present(tmp_path, capsys):
+    from invariants import _print_fallback_rate_status
+
+    baseline_path = tmp_path / "public_baseline.json"
+    baseline_path.write_text(json.dumps({"fallback_rate": 0.5}))
+    _print_fallback_rate_status(baseline_path)
+    assert capsys.readouterr().out == ""
+
+
+# --- синтетическая проверка сборки route/dossier-путей в run_invariants -----
+
+
+def test_run_invariants_wires_route_and_dossier(tmp_path, monkeypatch):
+    """check_single_agreement/check_dossier_binding в реальном прогоне
+    покрыты только артефактами, оставшимися от предыдущего extracted-
+    прогона workdir (случайность окружения, не гарантия). Здесь их
+    подключение в run_invariants закреплено синтетикой: fake index.json +
+    route/ + dossier/ в tmp_path, solve.extract_archive/load_ledger/
+    scenario_inputs замоканы — реальный архив/датасет не нужен."""
+    (tmp_path / "index.json").write_text(
+        json.dumps(
+            {
+                "alarms": [],
+                "background": {"row_share": 0.5},
+                "scenario_to_account": {"S1": "ACC-1"},
+                "account_to_scenario": {"ACC-1": "S1"},
+            }
+        )
+    )
+    (tmp_path / "trace").mkdir()
+
+    route_dir = tmp_path / "route"
+    route_dir.mkdir()
+    for name in ("d1", "d2"):
+        (route_dir / f"{name}.json").write_text(
+            json.dumps(
+                {"account_id": "ACC-1", "doc_type": "agreement", "quarantined": False, "edition": "final"}
+            )
+        )  # две одновременно "живые" редакции — неотфильтрованная (n=2)
+
+    dossier_dir = tmp_path / "dossier"
+    dossier_dir.mkdir()
+    (dossier_dir / "ACC-1.json").write_text(
+        json.dumps({"account_id": "ACC-1", "docs": [{"doc_type": "kyc", "text": "клиент без договора"}]})
+    )  # в досье нет agreement
+
+    monkeypatch.setattr(solve, "extract_archive", lambda archive: ("hash", tmp_path))
+    monkeypatch.setattr(solve, "load_ledger", lambda wd, input_dir, target_scenarios=None: {"dirty": []})
+    monkeypatch.setattr(solve, "scenario_inputs", lambda archive, sc: ([], {}))
+
+    answers = {"S1": {"6.1": {"status": "COMPLIANT", "actual": 1.0, "evidence_txn_id": None}}}
+    template_answers = {"S1": {"6.1": {}}}
+
+    fails = run_invariants(Path("fake.zip"), tmp_path, answers, template_answers)
+    checks = {f["check"] for f in fails}
+    assert "single_agreement" in checks
+    assert "dossier_binding" in checks
+
+
 # --- интеграция: run_invariants на реальном expected-прогоне ----------------
 
 
