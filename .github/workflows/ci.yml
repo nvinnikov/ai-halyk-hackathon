@@ -53,8 +53,13 @@ jobs:
         run: uv run pytest
       # Отдельно гоняем сам скрипт: тест дёргает main() как функцию, а здесь
       # проверяется путь `./run.sh <архив>` — тот, которым сдаётся ответ.
+      # LLM_OFFLINE=1: без ключа этот шаг проверяет скелет-первым и fail-open
+      # (extracted-дефолт честно уходит по лестнице из кассеты/кэша), а не скор —
+      # скор гейтится pytest-шагом выше в expected-режиме.
       - name: run.sh end-to-end
         run: ./run.sh 6a741640c31eb032062683.zip
+        env:
+          LLM_OFFLINE: "1"
 
   secret-scan:
     name: Secret scan
