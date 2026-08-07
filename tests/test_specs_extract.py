@@ -200,3 +200,11 @@ def test_title_key_falls_back_to_quote_when_heading_absent(tmp_path, monkeypatch
     from templates import title_key
 
     assert art["clauses"]["6.1"]["title_key"] == title_key(quote)
+
+
+def test_limit_forms_decimal_comma_and_spaced_percent():
+    """Ревью PR #9 (5-я волна): «1,44» (десятичная запятая) и «4 %» (пробел
+    перед процентом) — легитимные вёрстки порога в цитате."""
+    assert specs_extract._limit_in_quote("1.44", "не ниже 1,44х по итогам года")
+    assert specs_extract._limit_in_quote("0.04", "не более 4 % от выручки")
+    assert not specs_extract._limit_in_quote("1.44", "не ниже 2,00х по итогам года")

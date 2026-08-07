@@ -116,7 +116,9 @@ def _strip_trailing_zeros(s: str) -> str:
 
 def _limit_forms(limit: str) -> set[str]:
     """Цифровые формы порога для поиска внутри цитаты (два знака, один, целое),
-    а для долей — ещё и процентная форма (доля как число и процент)."""
+    для долей — процентная форма; каждая форма — ещё и с десятичной запятой и
+    с пробелом перед знаком процента (ревью PR #9, 5-я волна: «1,44» и «4 %»
+    на другой вёрстке договора не должны стоить ячейку)."""
     try:
         d = Decimal(limit)
     except InvalidOperation:
@@ -124,8 +126,10 @@ def _limit_forms(limit: str) -> set[str]:
     plain = format(d, "f")
     forms = {limit, plain, _strip_trailing_zeros(plain)}
     if 0 < d <= 1:
-        pct = format(d * 100, "f")
-        forms.add(f"{_strip_trailing_zeros(pct)}%")
+        pct = _strip_trailing_zeros(format(d * 100, "f"))
+        forms |= {f"{pct}%", f"{pct} %"}
+    # Десятичная запятая: вариант каждой формы с "," вместо "." (и «4,5 %»).
+    forms |= {f.replace(".", ",") for f in forms if "." in f}
     return forms
 
 

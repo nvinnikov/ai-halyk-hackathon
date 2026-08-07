@@ -648,10 +648,18 @@ def _alarm_counts(wd: Path) -> dict[str, int]:
         alarms += json.loads(index_path.read_text()).get("alarms", [])
     trace_dir = wd / "trace"
     if trace_dir.is_dir():
+        seen_fx: set[tuple[str, str]] = set()
         for p in sorted(trace_dir.glob("*.json")):
             payload = json.loads(p.read_text())
             alarms += payload.get("alarms", [])
-            alarms += payload.get("fx_alarms", [])
+            # fx-алярм — уровня заёмщика, но лежит в каждом из его ячейковых
+            # трейсов: без дедупа run-report считал бы его трижды (ревью PR #9).
+            scenario = p.stem.split(".", 1)[0]
+            for fx in payload.get("fx_alarms", []):
+                key = (scenario, stable_json(fx))
+                if key not in seen_fx:
+                    seen_fx.add(key)
+                    alarms.append(fx)
     for sub_dir in ("route", "dossier", "facts", "specs"):
         d = wd / sub_dir
         if d.is_dir():
