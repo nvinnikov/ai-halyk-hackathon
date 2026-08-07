@@ -22,7 +22,11 @@ BASELINE = Path("eval/public_baseline.json")
 # (sanity зовётся первым, до solve.main, — трейсов extracted-прогона ещё
 # нет), и печать этой строки как «что сломается» была бы шумом на каждом
 # честном запуске по плану окна (sanity в 11:00, прогон в 11:10).
-_DIFF_SKIP = {"dataset_hash", "fallback_rate"}
+# stage_alarms — тот же довод, что и у fallback_rate: диагностика прошлого
+# прогона на этом work/<hash>, а не свойство архива — сравнивать с
+# публичным baseline бессмысленно (и на приватном наборе прогона может ещё
+# не быть, sanity вызывается первой).
+_DIFF_SKIP = {"dataset_hash", "fallback_rate", "stage_alarms"}
 
 
 def _fallback_rate(wd: Path) -> float | None:
@@ -56,6 +60,31 @@ def _fallback_rate(wd: Path) -> float | None:
         return None
     fell_back = sum(1 for t in cell_traces if t.get("tier", 0) > 0)
     return fell_back / len(cell_traces)
+
+
+def _stage_alarms(wd: Path) -> dict[str, int] | None:
+    """Число алярмов по видам в route/dossier/facts/specs — отравленный
+    прогон виден до боевого запуска, без LLM (recovery-playbook.md).
+
+    stages.artifact кэширует по версии стадии, не по успешности build(): если
+    build() поймал ошибку модели (в первую очередь llm.SchemaRejected —
+    исчерпанный баланс/схема) и вернула деградировавший, но валидный dict,
+    этот dict ложится на диск как обычный успех и отдаётся повторно на любом
+    следующем прогоне. None — ни одна из четырёх стадий ещё не строилась на
+    этом work/<hash> (sanity сам их не строит); {} — стадии есть, алярмов
+    нет."""
+    dirs = [wd / sub for sub in ("route", "dossier", "facts", "specs")]
+    if not any(d.is_dir() for d in dirs):
+        return None
+    counts: dict[str, int] = {}
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        for p in sorted(d.glob("*.json")):
+            for alarm in json.loads(p.read_text()).get("alarms", []):
+                kind = str(alarm.get("kind", "other")) if isinstance(alarm, dict) else "other"
+                counts[kind] = counts.get(kind, 0) + 1
+    return counts
 
 
 def _doc_type_breakdown(wd: Path) -> dict[str, int] | None:
@@ -107,6 +136,7 @@ def collect(archive: Path) -> dict:
         "currencies_target": dict(sorted(currencies.items())),
         "clauses": clauses,
         "fallback_rate": _fallback_rate(wd),
+        "stage_alarms": _stage_alarms(wd),
     }
 
 

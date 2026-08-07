@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from invariants import (
+    _collect_report_alarms,
     check_actuals_finite,
     check_background_share,
     check_breach_evidence,
@@ -298,3 +299,24 @@ def test_run_invariants_clean_on_public_expected(public_run):
     answers, wd = public_run
     fails = run_invariants(PUBLIC_ZIP, wd, answers, TEMPLATE["answers"])
     assert fails == [], fails
+
+
+# --- _collect_report_alarms: видимость отравленных facts/specs (задача 31) --
+
+
+def test_collect_report_alarms_sees_facts_and_specs_stage_failures(tmp_path):
+    """facts_extraction_failed/specs_extraction_failed запекаются ВНУТРЬ
+    build()-результата stages.artifact и кэшируются под текущей версией
+    стадии (recovery-playbook.md) — отчёт обязан их видеть, иначе отравленный
+    work/<hash> выглядит чистым."""
+    (tmp_path / "facts").mkdir()
+    (tmp_path / "facts" / "ACC-1.json").write_text(
+        json.dumps({"alarms": [{"kind": "facts_extraction_failed", "file": "a.pdf"}]})
+    )
+    (tmp_path / "specs").mkdir()
+    (tmp_path / "specs" / "ACC-1.json").write_text(
+        json.dumps({"alarms": [{"kind": "specs_extraction_failed", "error": "..."}]})
+    )
+    kinds = {a["kind"] for a in _collect_report_alarms(tmp_path)}
+    assert "facts_extraction_failed" in kinds
+    assert "specs_extraction_failed" in kinds

@@ -14,8 +14,13 @@ legacy_spec_to_cellspec, регрессия/eval), "extracted" (дефолт, з
 документный конвейер: досье → факты → спеки, LLM трогает только чтение,
 арифметика ковенанта — DSL и код."""
 
+import hashlib
+import importlib
 import json
+import os
+import subprocess
 import sys
+import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -26,6 +31,7 @@ from expected_extraction import FACTS, SPECS
 
 import evidence
 import facts_extract
+import llm
 from dossier import build_dossiers
 from dsl import Agg, DslError, Ratio, parse, walk
 from engine import agg, prepare_rows, select_rows, sign_divergence
@@ -38,9 +44,33 @@ from specs_extract import extract_specs
 from stages import artifact
 from taxonomy import coverage_report
 from templates import TEMPLATES, match_heading
-from util import OUT, q2, stable_json, workdir
+from util import OUT, ROOT, q2, stable_json, workdir
 
-SUBMISSION_META = {"team": "", "contact_email": "", "model": ""}
+# Модули, чьи *_VERSION-константы run-report собирает целиком (раздел 3):
+# правка build-логики любой стадии обязана поднять версию — отчёт делает
+# рассинхрон видимым, а не полагается на то, что его заметят при код-ревью.
+_VERSIONED_MODULES = (
+    "ledger",
+    "scindex",
+    "dossier",
+    "route",
+    "facts_extract",
+    "specs_extract",
+    "vision",
+    "pdftext",
+    "categorize_llm",
+)
+
+
+def submission_meta() -> dict:
+    """Реквизиты отправки (раздел 3) — из env, а не хардкод: команда и
+    контакт задаются перед боевым прогоном, модель по умолчанию — та, что
+    реально зовёт llm.call."""
+    return {
+        "team": os.environ.get("TEAM_NAME", ""),
+        "contact_email": os.environ.get("CONTACT_EMAIL", ""),
+        "model": os.environ.get("MODEL_NAME", llm.MODEL),
+    }
 
 
 # --- ядро на эталонных фактах (источник подменяется задачами 16/24) ----------
@@ -477,12 +507,105 @@ def _write_trace(wd: Path, scenario: str, clause: str, payload: dict) -> None:
     (d / f"{scenario}.{clause}.json").write_text(stable_json(payload))
 
 
+# --- run-report (репетиция, раздел 3: расхождение между прогонами — в отчёт) --
+
+
+def _schema_versions() -> dict[str, int | str]:
+    """Все *_VERSION-константы стадий — плоским списком `модуль.ИМЯ`."""
+    out: dict[str, int | str] = {}
+    for name in _VERSIONED_MODULES:
+        mod = importlib.import_module(name)
+        for attr in sorted(dir(mod)):
+            if attr.endswith("_VERSION") and attr.isupper():
+                out[f"{name}.{attr}"] = getattr(mod, attr)
+    return out
+
+
+def _alarm_kind(alarm) -> str:
+    return str(alarm["kind"]) if isinstance(alarm, dict) and "kind" in alarm else "other"
+
+
+def _alarm_counts(wd: Path) -> dict[str, int]:
+    """Число алярмов по видам — собрано из тех же артефактов, что читает
+    eval/invariants._collect_report_alarms (не импортируем её отсюда: там
+    `import solve`, обратный импорт устроил бы цикл), плюс facts/specs.
+
+    facts/specs обязательны отдельно от route/dossier: `facts_extraction_
+    failed`/`specs_extraction_failed`/`no_agreement` запекаются ВНУТРЬ
+    build()-результата stages.artifact (см. recovery-playbook.md) — деградация
+    молча кэшируется под текущей версией стадии и без этого поля run-report
+    выглядела бы чистой на отравленном work/<hash>."""
+    alarms: list = []
+    index_path = wd / "index.json"
+    if index_path.exists():
+        alarms += json.loads(index_path.read_text()).get("alarms", [])
+    trace_dir = wd / "trace"
+    if trace_dir.is_dir():
+        for p in sorted(trace_dir.glob("*.json")):
+            payload = json.loads(p.read_text())
+            alarms += payload.get("alarms", [])
+            alarms += payload.get("fx_alarms", [])
+    for sub_dir in ("route", "dossier", "facts", "specs"):
+        d = wd / sub_dir
+        if d.is_dir():
+            for p in sorted(d.glob("*.json")):
+                alarms += json.loads(p.read_text()).get("alarms", [])
+    counts: dict[str, int] = {}
+    for a in alarms:
+        kind = _alarm_kind(a)
+        counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
+def _tier_breakdown(wd: Path) -> dict[str, int]:
+    """Ячейки по ярусам лестницы (0 dsl / 1 heuristic / 2 prior) — из уже
+    записанных трейсов, без повторного прохода по answers."""
+    counts: dict[str, int] = {}
+    trace_dir = wd / "trace"
+    if not trace_dir.is_dir():
+        return counts
+    for p in sorted(trace_dir.glob("*.json")):
+        if p.stem.endswith(".borrower"):
+            continue
+        tier = json.loads(p.read_text()).get("tier")
+        key = str(tier) if tier is not None else "none"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _git_sha() -> str | None:
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, timeout=5, check=True
+        )
+        return res.stdout.strip()
+    except Exception:
+        return None  # вне git-репозитория/бинарь недоступен — не критично для отчёта
+
+
+def _build_run_report(archive: Path, ds_hash: str, wd: Path, duration_s: float) -> dict:
+    provider = os.environ.get("LLM_PROVIDER", "anthropic")
+    model = llm.GEMINI_MODEL if provider == "gemini" else llm.MODEL
+    return {
+        "dataset_hash": ds_hash,
+        "archive_sha256": hashlib.sha256(Path(archive).read_bytes()).hexdigest(),
+        "model": model,
+        "schema_versions": _schema_versions(),
+        "budget": llm.budget_state(),
+        "tier_breakdown": _tier_breakdown(wd),
+        "alarm_counts": _alarm_counts(wd),
+        "git_sha": _git_sha(),
+        "duration_s": duration_s,
+    }
+
+
 def main(
     archive: Path, facts_source: str = "extracted", hide_templates: frozenset[str] = frozenset()
 ) -> dict:
     """hide_templates (LOBO, 7.3) — сценарии, для которых библиотека шаблонов
     отключена: ячейка считается по сырому DSL спеки вместо TEMPLATES."""
     assert facts_source in ("expected", "extracted"), f"неизвестный источник фактов {facts_source!r}"
+    start = time.monotonic()
     archive = Path(archive)
     ds_hash, input_dir = extract_archive(archive)
     print(f"dataset_hash: {ds_hash}", flush=True)
@@ -493,7 +616,7 @@ def main(
     inputs = find_inputs(input_dir)
     template = json.loads(inputs["template"].read_text())
     answers: dict = skeleton(template["answers"])
-    sub = {**SUBMISSION_META, "answers": answers}  # answers — та же ссылка, правки видны в sub
+    sub = {**submission_meta(), "answers": answers}  # answers — та же ссылка, правки видны в sub
     dump_submission(sub, template["answers"])
 
     targets = sorted(template["answers"])
@@ -627,6 +750,14 @@ def main(
             except Exception as exc:
                 print(f"ALARM trace_write_failed {scenario} {clause}: {exc!r}", flush=True)
     print(f"evidence emitted: {emitted}, of them on ratio-metrics: {ratio_emitted}", flush=True)
+    # Отчёт о прогоне — диагностика после того, как все ячейки уже записаны:
+    # его падение не может стоить ни одной ячейки, только самого отчёта.
+    try:
+        report = _build_run_report(archive, ds_hash, wd, time.monotonic() - start)
+        OUT.mkdir(parents=True, exist_ok=True)
+        (OUT / "run-report.json").write_text(stable_json(report))
+    except Exception as exc:
+        print(f"ALARM run_report_failed: {exc!r}", flush=True)
     return answers
 
 

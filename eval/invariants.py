@@ -345,7 +345,13 @@ def run_invariants(archive: Path, wd: Path, answers: dict, template_answers: dic
 
 def _collect_report_alarms(wd: Path) -> list[dict]:
     """Алярмы, разбросанные по артефактам прогона, — для отчёта main(), не
-    для проверок (те читают то же самое напрямую по месту)."""
+    для проверок (те читают то же самое напрямую по месту).
+
+    facts/specs обязательны наравне с route/dossier: facts_extraction_failed/
+    specs_extraction_failed запекаются ВНУТРЬ build()-результата
+    stages.artifact и кэшируются под текущей версией стадии — см.
+    .superpowers/sdd/2026-08-06-halyk-pipeline/recovery-playbook.md. Без этих
+    двух каталогов отчёт мог бы выглядеть чистым на отравленном work/<hash>."""
     alarms: list[dict] = []
     index_path = wd / "index.json"
     if index_path.exists():
@@ -354,7 +360,7 @@ def _collect_report_alarms(wd: Path) -> list[dict]:
         payload = json.loads(p.read_text())
         alarms += payload.get("alarms", [])
         alarms += payload.get("fx_alarms", [])
-    for sub in ("route", "dossier"):
+    for sub in ("route", "dossier", "facts", "specs"):
         d = wd / sub
         if d.is_dir():
             for p in sorted(d.glob("*.json")):

@@ -1,8 +1,9 @@
 """До запуска на новом архиве: всё, что «не как в публичном», — список поломок."""
 
+import json
 from pathlib import Path
 
-from sanity import _resolve_fallback_rate, collect, diff_baselines
+from sanity import _resolve_fallback_rate, _stage_alarms, collect, diff_baselines
 
 PUBLIC_ZIP = Path("6a741640c31eb032062683.zip")
 
@@ -59,3 +60,42 @@ def test_resolve_fallback_rate_none_over_none_no_warning():
     rate, warning = _resolve_fallback_rate(None, {"fallback_rate": None})
     assert rate is None
     assert warning is None
+
+
+# --- stage_alarms: видимость отравленных facts/specs/route/dossier ---------
+# (recovery-playbook.md, задача 31) ------------------------------------------
+
+
+def test_stage_alarms_none_before_any_extracted_run(tmp_path):
+    assert _stage_alarms(tmp_path) is None
+
+
+def test_stage_alarms_counts_kinds_across_all_four_dirs(tmp_path):
+    (tmp_path / "facts").mkdir()
+    (tmp_path / "facts" / "ACC-1.json").write_text(
+        json.dumps({"alarms": [{"kind": "facts_extraction_failed", "file": "a.pdf"}]})
+    )
+    (tmp_path / "specs").mkdir()
+    (tmp_path / "specs" / "ACC-1.json").write_text(
+        json.dumps({"alarms": [{"kind": "no_agreement", "account": "ACC-1"}]})
+    )
+    (tmp_path / "route").mkdir()
+    (tmp_path / "route" / "h1.json").write_text(
+        json.dumps({"alarms": [{"kind": "meta_extraction_failed", "file": "a.pdf"}]})
+    )
+    (tmp_path / "dossier").mkdir()
+    (tmp_path / "dossier" / "ACC-1.json").write_text(
+        json.dumps({"alarms": [{"kind": "dossier_build_failed", "account": "ACC-1"}]})
+    )
+    assert _stage_alarms(tmp_path) == {
+        "facts_extraction_failed": 1,
+        "no_agreement": 1,
+        "meta_extraction_failed": 1,
+        "dossier_build_failed": 1,
+    }
+
+
+def test_stage_alarms_empty_dict_when_dirs_exist_but_clean(tmp_path):
+    (tmp_path / "facts").mkdir()
+    (tmp_path / "facts" / "ACC-1.json").write_text(json.dumps({"alarms": []}))
+    assert _stage_alarms(tmp_path) == {}

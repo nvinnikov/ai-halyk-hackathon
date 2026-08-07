@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import llm
 import solve
 from score import score
 
@@ -151,3 +152,81 @@ def test_trace_written_per_cell(answers):
 
 def test_deterministic(answers):
     assert answers == solve.main(PUBLIC_ZIP, facts_source="expected")
+
+
+# --- реквизиты и run-report (задача 31) ---------------------------------------
+
+
+def test_submission_meta_reads_env(monkeypatch):
+    monkeypatch.setenv("TEAM_NAME", "команда Х")
+    monkeypatch.setenv("CONTACT_EMAIL", "team@example.com")
+    monkeypatch.setenv("MODEL_NAME", "custom-model")
+    assert solve.submission_meta() == {
+        "team": "команда Х",
+        "contact_email": "team@example.com",
+        "model": "custom-model",
+    }
+
+
+def test_submission_meta_defaults_model_to_llm_model(monkeypatch):
+    monkeypatch.delenv("TEAM_NAME", raising=False)
+    monkeypatch.delenv("CONTACT_EMAIL", raising=False)
+    monkeypatch.delenv("MODEL_NAME", raising=False)
+    meta = solve.submission_meta()
+    assert meta == {"team": "", "contact_email": "", "model": llm.MODEL}
+
+
+def test_submission_written_to_out(answers):
+    sub = json.loads(Path("out/submission.json").read_text())
+    assert set(sub) == {"team", "contact_email", "model", "answers"}
+
+
+def test_run_report_written_with_expected_fields(answers):
+    from ledger import extract_archive
+
+    ds_hash, _ = extract_archive(PUBLIC_ZIP)
+    report = json.loads(Path("out/run-report.json").read_text())
+    assert report["dataset_hash"] == ds_hash
+    assert len(report["archive_sha256"]) == 64  # полный sha256, не усечённый dataset_hash
+    assert report["model"]
+    assert "ledger.LEDGER_VERSION" in report["schema_versions"]
+    assert "route.ROUTE_VERSION" in report["schema_versions"]
+    assert "facts_extract.FACTS_VERSION" in report["schema_versions"]
+    assert set(report["budget"]) == {"spent_usd", "ceiling_usd"}
+    assert sum(report["tier_breakdown"].values()) == 36
+    assert isinstance(report["alarm_counts"], dict)
+    assert report["duration_s"] > 0
+    # git_sha может быть None вне git-репозитория — поле обязано присутствовать
+    assert "git_sha" in report
+
+
+def test_alarm_counts_include_facts_and_specs_stage_alarms(tmp_path):
+    """Правка по разбору инцидентов (задача 31): facts_extraction_failed/
+    specs_extraction_failed запекаются ВНУТРЬ артефактов work/<hash>/facts,
+    work/<hash>/specs (см. .superpowers/sdd/.../recovery-playbook.md) — их
+    обязан видеть тот же счётчик, что и алярмы route/dossier/trace, иначе
+    отравленный прогон в run-report выглядит чистым."""
+    (tmp_path / "facts").mkdir()
+    (tmp_path / "facts" / "ACC-1.json").write_text(
+        json.dumps({"alarms": [{"kind": "facts_extraction_failed", "file": "a.pdf"}]})
+    )
+    (tmp_path / "specs").mkdir()
+    (tmp_path / "specs" / "ACC-1.json").write_text(
+        json.dumps({"alarms": [{"kind": "specs_extraction_failed", "error": "..."}]})
+    )
+    counts = solve._alarm_counts(tmp_path)
+    assert counts.get("facts_extraction_failed") == 1
+    assert counts.get("specs_extraction_failed") == 1
+
+
+def test_run_report_failure_does_not_kill_run(monkeypatch):
+    """Диагностика: падение сборки run-report не должно стоить ни одной ячейки."""
+
+    def boom(*a, **k):
+        raise RuntimeError("искусственный сбой run-report")
+
+    monkeypatch.setattr(solve, "_build_run_report", boom)
+    answers = solve.main(PUBLIC_ZIP, facts_source="expected")
+    for sc, cells in answers.items():
+        for clause, cell in cells.items():
+            assert_cell_valid(cell, f"{sc} {clause}")

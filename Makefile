@@ -1,6 +1,8 @@
 # Все цели идут через `uv run` ради воспроизводимого окружения из uv.lock.
-# `check` — локальное зеркало CI-гейта.
-.PHONY: install public-archive solve score lint typecheck test check
+# `check` — локальное зеркало CI-гейта. Цели ниже `check` — репетиция
+# (задача 31): однословные команды на 9 августа под трёхчасовым таймером.
+.PHONY: install public-archive solve score lint typecheck test check \
+	run sanity eval-offline eval-live cassette-freeze determinism submit
 
 install:
 	uv sync --extra dev
@@ -37,3 +39,41 @@ test: install
 	uv run pytest
 
 check: lint typecheck test
+
+# --- репетиция / боевой день (задача 31) --------------------------------------
+
+# Однословный алиас ./run.sh: без public-archive-зависимости — 9 августа
+# ARCHIVE=приватный.zip уже лежит на диске, пересборка публичного не нужна.
+run: install
+	./run.sh $(ARCHIVE)
+
+sanity: install
+	uv run python solution/sanity.py $(ARCHIVE)
+
+# Без сети: инварианты (expected-режим по умолчанию) + греп-гейт + юниты.
+# LLM_OFFLINE=1 — защита от случайного промаха кассеты/кэша мимо сети.
+eval-offline: install
+	LLM_OFFLINE=1 uv run pytest -q
+	uv run python eval/grep_gate.py
+	LLM_OFFLINE=1 uv run python eval/invariants.py $(ARCHIVE)
+
+# С ключом в окружении: extraction eval, мутации, LOBO — все ходят в LLM.
+eval-live: install
+	uv run python eval/extraction_eval.py $(ARCHIVE)
+	uv run python eval/mutations.py $(ARCHIVE) rename
+	uv run python eval/mutations.py $(ARCHIVE) shift
+	uv run python eval/lobo.py $(ARCHIVE)
+
+# Заморозить кэш публичного extracted-прогона как кассету — регрессионный
+# забор: правка промпта не сможет молча сломать извлечение (llm.py, раздел 3).
+cassette-freeze:
+	mkdir -p eval/cassette && cp work/llm_cache/*.json eval/cassette/
+
+# Прогон дважды, второй целиком из кэша — байт-диф submission.json.
+determinism: install
+	./run.sh $(ARCHIVE) && cp out/submission.json out/.det-a.json
+	./run.sh $(ARCHIVE) && diff out/.det-a.json out/submission.json
+
+# Снапшот отправки: submission-<N>.json + cache-<N>/ + run-report-<N>.json.
+submit:
+	uv run python solution/submit.py
