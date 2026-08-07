@@ -45,14 +45,26 @@ def _strip_page_footer(raw_text: str, n: int) -> str:
     return "\n".join(lines)
 
 
+def blindness_criteria(text: str) -> tuple[bool, bool]:
+    """(мало символов, мало чисел) — два критерия слепоты по отдельности.
+
+    Слепота — их конъюнкция, см. is_blind. Порознь они нужны sanity-скрипту:
+    страница, проходящая ровно по одному критерию, — пограничная. Порог
+    откалиброван на одном наборе, и резкий рост числа пограничных страниц
+    означает, что сканов в приватном наборе больше и правило пора переключать
+    на «ИЛИ» прямо в окне 9 августа."""
+    t = _normalize(text)
+    return len(t) < _MIN_CHARS, len(_NUM.findall(t)) < _MIN_NUMBERS
+
+
 def is_blind(text: str) -> bool:
     """«И», не «ИЛИ»: «или» на замере дало 115 слепых страниц, из них 106
     ложных — титулы и оглавления с нормальным текстом, но <3 числами; «и»
     даёт 9, включая оба известных vision-кейса. Ложный vision-вызов не просто
     дорог — он подменяет уже извлечённый текст ответом модели в
     route.full_text, то есть рискует точностью."""
-    t = _normalize(text)
-    return len(t) < _MIN_CHARS and len(_NUM.findall(t)) < _MIN_NUMBERS
+    few_chars, few_numbers = blindness_criteria(text)
+    return few_chars and few_numbers
 
 
 def extract_pages(wd: Path, pdf_path: Path) -> dict:

@@ -1,6 +1,6 @@
 # Все цели идут через `uv run` ради воспроизводимого окружения из uv.lock.
 # `check` — локальное зеркало CI-гейта.
-.PHONY: install public-archive solve score lint typecheck test check
+.PHONY: install public-archive solve score sanity lint typecheck test check
 
 install:
 	uv sync --extra dev
@@ -25,6 +25,14 @@ solve: public-archive
 	./run.sh $(ARCHIVE)
 
 score: solve
+
+# Первое, что запускается на новом архиве 9 августа, до пайплайна: без LLM,
+# секунды. Печатает dataset_hash и диф против eval/public_baseline.json —
+# каждая строка дифа читается как «что сломается».
+# Снимок публичного набора перезаписывается так:
+#   uv run python solution/sanity.py <архив> --write-baseline
+sanity: public-archive
+	uv run python solution/sanity.py $(ARCHIVE)
 
 lint: install
 	uv run ruff format --check .

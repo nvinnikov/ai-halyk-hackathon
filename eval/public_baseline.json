@@ -1,0 +1,28 @@
+{
+ "background": {
+  "accounts": 549,
+  "row_share": 0.5438,
+  "rows": 800
+ },
+ "blind_borderline": {
+  "long_with_few_numbers": 159,
+  "short_with_numbers": 1
+ },
+ "blind_pages": 8,
+ "clauses": [
+  "6.1",
+  "6.2",
+  "6.3"
+ ],
+ "currencies_target": {
+  "EUR": 15
+ },
+ "dataset_hash": "ff38d3e2ddbe522e",
+ "dirty_rows": 2,
+ "doc_types": "unknown (прогона не было)",
+ "fallback_rate": null,
+ "index_alarms": [],
+ "ledger_alarms": [],
+ "pdf_count": 200,
+ "targets": 12
+}
