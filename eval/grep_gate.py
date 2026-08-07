@@ -5,6 +5,7 @@ prefixes, and scenario IDs in solution/ and run.sh. Forbidden list built from
 eval data (FACTS/SPECS), template, and official formats.
 """
 
+import json
 import re
 import sys
 from decimal import ROUND_HALF_UP, Decimal
@@ -13,64 +14,38 @@ from pathlib import Path
 # Import data sources
 from expected_extraction import FACTS, SPECS
 
-# Scenario IDs from public submission template
-_SCENARIOS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "B1", "B4"]
 
-# Known exceptions: inherent to code architecture per CLAUDE.md.
-# These are documented architectural patterns, not data leaks.
-_FILE_EXCEPTIONS = {
-    "solution/templates.py": {"Capital": "Covenant heading text (_TEMPLATE_HEADING_TEXT table)"},
-    "solution/specs_extract.py": {
-        # Spec extraction layer must search for threshold values in PDFs
-        "0.04": "Threshold search format",
-        "1500000": "Threshold format",
-        "1500000.0": "Threshold variant",
-        "1500000.00": "Threshold variant",
-        "2.0": "Threshold variant",
-        "500000": "Threshold format",
-        "500000.0": "Threshold variant",
-        "500000.00": "Threshold variant",
-        "9.0": "Threshold variant",
-        "9.00": "Threshold variant",
-    },
-    "solution/interp.py": {
-        # DSL interpreter examples/tests reference covenant thresholds
-        "9.0": "Example threshold in code comments",
-        "9.00": "Example threshold in code comments",
-    },
-    "solution/engine.py": {
-        # Engine docstrings explain data preparation for specific scenarios
-        "B4": "Scenario-specific edge case in docstring",
-        "6.3": "Covenant number in example explanation",
-    },
-    "solution/fallbacks.py": {
-        # Fallback family logic inherently references covenant family numbers
-        "6.1": "Covenant family index (architectural fixture)",
-        "6.2": "Covenant family index (architectural fixture)",
-    },
-    "solution/ledger.py": {
-        # Ledger processing documents scenario-specific transaction rules
-        "P7": "Scenario documentation in module docstring",
-        "P8": "Scenario documentation in module docstring",
-        "TXN-": "Transaction ID prefix in documentation",
-    },
-    "solution/route.py": {
-        # Route dispatcher must recognize account/transaction prefixes from documents
-        "ACC-": "Account ID prefix pattern for document routing",
-    },
-    "solution/solve.py": {
-        # Solver harness references covenant numbers as problem structure
-        "6.1": "Covenant number (problem structure from CASE)",
-    },
-}
+def _load_scenarios_and_covenants() -> tuple[set[str], set[str]]:
+    """Load scenario IDs and covenant numbers from public submission template.
+
+    Ensures gate parameters are not hardcoded and adapt to template changes.
+    """
+    template_path = Path("dataset/agentic-bank-public/submission_template.json")
+    if not template_path.exists():
+        # Fallback for tests/offline mode
+        return {"P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "B1", "B4"}, {
+            "6.1",
+            "6.2",
+            "6.3",
+        }
+
+    with open(template_path) as f:
+        data = json.load(f)
+
+    scenarios = set(data["answers"].keys())
+    covenants = set()
+    for scenario_data in data["answers"].values():
+        covenants.update(scenario_data.keys())
+
+    return scenarios, covenants
+
+
+_SCENARIOS, _COVENANT_NUMBERS = _load_scenarios_and_covenants()
 
 
 # Weight constants to exclude from forbidden literals (CASE.ru.md scoring formula)
 # Also exclude 0.0 and 0.00 (initialization/comparison, not a threshold)
 _WEIGHT_SCORES = {"0.50", "0.30", "0.20", "0.05", "0.5", "0.3", "0.2", "0.0", "0.00"}
-
-# Covenant numbers (public template)
-_COVENANT_NUMBERS = {"6.1", "6.2", "6.3"}
 
 # Taxonomy categories (template.py): stub-format allowed in solution/
 _TAXONOMY_CATEGORIES = {
@@ -140,13 +115,30 @@ def _extract_number_formats(num: Decimal | int | float) -> set[str]:
 
 
 def _extract_tokens(phrase: str) -> set[str]:
-    """Extract word tokens from phrase (length >= 4 chars).
+    """Extract word tokens from phrase (length >= 4 chars), excluding generic suffixes.
 
-    Used to catch embedded borrower/entity names.
+    Used to catch embedded borrower/entity names. Generic corporate suffixes
+    (Capital, Group, Holding, Partners, LLP, etc.) are excluded to avoid
+    false positives when same suffix appears in covenant templates.
     """
-    # Split on non-word boundaries, filter length
+    # Generic corporate suffixes that appear in many entity names and templates
+    generic_suffixes = {
+        "Capital",
+        "Group",
+        "Holding",
+        "Partners",
+        "LLC",
+        "LLP",
+        "Inc",
+        "Corp",
+        "Limited",
+        "Services",
+        "Bureau",
+    }
+
     tokens = re.findall(r"\b\w{4,}\b", phrase)
-    return set(tokens)
+    # Keep only tokens that are not generic suffixes
+    return {t for t in tokens if t not in generic_suffixes}
 
 
 def forbidden_literals() -> list[str]:
@@ -205,7 +197,6 @@ def scan(paths: list[Path]) -> list[dict]:
     """Scan files for forbidden literals; return {"file", "line", "literal"}.
 
     Uses word-boundary matching for scenario IDs to avoid false positives.
-    Respects file-specific exceptions (documented in _FILE_EXCEPTIONS).
     """
     forbidden = forbidden_literals()
     results = []
@@ -227,15 +218,9 @@ def scan(paths: list[Path]) -> list[dict]:
             continue
 
         path_str = str(path)
-        exceptions = _FILE_EXCEPTIONS.get(path_str, {})
-
         lines = content.splitlines()
         for line_num, line in enumerate(lines, 1):
             for lit, (regex, use_regex) in patterns.items():
-                # Skip if literal is excepted for this file
-                if lit in exceptions:
-                    continue
-
                 if use_regex:
                     if regex.search(line):
                         results.append({"file": path_str, "line": line_num, "literal": lit})
