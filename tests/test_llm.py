@@ -864,6 +864,39 @@ def test_anthropic_path_never_throttles(monkeypatch):
     assert calls == []
 
 
+def test_gemini_network_error_retried_then_succeeds(monkeypatch):
+    """Ревью PR #9 🟡: таймаут/сетевой сбой httpx транзиентен так же, как
+    429/5xx — первая попытка падает ConnectError, вторая отвечает 200."""
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    calls = {"n": 0}
+
+    def flaky(model, body):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.ConnectError("boom")
+        return gemini_ok({"a": 7})
+
+    monkeypatch.setattr(llm, "_gemini_create", flaky)
+
+    assert llm.call("p", SCHEMA, "v1") == {"a": 7}
+    assert calls["n"] == 2
+
+
+def test_gemini_timeouts_exhaust_to_transient_error(monkeypatch):
+    """Все попытки в таймаут — GeminiTransientError, не голый httpx-эксепшн."""
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    def always_timeout(model, body):
+        raise httpx.ReadTimeout("slow")
+
+    monkeypatch.setattr(llm, "_gemini_create", always_timeout)
+
+    with pytest.raises(llm.GeminiTransientError):
+        llm.call("p", SCHEMA, "v1")
+
+
 @pytest.mark.llm
 def test_gemini_live_smoke():
     """Единственный живой вызов Gemini (не входит в make check — addopts

@@ -385,7 +385,15 @@ def _request_gemini(blocks: list, schema: dict, max_tokens: int, delay: float, a
         attempt_no = MAX_ATTEMPTS - attempts_left
         attempts_left -= 1
         _gemini_throttle()
-        resp = _gemini_create(GEMINI_MODEL, body)
+        try:
+            resp = _gemini_create(GEMINI_MODEL, body)
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            # Сетевой сбой/таймаут — транзиентен так же, как 429/5xx
+            # (у anthropic-ветки аналог сидит в RETRYABLE).
+            last = GeminiTransientError(f"gemini network: {exc!r}")
+            if attempts_left > 0:
+                time.sleep(delay * 2**attempt_no)
+            continue
         if resp.status_code in RETRYABLE_GEMINI_STATUS:
             last = GeminiTransientError(f"gemini {resp.status_code}: {_safe_error_text(resp)}")
             if attempts_left > 0:
