@@ -13,6 +13,7 @@ from pathlib import Path
 import solve
 from dsl import parse
 from ledger import extract_archive, find_inputs, load_ledger, rows_of
+from mutations import _isolated_solve_out
 from scindex import INDEX_VERSION, build_index
 from stages import artifact
 from templates import TEMPLATES, title_key
@@ -184,7 +185,8 @@ def test_extracted_inputs_failure_does_not_kill_main(monkeypatch):
         raise RuntimeError("искусственный сбой документного конвейера")
 
     monkeypatch.setattr(solve, "_extracted_inputs", boom)
-    answers = solve.main(PUBLIC_ZIP, facts_source="extracted")
+    with _isolated_solve_out(PUBLIC_ZIP):  # без подмены solve.OUT тест писал бы поверх боевого out/
+        answers = solve.main(PUBLIC_ZIP, facts_source="extracted")
     for sc, cells in answers.items():
         for clause, cell in cells.items():
             assert sorted(cell) == ["actual", "evidence_txn_id", "status"], f"{sc} {clause}: {cell}"

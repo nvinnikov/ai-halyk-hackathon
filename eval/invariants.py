@@ -22,6 +22,7 @@ sys.path.insert(0, "solution")
 import solve
 from dsl import Agg, walk
 from engine import prepare_rows, tokens
+from mutations import _isolated_solve_out
 from taxonomy import coverage_report
 
 _MARGIN_DEFAULT = 0.10
@@ -379,7 +380,8 @@ def main(archive, facts_source: str = "expected") -> int:
     archive = Path(archive)
     ds_hash, input_dir = solve.extract_archive(archive)
     wd = solve.workdir(ds_hash)
-    answers = solve.main(archive, facts_source=facts_source)
+    with _isolated_solve_out(archive):
+        answers = solve.main(archive, facts_source=facts_source)
     template = json.loads(solve.find_inputs(input_dir)["template"].read_text())
 
     for alarm in _collect_report_alarms(wd):

@@ -39,8 +39,35 @@ def assert_cell_valid(cell: dict, where: str) -> None:
     )
 
 
+def _snapshot(out_dir: Path) -> dict[str, bytes]:
+    if not out_dir.is_dir():
+        return {}
+    return {p.name: p.read_bytes() for p in sorted(out_dir.glob("*.json"))}
+
+
 @pytest.fixture(scope="module")
-def answers():
+def isolated_out(tmp_path_factory):
+    """solve.OUT биндится по имени при импорте (`from util import OUT` в
+    solve.py), поэтому без подмены каждый вызов solve.main в этом модуле
+    писал бы submission.json/run-report.json поверх РЕАЛЬНОГО out/ (тот же
+    приём изоляции, что в tests/test_faults.py и eval/mutations.py). Область
+    модульная — весь модуль гоняет один регрессионный гейт на общий каталог,
+    семантика проверок (скор, форма ячеек) не меняется, меняется только
+    место записи."""
+    real_out = Path("out")
+    before = _snapshot(real_out)
+    prev = solve.OUT
+    solve.OUT = tmp_path_factory.mktemp("out")
+    try:
+        yield solve.OUT
+    finally:
+        solve.OUT = prev
+        after = _snapshot(real_out)
+        assert before == after, "тест задел РЕАЛЬНЫЙ out/ — изоляция solve.OUT не сработала"
+
+
+@pytest.fixture(scope="module")
+def answers(isolated_out):
     return solve.main(PUBLIC_ZIP, facts_source="expected")
 
 
@@ -50,7 +77,7 @@ def test_score_not_below_baseline(answers):
     assert total <= MAX_SCORE + 1e-9, f"скор выше потолка: {total:.2f} > {MAX_SCORE:.2f} — подгонка?"
 
 
-def test_hash_printed_first(capsys):
+def test_hash_printed_first(capsys, isolated_out):
     solve.main(PUBLIC_ZIP, facts_source="expected")
     first = capsys.readouterr().out.splitlines()[0]
     assert first.startswith("dataset_hash: ")
@@ -63,8 +90,8 @@ def test_template_cells_have_expected_fields():
             assert sorted(cell) == list(CELL_FIELDS), f"шаблон {sc} {clause}: поля {sorted(cell)}"
 
 
-def test_submission_file_matches_template(answers):
-    sub = json.loads(Path("out/submission.json").read_text())
+def test_submission_file_matches_template(answers, isolated_out):
+    sub = json.loads((isolated_out / "submission.json").read_text())
     assert sorted(sub["answers"]) == sorted(TEMPLATE["answers"])
     for sc, cells in sub["answers"].items():
         assert sorted(cells) == sorted(TEMPLATE["answers"][sc])
@@ -72,7 +99,7 @@ def test_submission_file_matches_template(answers):
             assert_cell_valid(cell, f"{sc} {clause}")
 
 
-def test_cell_failure_does_not_kill_run(monkeypatch):
+def test_cell_failure_does_not_kill_run(monkeypatch, isolated_out):
     """Сломанное вычисление не убивает прогон: ячейка приходит по лестнице,
     и прочитанный порог не выбрасывается (5.7) — actual равен порогу спеки,
     а не медиане и не 1.0."""
@@ -93,7 +120,7 @@ def test_cell_failure_does_not_kill_run(monkeypatch):
             assert cell["actual"] == float(Decimal(str(SPECS[sc][clause][2])))
 
 
-def test_diagnostics_failure_does_not_kill_run(monkeypatch):
+def test_diagnostics_failure_does_not_kill_run(monkeypatch, isolated_out):
     """Диагностика (borrower-трейс, sign_divergence) — не расчёт: её падение
     не должно ни убивать прогон, ни отбрасывать уже посчитанную ячейку.
     После задачи 24 категории приходят от LLM, и expand() внутри
@@ -109,7 +136,7 @@ def test_diagnostics_failure_does_not_kill_run(monkeypatch):
     assert total >= BASELINE  # ячейки посчитаны, диагностика потеряна — не наоборот
 
 
-def test_unknown_scenario_facts_do_not_kill_run(monkeypatch):
+def test_unknown_scenario_facts_do_not_kill_run(monkeypatch, isolated_out):
     """Сценарий без фактов в эталоне (приватный набор): расчёт идёт по строкам
     без документальных решений, остальные сценарии не страдают."""
     victim = sorted(TEMPLATE["answers"])[0]
@@ -121,7 +148,7 @@ def test_unknown_scenario_facts_do_not_kill_run(monkeypatch):
     assert any(cell["evidence_txn_id"] is not None for cell in answers[other].values())
 
 
-def test_scenario_load_failure_does_not_kill_run(monkeypatch):
+def test_scenario_load_failure_does_not_kill_run(monkeypatch, isolated_out):
     """Падение загрузки сценария не убивает прогон: его три ячейки остаются
     скелетом, остальные сценарии считаются."""
     victim = sorted(TEMPLATE["answers"])[0]
@@ -192,16 +219,16 @@ def test_submission_meta_model_name_overrides_gemini_default(monkeypatch):
     assert meta["model"] == "custom-model"
 
 
-def test_submission_written_to_out(answers):
-    sub = json.loads(Path("out/submission.json").read_text())
+def test_submission_written_to_out(answers, isolated_out):
+    sub = json.loads((isolated_out / "submission.json").read_text())
     assert set(sub) == {"team", "contact_email", "model", "answers"}
 
 
-def test_run_report_written_with_expected_fields(answers):
+def test_run_report_written_with_expected_fields(answers, isolated_out):
     from ledger import extract_archive
 
     ds_hash, _ = extract_archive(PUBLIC_ZIP)
-    report = json.loads(Path("out/run-report.json").read_text())
+    report = json.loads((isolated_out / "run-report.json").read_text())
     assert report["dataset_hash"] == ds_hash
     assert len(report["archive_sha256"]) == 64  # полный sha256, не усечённый dataset_hash
     assert report["model"]
@@ -235,7 +262,7 @@ def test_alarm_counts_include_facts_and_specs_stage_alarms(tmp_path):
     assert counts.get("specs_extraction_failed") == 1
 
 
-def test_run_report_failure_does_not_kill_run(monkeypatch):
+def test_run_report_failure_does_not_kill_run(monkeypatch, isolated_out):
     """Диагностика: падение сборки run-report не должно стоить ни одной ячейки."""
 
     def boom(*a, **k):
