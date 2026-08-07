@@ -584,8 +584,7 @@ def _git_sha() -> str | None:
 
 
 def _build_run_report(archive: Path, ds_hash: str, wd: Path, duration_s: float) -> dict:
-    provider = os.environ.get("LLM_PROVIDER", "anthropic")
-    model = llm.GEMINI_MODEL if provider == "gemini" else llm.MODEL
+    model = llm.GEMINI_MODEL if llm._provider() == "gemini" else llm.MODEL
     return {
         "dataset_hash": ds_hash,
         "archive_sha256": hashlib.sha256(Path(archive).read_bytes()).hexdigest(),
