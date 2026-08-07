@@ -349,7 +349,12 @@ def _extracted_inputs(
             continue
         try:
             facts = extract_facts(wd, dossiers[acc])
-            spec_art = extract_specs(wd, dossiers[acc], set(facts["doc_facts"]))
+            # fact_keys для валидации спек — от УЖЕ обогащённых фактов
+            # (ревью PR #9, 4-я волна): производные ключи считает код в
+            # _with_doc_facts, и спека с doc(<производный ключ>) обязана
+            # видеть его существующим — иначе она неисправимо невалидна,
+            # а резолв запрещён (_DERIVED_DOC_KEYS: LLM не делает арифметику).
+            spec_art = extract_specs(wd, dossiers[acc], set(_with_doc_facts(facts)["doc_facts"]))
             for _cl, sp in sorted(spec_art["clauses"].items()):
                 for key in sp.get("missing_doc_keys", []):
                     if key in _DERIVED_DOC_KEYS:
@@ -364,7 +369,7 @@ def _extracted_inputs(
             # Перепроверка с пополненными doc_facts: extract_specs гоняет
             # _check при каждом чтении (задача 23), повторного похода к
             # модели не требует.
-            spec_art = extract_specs(wd, dossiers[acc], set(facts["doc_facts"]))
+            spec_art = extract_specs(wd, dossiers[acc], set(_with_doc_facts(facts)["doc_facts"]))
             facts_by_sc[sc] = _with_doc_facts(facts)
             specs_by_sc[sc] = spec_art
         except Exception as exc:
@@ -768,6 +773,11 @@ def main(
             )
             for clause in unmatched:
                 print(f"ALARM clause_unmatched {scenario} {clause}", flush=True)
+            for t_cl, e_cl in sorted(clause_map.items()):
+                if t_cl != e_cl:
+                    # Суффикс-доматч — не тишина (ревью PR #9, 4-я волна):
+                    # подмена номера пункта видима оператору и в трейсе ячейки.
+                    print(f"ALARM clause_remapped {scenario}: {t_cl} -> {e_cl}", flush=True)
         try:
             # Внутри try: даже единственная точка чтения фактов не имеет права
             # уронить цикл — сценарий уйдёт лестницей, остальные посчитаются.
@@ -821,6 +831,8 @@ def main(
                 except Exception as exc:
                     cellspec_or_error = exc
                 cell, trace = run_cell(scenario, clause, raw, facts, cellspec_or_error, computed, quote=quote)
+                if clause_map.get(clause, clause) != clause:
+                    trace["extracted_clause"] = clause_map[clause]  # суффикс-доматч виден в трейсе
                 if trace.get("tier") != 0:
                     print(
                         f"ALARM cell_fallback {scenario} {clause}: tier={trace.get('tier')}",

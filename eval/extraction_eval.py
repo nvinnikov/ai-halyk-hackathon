@@ -14,6 +14,7 @@ sys.path.insert(0, "eval")
 
 from expected_extraction import FACTS, SPECS
 
+import solve
 from engine import tokens
 
 
@@ -247,9 +248,10 @@ def main(archive: Path, wd: Path | None = None) -> int:
     for sc in sorted(FACTS):
         acc = index["scenario_to_account"].get(sc)
         facts = json.loads((wd / "facts" / f"{acc}.json").read_text())
-        # Читаем dossier и вызываем extract_specs как solve
+        # Читаем dossier и вызываем extract_specs как solve: fact_keys — от
+        # обогащённых фактов, производные ключи видимы (ревью PR #9, 4-я волна)
         dossier = json.loads((wd / "dossier" / f"{acc}.json").read_text())
-        spec_art = extract_specs(wd, dossier, set(facts.get("doc_facts", {})))
+        spec_art = extract_specs(wd, dossier, set(solve._with_doc_facts(facts)["doc_facts"]))
         specs = spec_art.get("clauses", {})
 
         df, ds = diff_facts(facts, FACTS[sc]), diff_specs(specs, SPECS[sc])

@@ -290,7 +290,9 @@ def _referenced_categories(scenario: str, facts_source: str = "expected", wd: Pa
             acc = index["scenario_to_account"].get(scenario)
             dossier = json.loads((wd / "dossier" / f"{acc}.json").read_text())
             facts = json.loads((wd / "facts" / f"{acc}.json").read_text())
-            spec_art = extract_specs(wd, dossier, set(facts.get("doc_facts", {})))
+            # fact_keys — от обогащённых фактов: производные ключи видимы спекам
+            # (та же дисциплина, что в solve._extracted_inputs; ревью PR #9, 4-я волна).
+            spec_art = extract_specs(wd, dossier, set(solve._with_doc_facts(facts)["doc_facts"]))
             for _cl, sp in sorted(spec_art["clauses"].items()):
                 cs_or_error, _q = solve._extracted_cellspec(sp, _cl, scenario)
                 if isinstance(cs_or_error, dict):
