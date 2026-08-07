@@ -6,6 +6,8 @@
 
 import csv
 import json
+import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,7 @@ from mutations_ledger import (
 
 from categorize import categorize
 from ledger import find_inputs
+from public_archive import pack_dataset
 from templates import TEMPLATES
 
 DATASET = Path("dataset/agentic-bank-public")
@@ -139,6 +142,24 @@ def test_archive_builds_and_differs(tmp_path):
     z = build_mutated_archive(tmp_path / "mutated.zip")
     assert z.exists() and z.stat().st_size > 0
     assert z.read_bytes() != PUBLIC_ZIP.read_bytes()
+
+
+def test_archive_bytes_do_not_depend_on_mtime(tmp_path):
+    """Одинаковое содержимое — одинаковые байты, а значит один dataset_hash.
+
+    zf.write() брал бы время из mtime файла: mutate_ledger переписывает CSV
+    каждый вызов, а git clone ставит mtime всем файлам в момент клонирования.
+    Архив плыл бы и между прогонами, и между чекаутами, заводя новый work/ на
+    каждый — мутированный прогон никогда не был бы тёплым."""
+    src = tmp_path / "src" / DATASET.name
+    shutil.copytree(DATASET, src)
+    first = pack_dataset(src, tmp_path / "a.zip").read_bytes()
+    for p in sorted(src.rglob("*")):
+        if p.is_file():
+            st = p.stat()
+            os.utime(p, (st.st_atime, st.st_mtime + 86_400))
+    second = pack_dataset(src, tmp_path / "b.zip").read_bytes()
+    assert first == second, "байты архива зависят от mtime — dataset_hash поплывёт"
 
 
 GT = json.loads(Path("dataset/agentic-bank-public/ground_truth.json").read_text())["scenarios"]
