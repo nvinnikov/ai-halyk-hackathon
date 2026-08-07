@@ -66,6 +66,8 @@ def isolated_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(llm, "_budget", {"spent_usd": 0.0, "ceiling_usd": 10.0})
     monkeypatch.delenv("LLM_OFFLINE", raising=False)
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("GEMINI_MIN_INTERVAL_MS", raising=False)
+    monkeypatch.setattr(llm, "_gemini_next_allowed", 0.0)
 
 
 def test_cache_key_depends_on_all_parts():
@@ -369,6 +371,53 @@ def test_gemini_does_not_unwrap_multi_key_dict_named_emit(monkeypatch):
         llm.call("p", SCHEMA, "v1")
 
 
+def test_gemini_validates_before_unwrapping_emit(monkeypatch):
+    """Validate-first (ревью, Important 1): если ответ уже проходит схему КАК
+    ЕСТЬ — в т.ч. случайно совпав по форме с emit-обёрткой, потому что у
+    схемы легитимно есть поле "emit" — разворот не применяется вовсе."""
+    schema_with_emit_field = {
+        "type": "object",
+        "properties": {"emit": {"type": "object"}},
+        "required": ["emit"],
+    }
+
+    def fake_gemini_create(model, body):
+        return gemini_ok({"emit": {"a": 1}})
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    assert llm.call("p", schema_with_emit_field, "v1") == {"emit": {"a": 1}}
+
+
+def test_gemini_unwrap_failure_raises_original_error_not_wrapper_error(monkeypatch):
+    """Невалидный ответ без обёртки → SchemaRejected с ОРИГИНАЛЬНОЙ ошибкой
+    прямой валидации, а не с ошибкой попытки разворота."""
+
+    def fake_gemini_create(model, body):
+        return gemini_ok({"wrong": True})
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    with pytest.raises(llm.SchemaRejected) as exc_info:
+        llm.call("p", SCHEMA, "v1")
+    assert "'a' is a required property" in str(exc_info.value)
+
+
+def test_gemini_anthropic_provider_never_unwraps_emit(monkeypatch):
+    """Разворот — исключительно gemini-квирк; на anthropic-пути (даже если
+    бы туда как-то попал такой ответ) поведение не должно меняться."""
+
+    def fake_create(**kw):
+        return FakeResp({"emit": {"a": 4}})
+
+    monkeypatch.setattr(llm, "_create", fake_create)
+
+    with pytest.raises(llm.SchemaRejected):
+        llm.call("p", SCHEMA, "v1")
+
+
 def test_gemini_response_skips_thought_parts(monkeypatch):
     def fake_gemini_create(model, body):
         return gemini_ok({"a": 7}, extra_parts=[{"text": "рассуждение...", "thought": True}])
@@ -404,7 +453,7 @@ def test_gemini_retries_exhausted_raises(monkeypatch):
     monkeypatch.setattr(llm.time, "sleep", lambda s: None)
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(llm.GeminiTransientError):
         llm.call("p", SCHEMA, "v1")
 
 
@@ -421,6 +470,38 @@ def test_gemini_retry_delay_reads_retry_delay_from_body():
 def test_gemini_retry_delay_falls_back_when_absent():
     resp = gemini_response(429, {})
     assert llm._gemini_retry_delay(resp, fallback=5.5) == 5.5
+
+
+def test_safe_error_text_redacts_api_key_and_truncates(monkeypatch):
+    """Minor (ревью): если Google эхом вернёт заголовки запроса (в т.ч.
+    X-goog-api-key) в теле ошибки, ключ не должен попасть в сообщение
+    исключения — сообщение может улететь в лог/трейс."""
+    monkeypatch.setenv("GEMINI_API_KEY", "secret-key-abc")
+    body = {"error": {"message": "X-goog-api-key: secret-key-abc" + "x" * 600}}
+    resp = gemini_response(403, body)
+
+    text = llm._safe_error_text(resp, limit=500)
+
+    assert "secret-key-abc" not in text
+    assert len(text) <= 500
+
+
+def test_safe_error_text_redacts_key_straddling_truncation_boundary(monkeypatch):
+    """Редактируем ДО обрезки, не после: если бы порядок был обратный, ключ,
+    оказавшийся на границе limit, обрезался бы посередине — фрагмент ключа
+    остался бы в сообщении, потому что усечённый текст уже не совпадает с
+    ключом целиком для .replace()."""
+    monkeypatch.setenv("GEMINI_API_KEY", "secret-key-abc")
+    prefix = "x" * 495  # ключ (14 симв.) начинается за 5 символов до limit=500
+    raw = prefix + "secret-key-abc" + "y" * 50
+    req = httpx.Request("POST", "https://generativelanguage.googleapis.com/v1beta/models/x:generateContent")
+    resp = httpx.Response(403, text=raw, request=req)
+
+    text = llm._safe_error_text(resp, limit=500)
+
+    # даже фрагмент ключа не должен просочиться (маркер [REDACTED] сам может
+    # быть обрезан лимитом — это ожидаемо, важно отсутствие секрета).
+    assert "secre" not in text
 
 
 def test_gemini_max_tokens_retries_once_with_doubled_limit(monkeypatch):
@@ -541,6 +622,82 @@ def test_gemini_charges_budget_including_thoughts_tokens(monkeypatch):
 
     expected = 100 * llm.GEMINI_PRICE_IN + (10 + 20) * llm.GEMINI_PRICE_OUT
     assert llm._budget["spent_usd"] == pytest.approx(expected)
+
+
+# --- Rate-limiter gemini-ветки (ревью, Important 2) ---
+
+
+def _fake_clock(monkeypatch):
+    """Управляемые monotonic()/sleep() без реального ожидания: sleep(s)
+    просто продвигает часы на s, monotonic() читает их текущее значение."""
+    clock = {"t": 0.0}
+
+    def fake_monotonic():
+        return clock["t"]
+
+    def fake_sleep(s):
+        clock["t"] += s
+
+    monkeypatch.setattr(llm.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(llm.time, "sleep", fake_sleep)
+    return clock
+
+
+def test_gemini_throttle_disabled_by_default(monkeypatch):
+    clock = _fake_clock(monkeypatch)
+    llm._gemini_throttle()
+    llm._gemini_throttle()
+    assert clock["t"] == 0.0  # ни одного sleep — интервал выключен (дефолт 0)
+
+
+def test_gemini_throttle_enforces_min_interval(monkeypatch):
+    monkeypatch.setenv("GEMINI_MIN_INTERVAL_MS", "500")
+    clock = _fake_clock(monkeypatch)
+
+    llm._gemini_throttle()
+    assert clock["t"] == 0.0  # первый вызов — ждать некого
+
+    clock["t"] += 0.1  # прошло 100мс — меньше интервала в 500мс
+    llm._gemini_throttle()
+    assert clock["t"] == pytest.approx(0.5)  # sleep добрал оставшиеся 400мс
+
+
+def test_gemini_throttle_no_wait_if_interval_already_elapsed(monkeypatch):
+    monkeypatch.setenv("GEMINI_MIN_INTERVAL_MS", "500")
+    clock = _fake_clock(monkeypatch)
+
+    llm._gemini_throttle()
+    clock["t"] += 1.0  # прошло больше интервала — ждать не нужно
+    llm._gemini_throttle()
+    assert clock["t"] == pytest.approx(1.0)  # часы не сдвинуты sleep'ом
+
+
+def test_gemini_request_throttles_before_each_network_attempt(monkeypatch):
+    calls = []
+
+    def fake_throttle():
+        calls.append("throttle")
+
+    def fake_gemini_create(model, body):
+        calls.append("create")
+        return gemini_ok({"a": 1})
+
+    monkeypatch.setattr(llm, "_gemini_throttle", fake_throttle)
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    llm.call("p", SCHEMA, "v1")
+    assert calls == ["throttle", "create"]
+
+
+def test_anthropic_path_never_throttles(monkeypatch):
+    """anthropic-ветку не трогаем (условие фикса) — _gemini_throttle не вызывается."""
+    calls = []
+    monkeypatch.setattr(llm, "_gemini_throttle", lambda: calls.append(1))
+    monkeypatch.setattr(llm, "_create", lambda **kw: FakeResp({"a": 1}))
+
+    assert llm.call("p", SCHEMA, "v1") == {"a": 1}
+    assert calls == []
 
 
 @pytest.mark.llm

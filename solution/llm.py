@@ -70,6 +70,9 @@ _budget = {"spent_usd": 0.0, "ceiling_usd": float(os.environ.get("LLM_BUDGET_USD
 _budget_lock = threading.Lock()
 _client: anthropic.Anthropic | None = None
 _gemini_client: httpx.Client | None = None
+_gemini_rate_lock = threading.Lock()
+# time.monotonic() следующего разрешённого запроса — см. _gemini_throttle().
+_gemini_next_allowed = 0.0
 
 
 def _provider() -> str:
@@ -86,6 +89,10 @@ class SchemaRejected(Exception):
 
 class CassetteMiss(Exception):
     """LLM_OFFLINE=1, а ни кассета, ни work-кэш не содержат этот ключ."""
+
+
+class GeminiTransientError(Exception):
+    """429/5xx у gemini после исчерпания ретраев (аналог RETRYABLE у anthropic)."""
 
 
 def budget_state() -> dict:
@@ -179,6 +186,46 @@ def _request(blocks: list, schema: dict, max_tokens: int, delay: float, attempts
         return resp, attempts_left
     assert last is not None
     raise last
+
+
+def _gemini_throttle() -> None:
+    """Глобальный (на весь процесс) минимальный интервал между запросами к
+    Gemini — GEMINI_MIN_INTERVAL_MS (мс), дефолт 0 = выключено, поведение как
+    раньше.
+
+    Зачем: фаза роутинга документов (build_dossiers) бьёт по gemini несколькими
+    потоками разом (ThreadPoolExecutor SOLVE_WORKERS=4, до 2 вызовов на
+    документ) без координации между собой; на бесплатном тарифе (~10-15 RPM)
+    это может синхронно исчерпать ретраи (MAX_ATTEMPTS=4 — независимый бюджет
+    у каждого потока) — документы уйдут в карантин routing_failed без
+    диагностики. Включать явно перед боевым gemini-прогоном.
+    """
+    interval = float(os.environ.get("GEMINI_MIN_INTERVAL_MS", "0")) / 1000.0
+    if interval <= 0:
+        return
+    global _gemini_next_allowed
+    with _gemini_rate_lock:
+        now = time.monotonic()
+        wait = _gemini_next_allowed - now
+        if wait > 0:
+            time.sleep(wait)
+            now = _gemini_next_allowed
+        _gemini_next_allowed = now + interval
+
+
+def _safe_error_text(resp: httpx.Response, limit: int = 500) -> str:
+    """Текст ошибки для сообщения исключения: без значения GEMINI_API_KEY (на
+    случай, если Google вернёт заголовки запроса эхом) и обрезан.
+
+    Редактируем ДО обрезки: если бы обрезали сначала, ключ, оказавшийся на
+    границе limit, мог бы попасть в сообщение частично — редактирование по
+    точному совпадению его уже не поймало бы.
+    """
+    text = resp.text
+    key = os.environ.get("GEMINI_API_KEY")
+    if key:
+        text = text.replace(key, "[REDACTED]")
+    return text[:limit]
 
 
 def _gemini_create(model: str, body: dict) -> httpx.Response:
@@ -285,15 +332,16 @@ def _request_gemini(blocks: list, max_tokens: int, delay: float, attempts_left: 
     while attempts_left > 0:
         attempt_no = MAX_ATTEMPTS - attempts_left
         attempts_left -= 1
+        _gemini_throttle()
         resp = _gemini_create(GEMINI_MODEL, body)
         if resp.status_code in RETRYABLE_GEMINI_STATUS:
-            last = RuntimeError(f"gemini {resp.status_code}: {resp.text}")
+            last = GeminiTransientError(f"gemini {resp.status_code}: {_safe_error_text(resp)}")
             if attempts_left > 0:
                 time.sleep(_gemini_retry_delay(resp, delay * 2**attempt_no))
             continue
         if resp.status_code >= 400:
             # Не транзиентная ошибка (400/401/403/404 и т.п.) — ретрай не чинит.
-            raise SchemaRejected(f"gemini {resp.status_code}: {resp.text}")
+            raise SchemaRejected(f"gemini {resp.status_code}: {_safe_error_text(resp)}")
 
         data = resp.json()
         candidates = data.get("candidates") or []
@@ -319,15 +367,9 @@ def _request_gemini(blocks: list, max_tokens: int, delay: float, attempts_left: 
             result = json.loads("".join(text_parts))
         except json.JSONDecodeError as exc:
             raise SchemaRejected(f"gemini вернул невалидный JSON: {exc}") from exc
-        if isinstance(result, dict) and list(result.keys()) == ["emit"] and isinstance(result["emit"], dict):
-            # Часть промптов пишет «верни результат через emit» — артефакт
-            # anthropic-конвенции принудительного tool-calling (см. _request
-            # выше, tool_choice={"name": "emit"}). Промпты не трогаем (условие
-            # задачи), а у gemini без настоящего tool это буквально читается
-            # как «заверни ответ в объект с ключом emit» — разворачиваем.
-            # Живым smoke-вызовом (см. test_gemini_live_smoke) воспроизведено:
-            # {"answer": 4} пришёл как {"emit": {"answer": 4}}.
-            result = result["emit"]
+        # «emit»-обёртку (см. call()) здесь не разворачиваем: решение "похоже
+        # на обёртку или легитимный ответ" зависит от схемы, а схема сюда не
+        # передаётся — разворот только после провала прямой валидации, в call().
         return _GeminiResp("tool_use", result), attempts_left
     assert last is not None
     raise last
@@ -398,7 +440,25 @@ def call(
     try:
         jsonschema.validate(result, schema)
     except jsonschema.ValidationError as exc:
-        raise SchemaRejected(str(exc)) from exc
+        # «emit»-обёртка: часть промптов пишет «верни результат через emit» —
+        # артефакт anthropic-конвенции принудительного tool-calling (см.
+        # tool_choice={"name": "emit"} в _request() выше). Промпты не трогаем
+        # (условие задачи), а у gemini без настоящего tool это читается
+        # буквально — модель заворачивает ответ в {"emit": {...}}. Живым
+        # smoke-вызовом (test_gemini_live_smoke) воспроизведено: {"answer": 4}
+        # пришёл как {"emit": {"answer": 4}}.
+        # Validate-first: разворачиваем ТОЛЬКО когда прямая валидация уже
+        # провалилась, и только если развёрнутое проходит схему — иначе
+        # наружу уходит оригинальная ошибка, а не ошибка по обёртке.
+        unwrapped = result["emit"] if isinstance(result, dict) and list(result.keys()) == ["emit"] else None
+        if provider == "gemini" and isinstance(unwrapped, dict):
+            try:
+                jsonschema.validate(unwrapped, schema)
+            except jsonschema.ValidationError:
+                raise SchemaRejected(str(exc)) from exc
+            result = unwrapped
+        else:
+            raise SchemaRejected(str(exc)) from exc
 
     CACHE.mkdir(parents=True, exist_ok=True)
     tmp = cache_path.with_name(f"{cache_path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
