@@ -145,6 +145,26 @@ def _limit_in_quote(limit: str, quote: str) -> bool:
     return any(form in quote or form in degrouped for form in _limit_forms(limit))
 
 
+def _heading_key_from_text(agreement_text: str, clause: str) -> str:
+    """Ключ заголовка пункта — из ТЕКСТА договора, не из цитаты модели.
+
+    Модель цитирует тело обязательства («Заёмщик обязуется...»), а заголовок
+    печатается в документе перед телом («Пункт N.M <Заголовок>. Заёмщик...»)
+    и в цитату не попадает — замер по публичному набору: 0/36 совпадений
+    title_key(quote) с TEMPLATE_HEADINGS против 36/36 у заголовка из текста.
+    Ищем строку заголовка по номеру пункта; не нашли (другая вёрстка на
+    приватном наборе) — вернём пустую строку, и вызывающий откатится на
+    прежний ключ из цитаты (матч тогда закроет резервная сигнатура).
+    """
+    if not agreement_text or not clause:
+        return ""
+    pattern = re.compile(
+        r"(?:Пункт|Статья|Article|Section|Clause)\s+" + re.escape(clause) + r"[\s.:—-]+([^.\n]{3,120})[.\n]"
+    )
+    m = pattern.search(agreement_text)
+    return title_key(m.group(1)) if m else ""
+
+
 def _check(sp: dict, fact_keys: set[str], agreement_text: str) -> tuple[dict, object | None]:
     out = {
         **sp,
@@ -153,7 +173,7 @@ def _check(sp: dict, fact_keys: set[str], agreement_text: str) -> tuple[dict, ob
         "template": None,
         "missing_doc_keys": [],
         "trigger_discarded": False,
-        "title_key": title_key(sp["quote"]),
+        "title_key": _heading_key_from_text(agreement_text, sp.get("clause", "")) or title_key(sp["quote"]),
     }
     try:
         node = parse(sp["metric"])

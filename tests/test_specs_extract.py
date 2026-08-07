@@ -172,3 +172,31 @@ def test_title_key_normalizes_heading_across_formatting(tmp_path, monkeypatch):
     key_a = art_a["clauses"]["6.1"]["title_key"]
     key_b = art_b["clauses"]["7.1"]["title_key"]
     assert key_a and key_a == key_b
+
+
+def test_title_key_taken_from_document_heading_not_quote(tmp_path, monkeypatch):
+    """Ревью PR #9 🟡: модель цитирует ТЕЛО пункта, заголовок остаётся в
+    документе перед телом — ключ обязан браться из текста договора по номеру
+    пункта (0/36 совпадений по цитате против 36/36 по заголовку на замере)."""
+    body = "Заёмщик обязуется не превышать лимит капитальных затрат."
+    doc_text = f"Пункт 6.1 Максимальная капитальная интенсивность. {body}"
+    monkeypatch.setattr(
+        specs_extract.llm, "call", lambda *a, **k: {"covenants": [covenant(clause="6.1", quote=body)]}
+    )
+    art = specs_extract.extract_specs(tmp_path, make_dossier(doc_text), set())
+    from templates import title_key
+
+    assert art["clauses"]["6.1"]["title_key"] == title_key("Максимальная капитальная интенсивность")
+
+
+def test_title_key_falls_back_to_quote_when_heading_absent(tmp_path, monkeypatch):
+    """Другая вёрстка договора (нет строки «Пункт N.M Заголовок.») — ключ
+    откатывается на прежний вариант из цитаты, матч закроет сигнатура."""
+    quote = "Заёмщик обязуется поддерживать коэффициент."
+    monkeypatch.setattr(
+        specs_extract.llm, "call", lambda *a, **k: {"covenants": [covenant(clause="6.1", quote=quote)]}
+    )
+    art = specs_extract.extract_specs(tmp_path, make_dossier(quote), set())
+    from templates import title_key
+
+    assert art["clauses"]["6.1"]["title_key"] == title_key(quote)
