@@ -192,6 +192,9 @@ def run_cell(
             "limit": str(cellspec["limit"]),
             "metric": cellspec.get("metric_text", ""),
         }
+        for alarm in cellspec.get("match_alarms", []):
+            trace.setdefault("match_alarms", []).append(alarm)
+            print(f"ALARM {alarm['kind']} {scenario} {clause}: {alarm}")
         try:
             status, res = evidence.compute(raw, facts, cellspec)
             ev_txn, ev_trace = evidence.find(raw, facts, cellspec, status)
@@ -384,6 +387,20 @@ def _metric_text_for(sp: dict, scenario: str, hide_templates: frozenset) -> str:
     return sp["metric"]
 
 
+def _category_divergence(extracted_text: str, template_text: str) -> tuple[list, list] | None:
+    """Наборы категорий двух метрик, если они различаются (иначе None).
+
+    Нужен для видимости риска heading-матча: заголовок пункта не всегда
+    кодирует категорию, а канонический DSL шаблона кодирует её жёстко.
+    """
+    try:
+        cats = lambda text: sorted({n.category for n in walk(parse(text)) if isinstance(n, Agg)})  # noqa: E731
+        a, b = cats(extracted_text), cats(template_text)
+    except DslError:
+        return None
+    return (a, b) if a != b else None
+
+
 def _extracted_cellspec(
     sp: dict | None, clause: str, scenario: str = "", hide_templates: frozenset = frozenset()
 ) -> tuple[object, str]:
@@ -411,6 +428,16 @@ def _extracted_cellspec(
             "limit": Decimal(sp["limit"]),
             "trigger_ast": parse(sp["trigger"]) if sp["trigger"] else None,
         }
+        # Заголовок не всегда кодирует категорию (ревью PR #9): если шаблон
+        # заменил извлечённый DSL на метрику с ДРУГИМ набором категорий,
+        # подмена остаётся (ruling: шаблон при матче исполняется), но обязана
+        # быть видимой — молча неверная ячейка на приватном наборе хуже шумной.
+        if metric_text != sp["metric"]:
+            div = _category_divergence(sp["metric"], metric_text)
+            if div:
+                cellspec["match_alarms"] = [
+                    {"kind": "heading_category_divergence", "extracted": div[0], "template": div[1]}
+                ]
         return cellspec, quote
     except (DslError, InvalidOperation, KeyError) as exc:
         return exc, quote
@@ -474,23 +501,58 @@ def _spec_only_fallback(
     return cell, trace
 
 
-def _write_borrower_trace(wd: Path, scenario: str, rows: list, clauses, facts_source: str) -> dict:
+def _write_borrower_trace(
+    wd: Path,
+    scenario: str,
+    rows: list,
+    clauses,
+    facts_source: str,
+    specs_by_sc: dict | None = None,
+    clause_map: dict[str, str] | None = None,
+    index: dict | None = None,
+) -> dict:
     """Пер-заёмщицкий трейс (раздел 6): категории всех строк и покрытие
     категоризации пишутся один раз на заёмщика, а не трижды по ячейкам.
-    Документы в expected-режиме пусты: факты пришли из эталона, не из PDF."""
+
+    В extracted-режиме referenced-категории берутся из ИЗВЛЕЧЁННЫХ спек
+    (ревью PR #9: на приватном наборе эталонных SPECS нет, и с ними
+    referenced был бы всегда пуст — эскалация coverage_report до critical
+    физически не срабатывала бы), документы — из досье. В expected-режиме
+    документы пусты: факты пришли из эталона, не из PDF."""
     referenced: set[str] = set()
     for clause in sorted(clauses):
         try:
-            cs = legacy_spec_to_cellspec(SPECS[scenario][clause])
+            if facts_source == "extracted":
+                sp = (
+                    specs_by_sc[scenario]["clauses"].get((clause_map or {}).get(clause, clause))
+                    if specs_by_sc
+                    else None
+                )
+                cs_or_error, _q = _extracted_cellspec(sp, clause, scenario)
+                if not isinstance(cs_or_error, dict):
+                    continue
+                cs = cs_or_error
+            else:
+                cs = legacy_spec_to_cellspec(SPECS[scenario][clause])
         except Exception:
             continue
         referenced |= {n.category for n in walk(cs["metric_ast"]) if isinstance(n, Agg)}
+    docs_used: list = []
+    docs_rejected: list = []
+    if facts_source == "extracted" and index is not None:
+        try:
+            acc = index["scenario_to_account"].get(scenario)
+            dossier = json.loads((wd / "dossier" / f"{acc}.json").read_text())
+            docs_used = sorted(d["file"] for d in dossier.get("docs", []))
+            docs_rejected = sorted(d.get("file", "") for d in dossier.get("docs_rejected", []))
+        except Exception:
+            pass  # диагностика: досье могло не собраться — трейс не падает
     cov = coverage_report(rows, referenced)
     payload = {
         "scenario": scenario,
         "facts_source": facts_source,
-        "docs_used": [],
-        "docs_rejected": [],
+        "docs_used": docs_used,
+        "docs_rejected": docs_rejected,
         "categories": {r["txn_id"]: r["cat"] for r in sorted(rows, key=lambda x: x["txn_id"])},
         "coverage": cov,
     }
@@ -693,7 +755,16 @@ def main(
             print(f"ALARM {alarm}", flush=True)
         # Диагностика — не расчёт: её падение не должно стоить ни одной ячейки.
         try:
-            cov = _write_borrower_trace(wd, scenario, rows, template["answers"][scenario], facts_source)
+            cov = _write_borrower_trace(
+                wd,
+                scenario,
+                rows,
+                template["answers"][scenario],
+                facts_source,
+                specs_by_sc,
+                clause_map,
+                index,
+            )
             if cov["alarm"] != "none":
                 share = f"{cov['other_share']:.4f}"
                 print(f"ALARM category_coverage {scenario}: {cov['alarm']} other_share={share}", flush=True)

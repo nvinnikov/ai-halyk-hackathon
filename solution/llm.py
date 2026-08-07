@@ -301,26 +301,40 @@ def _gemini_contents(blocks: list) -> list:
     return [{"role": "user", "parts": parts}]
 
 
+# Потолок на сон между gemini-ретраями: сервер на выжатой дневной квоте
+# присылает Retry-After в десятки минут — молча спать столько означает съесть
+# боевое окно; дольше потолка честнее исчерпать попытки и уйти в фолбэк
+# (ревью PR #9).
+GEMINI_MAX_RETRY_SLEEP = 60.0
+
+
 def _gemini_retry_delay(resp: httpx.Response, fallback: float) -> float:
-    """Retry-After заголовок или retryDelay из тела ошибки, иначе наш бэкоф."""
+    """Retry-After заголовок или retryDelay из тела ошибки, иначе наш бэкоф.
+
+    Итог всегда ограничен GEMINI_MAX_RETRY_SLEEP."""
+    delay = None
     header = resp.headers.get("Retry-After")
     if header:
         try:
-            return float(header)
+            delay = float(header)
         except ValueError:
             pass
-    try:
-        details = resp.json().get("error", {}).get("details", [])
-    except ValueError:
-        details = []
-    for d in details:
-        rd = d.get("retryDelay")
-        if isinstance(rd, str) and rd.endswith("s"):
-            try:
-                return float(rd[:-1])
-            except ValueError:
-                continue
-    return fallback
+    if delay is None:
+        try:
+            details = resp.json().get("error", {}).get("details", [])
+        except ValueError:
+            details = []
+        for d in details:
+            rd = d.get("retryDelay")
+            if isinstance(rd, str) and rd.endswith("s"):
+                try:
+                    delay = float(rd[:-1])
+                    break
+                except ValueError:
+                    continue
+    if delay is None:
+        delay = fallback
+    return min(delay, GEMINI_MAX_RETRY_SLEEP)
 
 
 def _charge_gemini(usage: dict) -> None:

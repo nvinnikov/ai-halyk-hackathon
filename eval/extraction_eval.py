@@ -194,6 +194,11 @@ def diff_specs(got_clauses: dict, want_specs: dict) -> list[str]:
             out.append(f"{cl}: пункт не извлечён")
             continue
 
+        # Спека, которую solve отвергнет (valid=False → лестница), — расхождение
+        # сама по себе: иначе eval показывал бы картину лучше реальной (ревью PR #9).
+        if not sp.get("valid", True):
+            out.append(f"{cl}: спека невалидна ({sp.get('errors') or sp.get('missing_doc_keys')})")
+
         # Проверяем direction
         if sp["direction"] != direction:
             out.append(f"{cl}: direction {sp['direction']} != {direction}")
