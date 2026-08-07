@@ -199,3 +199,24 @@ def test_extracted_inputs_failure_does_not_kill_main(monkeypatch):
             assert sorted(cell) == ["actual", "evidence_txn_id", "status"], f"{sc} {clause}: {cell}"
             assert cell["status"] in ("BREACH", "COMPLIANT")
             assert isinstance(cell["actual"], int | float)
+
+
+def test_specs_failure_keeps_extracted_facts(monkeypatch, tmp_path):
+    """Ревью PR #9 (7-я волна): падение стадии спек не обнуляет уже посчитанные
+    факты — fx_rates заёмщика остаются в донорском пуле."""
+    import facts_extract as fe
+
+    monkeypatch.setattr(solve, "find_inputs", lambda d: {"pdfs": []})
+    monkeypatch.setattr(solve, "build_dossiers", lambda wd, pdfs, index: {"ACC-X": {"account_id": "ACC-X"}})
+    good_facts = {**fe._empty_facts(), "fx_rates": [{"currency": "EUR", "usd_per_unit": "1.1"}]}
+    monkeypatch.setattr(solve, "extract_facts", lambda wd, d: dict(good_facts))
+
+    def boom(*a, **k):
+        raise RuntimeError("specs stage down")
+
+    monkeypatch.setattr(solve, "extract_specs", boom)
+    index = {"scenario_to_account": {"S1": "ACC-X"}}
+    facts_by_sc, specs_by_sc = solve._extracted_inputs(tmp_path, tmp_path, index, ["S1"])
+    assert facts_by_sc["S1"]["fx_rates"] == good_facts["fx_rates"]
+    assert specs_by_sc["S1"]["clauses"] == {}
+    assert specs_by_sc["S1"]["alarms"][0]["kind"] == "specs_failed"

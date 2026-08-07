@@ -357,6 +357,19 @@ def _extracted_inputs(
             continue
         try:
             facts = extract_facts(wd, dossiers[acc])
+        except Exception as exc:
+            print(f"ALARM extraction_failed {sc}: {exc!r}", flush=True)
+            facts_by_sc[sc] = _with_doc_facts(facts_extract._empty_facts())
+            specs_by_sc[sc] = {
+                "clauses": {},
+                "alarms": [{"kind": "extraction_failed", "scenario": sc, "error": repr(exc)}],
+            }
+            continue
+        # Спеки — отдельным fail-open (ревью PR #9, 7-я волна): их падение не
+        # имеет права обнулить уже посчитанные факты — иначе fx_rates заёмщика
+        # выпадают из донорского пула и строки в непокрытой валюте выбывают
+        # у ДРУГИХ заёмщиков.
+        try:
             # fact_keys для валидации спек — от УЖЕ обогащённых фактов
             # (ревью PR #9, 4-я волна): производные ключи считает код в
             # _with_doc_facts, и спека с doc(<производный ключ>) обязана
@@ -378,15 +391,14 @@ def _extracted_inputs(
             # _check при каждом чтении (задача 23), повторного похода к
             # модели не требует.
             spec_art = extract_specs(wd, dossiers[acc], set(_with_doc_facts(facts)["doc_facts"]))
-            facts_by_sc[sc] = _with_doc_facts(facts)
-            specs_by_sc[sc] = spec_art
         except Exception as exc:
-            print(f"ALARM extraction_failed {sc}: {exc!r}", flush=True)
-            facts_by_sc[sc] = _with_doc_facts(facts_extract._empty_facts())
-            specs_by_sc[sc] = {
+            print(f"ALARM specs_failed {sc}: {exc!r}", flush=True)
+            spec_art = {
                 "clauses": {},
-                "alarms": [{"kind": "extraction_failed", "scenario": sc, "error": repr(exc)}],
+                "alarms": [{"kind": "specs_failed", "scenario": sc, "error": repr(exc)}],
             }
+        facts_by_sc[sc] = _with_doc_facts(facts)
+        specs_by_sc[sc] = spec_art
     return facts_by_sc, specs_by_sc
 
 
