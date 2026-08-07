@@ -10,6 +10,16 @@ FINANCING фон пуст — генератор не выдаёт фоновы�
 Замены — подстрочные и упорядоченные: длинные фразы раньше коротких, иначе
 'servicing' съест 'servicing contract'. Список ревьюируется глазами, а его
 корректность проверяется кодом (tests/test_mutations_ledger.py).
+
+Замена обязана быть нейтральной: новое описание не содержит имени своей
+категории и его очевидных синонимов. Первая редакция словаря это правило
+нарушала — 'sales settlement' переписывалось в 'revenue recognised...',
+'Purchase of' в 'Capital acquisition of', — и замер отвечал на вопрос
+«узнаёт ли модель категорию, названную в тексте» вместо «обобщает ли она
+на незнакомую формулировку». Показательно, что единственная нейтральная
+замена той редакции ('equipment' -> 'machinery') и вскрыла настоящий
+дефект промпта, тогда как остальные проходили без единого промаха.
+Инвариант проверяется тестом test_replacements_are_neutral.
 """
 
 import csv
@@ -22,22 +32,33 @@ from public_archive import pack_dataset
 
 MUTATED_CATEGORIES = frozenset({"REVENUE", "CAPEX", "OTHER_OPEX", "CONSULTING", "FINANCING"})
 
+# Слова, выдающие категорию: их присутствие в новом описании превращает замер
+# в проверку словаря вместо проверки обобщения. 'tranche' и 'credit' — потому
+# что промпт описывает FINANCING как «кредитные транши», 'capital' — потому
+# что CAPEX и есть capital expenditure.
+CATEGORY_GIVEAWAYS = frozenset(
+    {"revenue", "sales", "capital", "capex", "consulting", "financing", "credit", "tranche"}
+)
+
 # Порядок значим: длинные фразы раньше коротких.
 REPLACEMENTS: list[tuple[str, str]] = [
-    ("dispute arbitration and legal servicing", "dispute resolution support"),
+    # 'legal' сохраняется намеренно: это существо операции, а не триггер
+    # правила. Замена обязана снимать формулировку, по которой срабатывает
+    # регулярка, но не смысл строки — иначе замер меряет угадывание.
+    ("dispute arbitration and legal servicing", "legal support for dispute resolution"),
     ("servicing and operating costs", "upkeep and running costs"),
     ("operating and maintenance expenses", "running and upkeep expenses"),
     ("cleaning and clearance works", "desilting works"),
     ("servicing contract", "upkeep contract"),
     ("remediation", "restoration"),
     ("servicing", "upkeep"),
-    ("sales settlement", "revenue recognised on customer contracts"),
-    ("Purchase of", "Capital acquisition of"),
+    ("sales settlement", "customer remittance against issued invoice"),
+    ("Purchase of", "Acquisition of"),
     ("equipment", "machinery"),
-    ("facility drawdown", "credit line disbursement"),
-    ("Advisory engagement on", "Consulting mandate for"),
-    ("Management advisory retainer", "Executive consulting arrangement"),
-    ("Management retainer fee", "Executive consulting charge"),
+    ("facility drawdown", "proceeds received"),
+    ("Advisory engagement on", "Expert review of"),
+    ("Management advisory retainer", "Standing expert support for management"),
+    ("Management retainer fee", "Fee for standing expert support"),
 ]
 
 

@@ -162,11 +162,18 @@ def _cell_traces() -> list[Path]:
     return sorted((workdir(dataset_hash(PUBLIC_ZIP)) / "trace").glob("*.*.json"))
 
 
-def test_other_unassigned_absent_on_public_set(answers):
+def test_other_unassigned_absent_on_public_set():
     """На публичном наборе OTHER пуст у всех целевых — алярма быть не должно.
 
     Тест держит границу: срабатывание здесь означает, что категоризация
-    поехала, а не что алярм неверен."""
+    поехала, а не что алярм неверен.
+
+    Прогон свой, а не из фикстуры `answers`: трейсы лежат на диске и хранят
+    результат последнего вызова solve.main, кем бы он ни был сделан. Соседний
+    test_diagnostics_failure_does_not_kill_run подменяет cell_other_alarm на
+    падающую заглушку — после него в трейсах ни одного other_unassigned, и
+    проверка прошла бы вакуумно. Кэш стадий делает свой вызов дешёвым."""
+    solve.main(PUBLIC_ZIP, facts_source="expected")
     traces = _cell_traces()
     assert traces, "трейсы ячеек не найдены — прогон не состоялся"
     with_alarm = [t.name for t in traces if json.loads(t.read_text()).get("other_unassigned") is not None]

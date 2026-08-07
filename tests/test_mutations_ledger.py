@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from mutations_ledger import (
+    CATEGORY_GIVEAWAYS,
     MUTATED_CATEGORIES,
     build_mutated_archive,
     mutate_description,
@@ -41,6 +42,21 @@ def test_every_mutated_description_blinds_the_rules(tmp_path):
     _, report = _mutated(tmp_path)
     survivors = {d: categorize(d) for d in report["origin"] if categorize(d) != "OTHER"}
     assert survivors == {}, f"правила всё ещё ловят: {survivors}"
+
+
+def test_replacements_are_neutral(tmp_path):
+    """Второй инвариант: новое описание не называет свою категорию.
+
+    Ослеплённая регулярка ещё не значит честный замер. Если синоним содержит
+    имя категории ('sales settlement' -> 'revenue recognised...'), тест меряет
+    словарь, а не обобщение, и снятый с него порог завышенно оптимистичен."""
+    _, report = _mutated(tmp_path)
+    leaks = {
+        d: sorted(w for w in CATEGORY_GIVEAWAYS if w in d.lower())
+        for d in report["origin"]
+        if any(w in d.lower() for w in CATEGORY_GIVEAWAYS)
+    }
+    assert leaks == {}, f"имя категории просочилось в описание: {leaks}"
 
 
 def test_all_five_categories_covered(tmp_path):
