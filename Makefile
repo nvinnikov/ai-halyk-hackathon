@@ -1,6 +1,6 @@
 # Все цели идут через `uv run` ради воспроизводимого окружения из uv.lock.
 # `check` — локальное зеркало CI-гейта.
-.PHONY: install public-archive solve score sanity lint typecheck test check
+.PHONY: install public-archive solve score sanity grep-gate lint typecheck test check
 
 install:
 	uv sync --extra dev
@@ -33,6 +33,12 @@ score: solve
 #   uv run python solution/sanity.py <архив> --write-baseline
 sanity: public-archive
 	uv run python solution/sanity.py $(ARCHIVE)
+
+# Секунда на прогон: ни одного имени, порога, номера пункта или префикса
+# TXN-/ACC- в solution/. Дублируется тестом test_grep_gate.py (то есть входит
+# в make check), отдельная цель — чтобы гонять её одну.
+grep-gate: install
+	uv run python eval/grep_gate.py
 
 lint: install
 	uv run ruff format --check .
