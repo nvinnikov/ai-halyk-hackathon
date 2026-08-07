@@ -43,12 +43,29 @@ def rate_limit_error(message="rate limited"):
     return anthropic.RateLimitError(message, response=resp, body=None)
 
 
+def gemini_response(status_code, body=None, headers=None):
+    req = httpx.Request("POST", "https://generativelanguage.googleapis.com/v1beta/models/x:generateContent")
+    return httpx.Response(status_code, json=body if body is not None else {}, headers=headers, request=req)
+
+
+def gemini_ok(result, finish_reason="STOP", extra_parts=None, prompt_tokens=10, output_tokens=5):
+    parts = [*(extra_parts or []), {"text": json.dumps(result)}]
+    return gemini_response(
+        200,
+        {
+            "candidates": [{"finishReason": finish_reason, "content": {"parts": parts}}],
+            "usageMetadata": {"promptTokenCount": prompt_tokens, "candidatesTokenCount": output_tokens},
+        },
+    )
+
+
 @pytest.fixture(autouse=True)
 def isolated_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(llm, "CACHE", tmp_path / "llm_cache")
     monkeypatch.setattr(llm, "CASSETTE", tmp_path / "cassette")
     monkeypatch.setattr(llm, "_budget", {"spent_usd": 0.0, "ceiling_usd": 10.0})
     monkeypatch.delenv("LLM_OFFLINE", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
 
 
 def test_cache_key_depends_on_all_parts():
@@ -253,3 +270,303 @@ def test_offline_with_cache_hit_does_not_raise(monkeypatch):
 
     monkeypatch.setenv("LLM_OFFLINE", "1")
     assert llm.call("p", SCHEMA, "v1") == {"a": 7}
+
+
+# --- Gemini-бэкенд (переключатель LLM_PROVIDER) ---
+
+
+def test_provider_defaults_to_anthropic():
+    assert llm._provider() == "anthropic"
+
+
+def test_provider_reads_env(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    assert llm._provider() == "gemini"
+
+
+def test_call_dispatches_to_gemini_when_selected(monkeypatch):
+    def fail_anthropic(**kw):
+        raise AssertionError("anthropic не должен вызываться при LLM_PROVIDER=gemini")
+
+    calls = []
+
+    def fake_gemini_create(model, body):
+        calls.append(model)
+        return gemini_ok({"a": 1})
+
+    monkeypatch.setattr(llm, "_create", fail_anthropic)
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    assert llm.call("p", SCHEMA, "v1") == {"a": 1}
+    assert calls == [llm.GEMINI_MODEL]
+
+
+def test_gemini_create_builds_url_and_api_key_header(monkeypatch):
+    calls = []
+
+    class FakeHttpxClient:
+        def post(self, url, json, headers):
+            calls.append({"url": url, "json": json, "headers": headers})
+            return gemini_ok({"a": 1})
+
+    monkeypatch.setattr(llm, "_gemini_client", FakeHttpxClient())
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-123")
+
+    llm._gemini_create(llm.GEMINI_MODEL, {"contents": []})
+
+    assert calls[0]["url"] == llm.GEMINI_URL.format(model=llm.GEMINI_MODEL)
+    assert calls[0]["headers"]["X-goog-api-key"] == "test-key-123"
+
+
+def test_gemini_body_has_response_mime_type_and_inline_pdf(monkeypatch):
+    captured = {}
+
+    def fake_gemini_create(model, body):
+        captured["model"] = model
+        captured["body"] = body
+        return gemini_ok({"a": 1})
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    llm.call("prompt text", SCHEMA, "v1", document_b64="QkFTRTY0")
+
+    assert captured["model"] == llm.GEMINI_MODEL
+    assert captured["body"]["generationConfig"]["responseMimeType"] == "application/json"
+    parts = captured["body"]["contents"][0]["parts"]
+    assert {"text": "prompt text"} in parts
+    inline = next(p["inline_data"] for p in parts if "inline_data" in p)
+    assert inline == {"mime_type": "application/pdf", "data": "QkFTRTY0"}
+
+
+def test_gemini_unwraps_emit_key_quirk(monkeypatch):
+    """Живым вызовом (test_gemini_live_smoke) воспроизведено: промпты,
+    написанные под anthropic tool-calling («верни результат через emit»),
+    без настоящего tool у gemini заставляют модель буквально завернуть ответ
+    в {"emit": {...}}. call() должен развернуть это прозрачно для потребителя."""
+
+    def fake_gemini_create(model, body):
+        return gemini_ok({"emit": {"a": 4}})
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    assert llm.call("верни результат через emit", SCHEMA, "v1") == {"a": 4}
+
+
+def test_gemini_does_not_unwrap_multi_key_dict_named_emit(monkeypatch):
+    """Разворачивается только объект вида {"emit": {...}} без соседей —
+    иначе легитимный ответ с полем emit молча потерял бы остальные ключи."""
+
+    def fake_gemini_create(model, body):
+        return gemini_ok({"emit": {"a": 4}, "other": 1})
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    with pytest.raises(llm.SchemaRejected):
+        llm.call("p", SCHEMA, "v1")
+
+
+def test_gemini_response_skips_thought_parts(monkeypatch):
+    def fake_gemini_create(model, body):
+        return gemini_ok({"a": 7}, extra_parts=[{"text": "рассуждение...", "thought": True}])
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    assert llm.call("p", SCHEMA, "v1") == {"a": 7}
+
+
+def test_gemini_retries_429_then_succeeds(monkeypatch):
+    calls = []
+
+    def fake_gemini_create(model, body):
+        calls.append(1)
+        if len(calls) < 3:
+            return gemini_response(429, {"error": {"message": "rate limited"}})
+        return gemini_ok({"a": 3})
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    assert llm.call("p", SCHEMA, "v1") == {"a": 3}
+    assert len(calls) == 3
+
+
+def test_gemini_retries_exhausted_raises(monkeypatch):
+    def fake_gemini_create(model, body):
+        return gemini_response(503, {})
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    with pytest.raises(RuntimeError):
+        llm.call("p", SCHEMA, "v1")
+
+
+def test_gemini_retry_delay_prefers_retry_after_header():
+    resp = gemini_response(429, {}, headers={"Retry-After": "7"})
+    assert llm._gemini_retry_delay(resp, fallback=99.0) == 7.0
+
+
+def test_gemini_retry_delay_reads_retry_delay_from_body():
+    resp = gemini_response(429, {"error": {"details": [{"retryDelay": "3s"}]}})
+    assert llm._gemini_retry_delay(resp, fallback=99.0) == 3.0
+
+
+def test_gemini_retry_delay_falls_back_when_absent():
+    resp = gemini_response(429, {})
+    assert llm._gemini_retry_delay(resp, fallback=5.5) == 5.5
+
+
+def test_gemini_max_tokens_retries_once_with_doubled_limit(monkeypatch):
+    calls = []
+
+    def fake_gemini_create(model, body):
+        calls.append(body["generationConfig"]["maxOutputTokens"])
+        if len(calls) == 1:
+            return gemini_response(
+                200,
+                {
+                    "candidates": [{"finishReason": "MAX_TOKENS", "content": {"parts": []}}],
+                    "usageMetadata": {},
+                },
+            )
+        return gemini_ok({"a": 1})
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    assert llm.call("p", SCHEMA, "v1", max_tokens=1000) == {"a": 1}
+    assert calls == [1000, 2000]
+
+
+def test_gemini_safety_finish_is_schema_rejected(monkeypatch):
+    def fake_gemini_create(model, body):
+        return gemini_response(
+            200,
+            {"candidates": [{"finishReason": "SAFETY", "content": {"parts": []}}], "usageMetadata": {}},
+        )
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    with pytest.raises(llm.SchemaRejected):
+        llm.call("p", SCHEMA, "v1")
+
+
+def test_gemini_invalid_json_is_schema_rejected_no_retry_no_cache(monkeypatch):
+    calls = []
+
+    def fake_gemini_create(model, body):
+        calls.append(1)
+        return gemini_response(
+            200,
+            {
+                "candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": "not json"}]}}],
+                "usageMetadata": {},
+            },
+        )
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    with pytest.raises(llm.SchemaRejected):
+        llm.call("p", SCHEMA, "v1")
+    assert len(calls) == 1
+    assert not list(llm.CACHE.glob("*.json"))
+
+
+def test_gemini_schema_mismatch_is_schema_rejected_no_retry_no_cache(monkeypatch):
+    calls = []
+
+    def fake_gemini_create(model, body):
+        calls.append(1)
+        return gemini_ok({"wrong": True})
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    with pytest.raises(llm.SchemaRejected):
+        llm.call("p", SCHEMA, "v1")
+    assert len(calls) == 1
+    assert not list(llm.CACHE.glob("*.json"))
+
+
+def test_cache_key_differs_by_provider_model():
+    k_anthropic = llm.cache_key(llm.MODEL, [{"type": "text", "text": "p"}], SCHEMA, "v1")
+    k_gemini = llm.cache_key(llm.GEMINI_MODEL, [{"type": "text", "text": "p"}], SCHEMA, "v1")
+    assert k_anthropic != k_gemini
+
+
+def test_call_uses_separate_cache_entries_per_provider(monkeypatch):
+    def fake_create(**kw):
+        return FakeResp({"a": 1})
+
+    def fake_gemini_create(model, body):
+        return gemini_ok({"a": 2})
+
+    monkeypatch.setattr(llm, "_create", fake_create)
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+
+    assert llm.call("p", SCHEMA, "v1") == {"a": 1}
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    assert llm.call("p", SCHEMA, "v1") == {"a": 2}
+
+    assert len(list(llm.CACHE.glob("*.json"))) == 2
+
+
+def test_gemini_charges_budget_including_thoughts_tokens(monkeypatch):
+    def fake_gemini_create(model, body):
+        return gemini_response(
+            200,
+            {
+                "candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": '{"a": 1}'}]}}],
+                "usageMetadata": {
+                    "promptTokenCount": 100,
+                    "candidatesTokenCount": 10,
+                    "thoughtsTokenCount": 20,
+                },
+            },
+        )
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    llm.call("p", SCHEMA, "v1")
+
+    expected = 100 * llm.GEMINI_PRICE_IN + (10 + 20) * llm.GEMINI_PRICE_OUT
+    assert llm._budget["spent_usd"] == pytest.approx(expected)
+
+
+@pytest.mark.llm
+def test_gemini_live_smoke():
+    """Единственный живой вызов Gemini (не входит в make check — addopts
+    исключает marker llm). Требует GEMINI_API_KEY в окружении."""
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "integer"}},
+        "required": ["answer"],
+        "additionalProperties": False,
+    }
+    import os
+
+    old = os.environ.get("LLM_PROVIDER")
+    os.environ["LLM_PROVIDER"] = "gemini"
+    try:
+        result = llm.call(
+            "Сколько будет 2+2? Верни результат через emit с целочисленным полем answer.",
+            schema,
+            "gemini-smoke-1",
+        )
+    finally:
+        if old is None:
+            os.environ.pop("LLM_PROVIDER", None)
+        else:
+            os.environ["LLM_PROVIDER"] = old
+    print("GEMINI SMOKE RESULT:", result)
+    assert result["answer"] == 4

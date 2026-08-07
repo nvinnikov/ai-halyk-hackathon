@@ -1,7 +1,14 @@
-"""Клиент Anthropic: content-addressed кэш, ретраи, потолок бюджета.
+"""Клиент LLM: content-addressed кэш, ретраи, потолок бюджета.
+
+Провайдер выбирается через env `LLM_PROVIDER` (`anthropic` | `gemini`,
+дефолт — `anthropic`, текущее поведение). Anthropic-ветка — основной путь,
+gemini-ветка — переключатель на случай исчерпанного баланса Anthropic;
+интерфейс `call()` для потребителей (route/facts_extract/specs_extract/
+categorize_llm/vision) не меняется вне зависимости от провайдера.
 
 Ключ кэша = sha256(model + prompt + json_schema + schema_version) — раздел 3
-спеки. Кэш общий между наборами, никогда не инвалидируется по времени; в кэш
+спеки. Модель — часть ключа, поэтому у gemini и anthropic кэш не пересекается.
+Кэш общий между наборами, никогда не инвалидируется по времени; в кэш
 попадает только успешный ответ, прошедший валидацию схемы. Джиттер backoff —
 из ключа кэша, а не из random(): иначе ломается воспроизводимость.
 
@@ -22,6 +29,7 @@ import threading
 import time
 
 import anthropic
+import httpx
 import jsonschema
 
 from util import ROOT, stable_json
@@ -47,9 +55,25 @@ RETRYABLE = (
     anthropic.APIConnectionError,
 )
 
+# Пин конкретного id, не алиас (gemini-flash-latest дрейфует, а кэш ключуется
+# строкой модели — дрейф алиаса тихо разъехался бы с уже накопленным кэшем).
+GEMINI_MODEL = "gemini-3.6-flash"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+# Точный прайс 3.6-flash не опубликован на момент написания; ставим верхнюю
+# оценку по соседним Flash-моделям, округлённую вверх — бюджетный потолок
+# должен скорее сработать раньше, чем пропустить реальный перерасход.
+GEMINI_PRICE_IN, GEMINI_PRICE_OUT = 0.5e-6, 3e-6
+# 429 — норма для бесплатного тарифа Gemini, ретраим наравне с 5xx.
+RETRYABLE_GEMINI_STATUS = {429, 500, 502, 503, 504}
+
 _budget = {"spent_usd": 0.0, "ceiling_usd": float(os.environ.get("LLM_BUDGET_USD", "50"))}
 _budget_lock = threading.Lock()
 _client: anthropic.Anthropic | None = None
+_gemini_client: httpx.Client | None = None
+
+
+def _provider() -> str:
+    return os.environ.get("LLM_PROVIDER", "anthropic")
 
 
 class BudgetExhausted(Exception):
@@ -157,6 +181,158 @@ def _request(blocks: list, schema: dict, max_tokens: int, delay: float, attempts
     raise last
 
 
+def _gemini_create(model: str, body: dict) -> httpx.Response:
+    """Единственная точка HTTP-обращения к Gemini — подменяется в тестах."""
+    global _gemini_client
+    if _gemini_client is None:
+        _gemini_client = httpx.Client(timeout=120.0)
+    url = GEMINI_URL.format(model=model)
+    headers = {"X-goog-api-key": os.environ.get("GEMINI_API_KEY", "")}
+    return _gemini_client.post(url, json=body, headers=headers)
+
+
+def _gemini_contents(blocks: list) -> list:
+    """Blocks в формате anthropic (text/document) → gemini contents.parts.
+
+    Тот же blocks, что уходит в cache_key: формат промпта провайдер-нейтрален,
+    в gemini-представление переводится только здесь, на границе HTTP-запроса.
+    """
+    parts = []
+    for b in blocks:
+        if b["type"] == "text":
+            parts.append({"text": b["text"]})
+        elif b["type"] == "document":
+            parts.append(
+                {
+                    "inline_data": {
+                        "mime_type": b["source"]["media_type"],
+                        "data": b["source"]["data"],
+                    }
+                }
+            )
+    return [{"role": "user", "parts": parts}]
+
+
+def _gemini_retry_delay(resp: httpx.Response, fallback: float) -> float:
+    """Retry-After заголовок или retryDelay из тела ошибки, иначе наш бэкоф."""
+    header = resp.headers.get("Retry-After")
+    if header:
+        try:
+            return float(header)
+        except ValueError:
+            pass
+    try:
+        details = resp.json().get("error", {}).get("details", [])
+    except ValueError:
+        details = []
+    for d in details:
+        rd = d.get("retryDelay")
+        if isinstance(rd, str) and rd.endswith("s"):
+            try:
+                return float(rd[:-1])
+            except ValueError:
+                continue
+    return fallback
+
+
+def _charge_gemini(usage: dict) -> None:
+    # thoughtsTokenCount биллится как output — thinking у 3.6-flash не
+    # отключается флагом, только не конфигурируется явно (см. модуль-докстринг).
+    input_tokens = usage.get("promptTokenCount", 0)
+    output_tokens = usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0)
+    cost = input_tokens * GEMINI_PRICE_IN + output_tokens * GEMINI_PRICE_OUT
+    with _budget_lock:
+        _budget["spent_usd"] += cost
+
+
+class _GeminiBlock:
+    """Мимикрирует под anthropic tool_use-блок, чтобы call() читал content
+    одинаково для обоих провайдеров."""
+
+    type = "tool_use"
+
+    def __init__(self, data):
+        self.input = data
+
+
+class _GeminiResp:
+    """Нормализованный ответ gemini под тот же интерфейс, что call() ожидает
+    от anthropic Message: .stop_reason и .content с tool_use-блоками."""
+
+    def __init__(self, stop_reason: str, result: dict | None):
+        self.stop_reason = stop_reason
+        self.content = [_GeminiBlock(result)] if result is not None else []
+
+
+_GEMINI_FINISH_MAX_TOKENS = {"MAX_TOKENS"}
+# Любой не-STOP финиш вне MAX_TOKENS трактуем как отказ (SAFETY, RECITATION,
+# PROHIBITED_CONTENT, SPII, BLOCKLIST, OTHER и т.п. — список у gemini длиннее
+# наших случаев use, не перечисляем поимённо).
+_GEMINI_FINISH_OK = {"STOP", None}
+
+
+def _request_gemini(blocks: list, max_tokens: int, delay: float, attempts_left: int):
+    """Аналог _request для gemini: тот же общий бюджет попыток MAX_ATTEMPTS,
+    тот же экспоненциальный бэкоф на транзиентных ошибках (429/5xx)."""
+    body = {
+        "contents": _gemini_contents(blocks),
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "maxOutputTokens": max_tokens,
+        },
+    }
+    last: Exception | None = None
+    while attempts_left > 0:
+        attempt_no = MAX_ATTEMPTS - attempts_left
+        attempts_left -= 1
+        resp = _gemini_create(GEMINI_MODEL, body)
+        if resp.status_code in RETRYABLE_GEMINI_STATUS:
+            last = RuntimeError(f"gemini {resp.status_code}: {resp.text}")
+            if attempts_left > 0:
+                time.sleep(_gemini_retry_delay(resp, delay * 2**attempt_no))
+            continue
+        if resp.status_code >= 400:
+            # Не транзиентная ошибка (400/401/403/404 и т.п.) — ретрай не чинит.
+            raise SchemaRejected(f"gemini {resp.status_code}: {resp.text}")
+
+        data = resp.json()
+        candidates = data.get("candidates") or []
+        if not candidates:
+            # Заблокировано на входе (promptFeedback), кандидатов нет вовсе.
+            raise SchemaRejected(f"gemini не вернул candidates: {data.get('promptFeedback')}")
+        cand = candidates[0]
+        finish = cand.get("finishReason")
+        _charge_gemini(data.get("usageMetadata", {}))
+
+        if finish in _GEMINI_FINISH_MAX_TOKENS:
+            return _GeminiResp("max_tokens", None), attempts_left
+        if finish not in _GEMINI_FINISH_OK:
+            return _GeminiResp("refusal", None), attempts_left
+
+        parts = cand.get("content", {}).get("parts", [])
+        # thought-парты помечены полем thought=true (см. модуль-докстринг) —
+        # финальный ответ собираем только из остальных text-частей.
+        text_parts = [p["text"] for p in parts if p.get("text") and not p.get("thought")]
+        if not text_parts:
+            raise SchemaRejected("gemini не вернул текстовую часть ответа")
+        try:
+            result = json.loads("".join(text_parts))
+        except json.JSONDecodeError as exc:
+            raise SchemaRejected(f"gemini вернул невалидный JSON: {exc}") from exc
+        if isinstance(result, dict) and list(result.keys()) == ["emit"] and isinstance(result["emit"], dict):
+            # Часть промптов пишет «верни результат через emit» — артефакт
+            # anthropic-конвенции принудительного tool-calling (см. _request
+            # выше, tool_choice={"name": "emit"}). Промпты не трогаем (условие
+            # задачи), а у gemini без настоящего tool это буквально читается
+            # как «заверни ответ в объект с ключом emit» — разворачиваем.
+            # Живым smoke-вызовом (см. test_gemini_live_smoke) воспроизведено:
+            # {"answer": 4} пришёл как {"emit": {"answer": 4}}.
+            result = result["emit"]
+        return _GeminiResp("tool_use", result), attempts_left
+    assert last is not None
+    raise last
+
+
 def call(
     prompt: str,
     schema: dict,
@@ -164,8 +340,10 @@ def call(
     document_b64: str | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> dict:
+    provider = _provider()
     blocks = _build_blocks(prompt, document_b64)
-    key = cache_key(MODEL, blocks, schema, schema_version)
+    model = GEMINI_MODEL if provider == "gemini" else MODEL
+    key = cache_key(model, blocks, schema, schema_version)
 
     cassette_path = CASSETTE / f"{key}.json"
     if cassette_path.exists():
@@ -182,11 +360,22 @@ def call(
         if _budget["spent_usd"] >= _budget["ceiling_usd"]:
             raise BudgetExhausted(f"spent {_budget['spent_usd']:.2f} >= {_budget['ceiling_usd']:.2f} USD")
 
-    request_blocks = _with_cache_control(blocks)
     delay = 1.0 + int(key[:4], 16) / 65536  # детерминированный джиттер
 
+    # send(mt, attempts_left) — общая точка входа в сеть для обоих провайдеров;
+    # дальше call() читает resp.stop_reason/resp.content одинаково для обоих.
+    if provider == "gemini":
+
+        def send(mt, attempts_left):
+            return _request_gemini(blocks, mt, delay, attempts_left)
+    else:
+        request_blocks = _with_cache_control(blocks)
+
+        def send(mt, attempts_left):
+            return _request(request_blocks, schema, mt, delay, attempts_left)
+
     attempts_left = MAX_ATTEMPTS
-    resp, attempts_left = _request(request_blocks, schema, max_tokens, delay, attempts_left)
+    resp, attempts_left = send(max_tokens, attempts_left)
 
     # stop_reason проверяется до чтения контента: обрезанный/отказанный
     # ответ не должен тихо пройти как валидный результат.
@@ -198,7 +387,7 @@ def call(
             # исчерпан — тихо возвращать обрезанный JSON нельзя, а второй
             # сетевой вызов сверх MAX_ATTEMPTS запрещён спекой.
             raise SchemaRejected("ответ обрезан по max_tokens: попытки исчерпаны")
-        resp, attempts_left = _request(request_blocks, schema, max_tokens * 2, delay, attempts_left)
+        resp, attempts_left = send(max_tokens * 2, attempts_left)
         if resp.stop_reason == "max_tokens":
             raise SchemaRejected("ответ обрезан по max_tokens дважды подряд")
 
