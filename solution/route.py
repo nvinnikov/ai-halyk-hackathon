@@ -101,7 +101,8 @@ def first_page_text(wd: Path, pdf_path: Path) -> str:
 
 
 def _mentioned(acc: str, text: str) -> bool:
-    # Границы обязательны: подстрочный поиск нашёл бы ACC-111 внутри ACC-1112.
+    # Word boundaries required: substring search could falsely match identifier
+    # when searching for one that is a prefix of another (e.g., XXX-111 in XXX-1112).
     return re.search(rf"(?<![A-Za-z0-9]){re.escape(acc)}(?![A-Za-z0-9])", text) is not None
 
 

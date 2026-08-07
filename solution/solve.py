@@ -453,9 +453,9 @@ def _write_borrower_trace(wd: Path, scenario: str, rows: list, clauses, facts_so
 
 
 def _write_trace(wd: Path, scenario: str, clause: str, payload: dict) -> None:
-    # Имя файла «<сценарий>.<пункт>.json» потребители разбирают как
-    # stem.split(".", 1): сценарий точек не содержит, пункт («6.1») содержит.
-    # rsplit здесь неверен и молча даст пункт «1».
+    # Filename format <scenario>.<clause>.json: split by first dot only.
+    # Scenarios contain no dots; clauses (which include dot notation) must be
+    # split with split(".", 1) not rsplit to avoid losing the dot structure.
     d = wd / "trace"
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{scenario}.{clause}.json").write_text(stable_json(payload))
