@@ -12,7 +12,7 @@ DOSSIER = {
             "file": "memo.pdf",
             "doc_type": "treasury_memo",
             "date": "2025-02-01",
-            "text": "memo text записка пособия курс q q1 q2 qm консолидированный CapEx",
+            "text": "memo text записка пособия курс q q1 q2 qm консолидированный CapEx $9,450,000.00",
         },
     ],
     "docs_rejected": [],
@@ -188,11 +188,22 @@ def test_schema_failure_gives_empty_facts_with_alarm(tmp_path, monkeypatch):
 
 def test_resolve_doc_fact(tmp_path, monkeypatch):
     def fake_call(prompt, schema, schema_version, **kw):
-        return {"found": True, "value": "9450000.00", "quote": "консолидированный CapEx"}
+        return {"found": True, "value": "9450000.00", "quote": "консолидированный CapEx $9,450,000.00"}
 
     monkeypatch.setattr(facts_extract.llm, "call", fake_call)
     got = facts_extract.resolve_doc_fact(tmp_path, DOSSIER, "group_capex", "CapEx Группы")
-    assert got == {"value": "9450000.00", "quote": "консолидированный CapEx"}
+    assert got == {"value": "9450000.00", "quote": "консолидированный CapEx $9,450,000.00"}
+
+
+def test_resolve_doc_fact_number_must_be_in_quote(tmp_path, monkeypatch):
+    """Ревью PR #9 (3-я волна): число обязано присутствовать в верифицированной
+    цитате — как _limit_in_quote для порогов спек; иначе факт отбрасывается."""
+
+    def fake_call(prompt, schema, schema_version, **kw):
+        return {"found": True, "value": "9450000.00", "quote": "консолидированный CapEx"}
+
+    monkeypatch.setattr(facts_extract.llm, "call", fake_call)
+    assert facts_extract.resolve_doc_fact(tmp_path, DOSSIER, "group_capex2", "CapEx Группы") is None
 
 
 def test_unverified_quote_drops_fact_with_alarm(tmp_path, monkeypatch):

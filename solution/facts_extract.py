@@ -401,4 +401,12 @@ def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) ->
     combined = "\n".join(sanitize_document(d["text"]) for d in dossier_art["docs"])
     if not verify_quote(art["quote"], combined) or not _number_ok(art["value"]):
         return None  # непроверяемая цитата или мусорное число — факта нет
+    # Число обязано присутствовать в верифицированной цитате (ревью PR #9,
+    # 3-я волна): для порогов спек такая проверка есть (_limit_in_quote), а
+    # doc()-факт точно так же способен тихо перевернуть вердикт. Плоский
+    # импорт по месту: модули solution не пакет, цикла нет.
+    from specs_extract import _limit_in_quote
+
+    if not _limit_in_quote(str(art["value"]), art["quote"]):
+        return None  # число не из цитаты — факта нет
     return {"value": art["value"], "quote": art["quote"]}

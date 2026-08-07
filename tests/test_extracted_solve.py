@@ -45,12 +45,21 @@ def test_match_clauses_mixed_direct_and_suffix():
     assert unmatched == []
 
 
-def test_match_clauses_no_suffix_fallback_when_counts_differ():
-    # Число ячеек шаблона (3) не равно числу извлечённых пунктов (2) —
-    # доматч по суффиксу не пытается, непокрытые ячейки уходят в unmatched.
+def test_match_clauses_suffix_fallback_survives_extra_covenant():
+    # Ревью PR #9 (3-я волна): лишний извлечённый ковенант (промпт просит
+    # «найди ВСЕ») не выключает доматч — от ложного матча защищает
+    # однозначность суффикса, а не равенство счётчиков.
+    mapping, unmatched = solve._match_clauses(["6.1", "6.2", "6.3"], ["7.1", "7.2", "7.3", "9.5"])
+    assert mapping == {"6.1": "7.1", "6.2": "7.2", "6.3": "7.3"}
+    assert unmatched == []
+
+
+def test_match_clauses_missing_covenant_leaves_cell_unmatched():
+    # Извлечено меньше, чем ячеек: непокрытая ячейка уходит в unmatched
+    # (лестница), покрытые матчатся по однозначным суффиксам.
     mapping, unmatched = solve._match_clauses(["6.1", "6.2", "6.3"], ["7.1", "7.2"])
-    assert mapping == {}
-    assert sorted(unmatched) == ["6.1", "6.2", "6.3"]
+    assert mapping == {"6.1": "7.1", "6.2": "7.2"}
+    assert unmatched == ["6.3"]
 
 
 def test_match_clauses_ambiguous_suffix_stays_unmatched():

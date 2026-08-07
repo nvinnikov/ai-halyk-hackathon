@@ -78,6 +78,11 @@ def submission_meta() -> dict:
 # --- ядро на эталонных фактах (источник подменяется задачами 16/24) ----------
 
 
+# Ключи doc_facts, которые вычисляет код из сырых фактов досье (_with_doc_facts):
+# адресный резолв (resolve_doc_fact) их не трогает — LLM не делает арифметику.
+_DERIVED_DOC_KEYS = frozenset({"ebitda_addbacks_material_total"})
+
+
 def _with_doc_facts(facts: dict) -> dict:
     """doc_facts для doc()-метрик DSL: считается детерминированно из сырых
     фактов досье — арифметика (порог материальности, сумма добавок) остаётся
@@ -257,13 +262,33 @@ def _donor_rates(targets: list[str], scenario: str, facts_of) -> list[dict]:
     )
 
 
-def scenario_inputs(archive: Path, scenario: str) -> tuple[list[dict], dict]:
-    """Строки заёмщика после fx-конвертации + факты (пока эталонные), факты
-    уже пропущены через _with_doc_facts. Переиспользуется тестами и main-путём
-    через те же стадии; повторный вызов дёшев — стадии кэшируются в work/<hash>.
+def _extracted_facts_of(wd: Path, index: dict, scenario: str) -> dict:
+    """Извлечённые факты сценария из артефакта на диске (fail-open).
+
+    Read-only аналог _facts_of для extracted-режима: артефакты facts/<ACC>
+    уже построены прогоном solve.main, LLM не зовётся. Нет артефакта или
+    счёта — пустые факты: инвариант честнее посчитать по строкам без
+    документальных решений, чем на эталоне, которого 9 августа не будет."""
+    acc = index["scenario_to_account"].get(scenario)
+    try:
+        raw_facts = json.loads((wd / "facts" / f"{acc}.json").read_text())
+    except Exception:
+        print(f"ALARM facts_missing {scenario}: расчёт без фактов досье", flush=True)
+        raw_facts = facts_extract._empty_facts()
+    return _with_doc_facts(raw_facts)
+
+
+def scenario_inputs(archive: Path, scenario: str, facts_source: str = "expected") -> tuple[list[dict], dict]:
+    """Строки заёмщика после fx-конвертации + факты, факты уже пропущены
+    через _with_doc_facts. Источник фактов задаёт facts_source: "expected" —
+    эталон, "extracted" — артефакты документного конвейера с диска (ревью
+    PR #9, 3-я волна: пер-заёмщицкие инварианты на приватном наборе обязаны
+    смотреть на то, что реально считал прогон, а не на несуществующий
+    эталон). Переиспользуется тестами и eval-скриптами; повторный вызов
+    дёшев — стадии кэшируются в work/<hash>.
 
     В отличие от main, скелет submission здесь не строится: это read-only
-    вход для парити-теста и контрфактуалов задачи 16."""
+    вход для парити-теста, контрфактуалов задачи 16 и инвариантов."""
     archive = Path(archive)
     ds_hash, input_dir = extract_archive(archive)
     wd = workdir(ds_hash)
@@ -274,9 +299,13 @@ def scenario_inputs(archive: Path, scenario: str) -> tuple[list[dict], dict]:
     all_rows = rows_of(ledger_art)
     index = artifact(wd / "index.json", INDEX_VERSION, lambda: build_index(all_rows, targets))
     scenario_rows = all_rows + dirty_rows_of(ledger_art)
-    facts = _facts_of(scenario)
+    if facts_source == "extracted":
+        facts_of = lambda sc: _extracted_facts_of(wd, index, sc)  # noqa: E731
+    else:
+        facts_of = _facts_of
+    facts = facts_of(scenario)
     raw, _rows, _alarms = load_rows(
-        scenario, scenario_rows, index, facts, _donor_rates(targets, scenario, _facts_of)
+        scenario, scenario_rows, index, facts, _donor_rates(targets, scenario, facts_of)
     )
     return raw, facts
 
@@ -323,6 +352,11 @@ def _extracted_inputs(
             spec_art = extract_specs(wd, dossiers[acc], set(facts["doc_facts"]))
             for _cl, sp in sorted(spec_art["clauses"].items()):
                 for key in sp.get("missing_doc_keys", []):
+                    if key in _DERIVED_DOC_KEYS:
+                        # Производный ключ считает КОД из сырых фактов
+                        # (_with_doc_facts); адресный LLM-резолв не имеет
+                        # права затенить арифметику (ревью PR #9, 3-я волна).
+                        continue
                     resolved = resolve_doc_fact(wd, dossiers[acc], key, sp["quote"])
                     if resolved is not None:
                         facts["doc_facts"][key] = resolved["value"]
@@ -351,16 +385,19 @@ def _match_clauses(target_clauses: list[str], extracted_keys: list[str]) -> tupl
     """Сопоставление ячеек шаблона извлечённым номерам пунктов (правка 4).
 
     Основной путь — точное совпадение номера пункта (ключи spec_art["clauses"]
-    уже нормализованы specs_extract). Если это не покрыло все ячейки, а число
-    ячеек шаблона равно числу извлечённых пунктов — доматчить оставшиеся по
+    уже нормализованы specs_extract). Оставшиеся ячейки доматчиваются по
     числовому суффиксу (последний сегмент после точки: пункт из другого
-    раздела договора матчится ячейкой с тем же порядковым номером в подпункте).
-    Непокрытые ячейки возвращаются вторым элементом — алярм clause_unmatched,
-    ячейка уходит по лестнице."""
+    раздела договора матчится ячейкой с тем же порядковым номером в
+    подпункте). От ложного матча защищает ОДНОЗНАЧНОСТЬ суффикса (ровно один
+    кандидат), а не равенство счётчиков: промпт сам просит «найди ВСЕ
+    ковенанты», и лишний извлечённый пункт не должен отправлять весь
+    заёмщик на приор (ревью PR #9, третья волна). Непокрытые ячейки
+    возвращаются вторым элементом — алярм clause_unmatched, ячейка уходит
+    по лестнице."""
     extracted_set = set(extracted_keys)
     mapping: dict[str, str] = {t: t for t in target_clauses if t in extracted_set}
     remaining = [t for t in target_clauses if t not in mapping]
-    if remaining and len(target_clauses) == len(extracted_keys):
+    if remaining:
         by_suffix: dict[str, list[str]] = {}
         for e in sorted(extracted_set - set(mapping.values())):
             by_suffix.setdefault(_clause_suffix(e), []).append(e)

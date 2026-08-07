@@ -273,7 +273,7 @@ def test_run_invariants_wires_route_and_dossier(tmp_path, monkeypatch):
 
     monkeypatch.setattr(solve, "extract_archive", lambda archive: ("hash", tmp_path))
     monkeypatch.setattr(solve, "load_ledger", lambda wd, input_dir, target_scenarios=None: {"dirty": []})
-    monkeypatch.setattr(solve, "scenario_inputs", lambda archive, sc: ([], {}))
+    monkeypatch.setattr(solve, "scenario_inputs", lambda archive, sc, **kw: ([], {}))
 
     answers = {"S1": {"6.1": {"status": "COMPLIANT", "actual": 1.0, "evidence_txn_id": None}}}
     template_answers = {"S1": {"6.1": {}}}

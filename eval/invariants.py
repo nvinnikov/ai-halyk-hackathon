@@ -24,6 +24,7 @@ from mutations import isolated_solve_out
 import solve
 from dsl import Agg, walk
 from engine import prepare_rows, tokens
+from specs_extract import extract_specs
 from taxonomy import coverage_report
 
 _MARGIN_DEFAULT = 0.10
@@ -276,11 +277,27 @@ def check_dossier_binding(dossiers):
 # --- сборка -------------------------------------------------------------------
 
 
-def _referenced_categories(scenario: str) -> set[str]:
+def _referenced_categories(scenario: str, facts_source: str = "expected", wd: Path | None = None) -> set[str]:
     """Категории, читаемые метриками всех пунктов сценария — для
-    check_other_share. Источник спек тот же эталон, что и borrower-трейс в
-    expected-режиме (5.3 для extracted подключит задача 24-мост)."""
+    check_other_share. Источник спек следует за facts_source (ревью PR #9,
+    3-я волна): на приватном наборе эталонных SPECS нет, и с ними проверка
+    была бы вхолостую зелёной; в extracted-режиме спеки читаются тем же
+    мостом задачи 24 из артефактов на диске, LLM не зовётся."""
     refs: set[str] = set()
+    if facts_source == "extracted" and wd is not None:
+        try:
+            index = json.loads((wd / "index.json").read_text())
+            acc = index["scenario_to_account"].get(scenario)
+            dossier = json.loads((wd / "dossier" / f"{acc}.json").read_text())
+            facts = json.loads((wd / "facts" / f"{acc}.json").read_text())
+            spec_art = extract_specs(wd, dossier, set(facts.get("doc_facts", {})))
+            for _cl, sp in sorted(spec_art["clauses"].items()):
+                cs_or_error, _q = solve._extracted_cellspec(sp, _cl, scenario)
+                if isinstance(cs_or_error, dict):
+                    refs |= {n.category for n in walk(cs_or_error["metric_ast"]) if isinstance(n, Agg)}
+        except Exception:
+            pass  # артефактов нет (сбой конвейера) — пустой referenced, проверка мягче
+        return refs
     for _clause, spec in solve.SPECS.get(scenario, {}).items():
         try:
             cs = solve.legacy_spec_to_cellspec(spec)
@@ -290,7 +307,9 @@ def _referenced_categories(scenario: str) -> set[str]:
     return refs
 
 
-def run_invariants(archive: Path, wd: Path, answers: dict, template_answers: dict) -> list[dict]:
+def run_invariants(
+    archive: Path, wd: Path, answers: dict, template_answers: dict, facts_source: str = "expected"
+) -> list[dict]:
     """Собирает данные из артефактов прогона и кормит проверки; недоступный
     артефакт (route/dossier ещё не построены — expected-режим их не пишет
     вовсе) пропускается, а не роняет остальные проверки."""
@@ -333,11 +352,11 @@ def run_invariants(archive: Path, wd: Path, answers: dict, template_answers: dic
     _, input_dir = solve.extract_archive(archive)
     ledger_art = solve.load_ledger(wd, input_dir, target_scenarios=targets)
     for sc in targets:
-        raw, facts = solve.scenario_inputs(archive, sc)
+        raw, facts = solve.scenario_inputs(archive, sc, facts_source=facts_source)
         fails += check_reclass_applied(sc, raw, facts)
         fails += check_sum_conservation(sc, raw, facts)
         prepared = prepare_rows(raw, facts)
-        fails += check_other_share(sc, prepared, _referenced_categories(sc))
+        fails += check_other_share(sc, prepared, _referenced_categories(sc, facts_source, wd))
         acc = index["scenario_to_account"].get(sc)
         dirty = [r for r in ledger_art["dirty"] if r["account_id"] == acc]
         fails += check_dirty_rows_recovered(sc, dirty, facts)
@@ -389,7 +408,7 @@ def main(archive, facts_source: str = "expected") -> int:
         print(f"ALARM {alarm}", flush=True)
     _print_fallback_rate_status(_baseline_path())
 
-    fails = run_invariants(archive, wd, answers, template["answers"])
+    fails = run_invariants(archive, wd, answers, template["answers"], facts_source=facts_source)
     for f in fails:
         print(f"INVARIANT_FAIL {f['check']}: {f}", flush=True)
     print(f"invariants: {len(fails)} провалов", flush=True)
