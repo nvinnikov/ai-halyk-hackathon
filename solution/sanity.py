@@ -110,6 +110,26 @@ def collect(archive: Path) -> dict:
     }
 
 
+def _resolve_fallback_rate(new_rate: float | None, base: dict | None) -> tuple[float | None, str | None]:
+    """Что писать в fallback_rate при --write-baseline, и предупреждение,
+    если есть.
+
+    sanity — единственный писатель baseline. Новый None поверх уже известного
+    числа в старом baseline — не первая генерация, а регресс данных
+    (например, trace/ между --write-baseline перезаписался expected-режимом,
+    задачи 25/26 отмечали эту коллизию): затирать проверенное число None
+    молча нельзя — check_fallback_rate (задача 26) тихо перестал бы
+    работать. Старое значение сохраняется, регресс — явным ALARM в stdout."""
+    if new_rate is None and base is not None and base.get("fallback_rate") is not None:
+        old = base["fallback_rate"]
+        warning = (
+            f"ALARM fallback_rate_write_regression: новый fallback_rate=None поверх "
+            f"старого {old!r} — похоже на трейсы не от extracted-прогона; сохранено старое значение"
+        )
+        return old, warning
+    return new_rate, None
+
+
 def diff_baselines(got: dict, base: dict) -> list[str]:
     out = []
     for key in sorted((set(got) | set(base)) - _DIFF_SKIP):
@@ -133,6 +153,10 @@ def main() -> int:
     else:
         print(f"doc_types: {doc_types}")
     if "--write-baseline" in sys.argv:
+        rate, warning = _resolve_fallback_rate(s["fallback_rate"], base)
+        if warning:
+            print(warning)
+        s = {**s, "fallback_rate": rate}
         BASELINE.write_text(json.dumps(s, ensure_ascii=False, indent=1, sort_keys=True))
         print(f"baseline записан в {BASELINE}")
         return 0
