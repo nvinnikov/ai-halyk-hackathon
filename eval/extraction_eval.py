@@ -209,7 +209,7 @@ def diff_specs(got_clauses: dict, want_specs: dict) -> list[str]:
     return out
 
 
-def main(archive: Path) -> int:
+def main(archive: Path, wd: Path | None = None) -> int:
     """Запусти экстракционный eval и выведи раздельный отчёт по фактам и спекам.
 
     Печатает отчёт для каждого заёмщика отдельно по фактам и спекам.
@@ -219,13 +219,20 @@ def main(archive: Path) -> int:
 
     Спеки извлекаются через specs_extract.extract_specs() (как в solve),
     чтобы получить clauses из сырого артефакта covenants.
-    """
-    from ledger import extract_archive
-    from specs_extract import extract_specs
-    from util import workdir
 
-    ds_hash, _ = extract_archive(archive)
-    wd = workdir(ds_hash)
+    wd — рабочий каталог прогона; по умолчанию вычисляется из archive через
+    extract_archive/workdir (боевой путь). Параметр существует ради тестируемости:
+    регрессионный тест подсовывает заранее собранный каталог с реальной формой
+    артефактов, не распаковывая архив.
+    """
+    from specs_extract import extract_specs
+
+    if wd is None:
+        from ledger import extract_archive
+        from util import workdir
+
+        ds_hash, _ = extract_archive(archive)
+        wd = workdir(ds_hash)
     index = json.loads((wd / "index.json").read_text())
 
     facts_good = 0

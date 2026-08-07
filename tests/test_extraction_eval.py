@@ -1,6 +1,14 @@
 """Эталон восстановился из PDF? Имена сравниваются токенами, числа — точно."""
 
-from extraction_eval import diff_facts, diff_specs
+from pathlib import Path
+
+import extraction_eval
+import pytest
+from extraction_eval import diff_facts, diff_specs, main
+
+import llm
+from specs_extract import SPECS_STAGE_VERSION
+from util import stable_json
 
 WANT_FACTS = {  # формат expected_extraction.FACTS
     "related_parties": ["Ertis Capital LLP"],
@@ -210,3 +218,99 @@ def test_diff_specs_with_real_extracted_format():
     }
     # diff_specs читает только нужные поля: direction, limit, template
     assert diff_specs(got_clauses, want) == []
+
+
+def test_main_builds_clauses_from_raw_specs_artifact(tmp_path, monkeypatch, capsys):
+    """Регрессия на commit 2781a9e: main() падал KeyError 'clauses', потому что
+    читал specs/<ACC>.json напрямую, хотя на диске лежит СЫРОЙ артефакт модели
+    ({"covenants": [...], "alarms": [...]}) — clauses с валидацией собираются
+    только через specs_extract.extract_specs(). Тест гоняет main() (не diff_specs
+    напрямую) на реальной форме work-каталога, чтобы откат фикса ловился здесь.
+
+    Никакого обращения к LLM: артефакты уже на диске с актуальным stage_version,
+    extract_specs() обязан вернуть их из кэша артефакта, не вызывая llm.call.
+    """
+
+    def _fail_llm(*args, **kwargs):
+        pytest.fail("LLM must not be called: артефакты должны читаться из кэша без модели")
+
+    monkeypatch.setattr(llm, "call", _fail_llm)
+
+    scenario, acc = "TEST", "ACC-TEST"
+    # Заведомое расхождение: эталон требует limit=2.00, сырой covenant несёт 2.50 —
+    # так тест доказывает, что clauses реально построились из сырого артефакта
+    # и дошли до сравнения (а не просто "main() не упал").
+    monkeypatch.setattr(extraction_eval, "FACTS", {scenario: {"related_parties": ["Ertis Capital LLP"]}})
+    monkeypatch.setattr(extraction_eval, "SPECS", {scenario: {"6.1": ("icr", "min", 2.00)}})
+
+    quote = "Коэффициент покрытия процентов ICR должен быть не менее 2.00."
+    agreement_text = f"Статья 6 — Финансовые ковенанты. Пункт 6.1. {quote}"
+
+    index = {"scenario_to_account": {scenario: acc}}
+    (tmp_path / "index.json").write_text(stable_json(index))
+
+    facts = {
+        "_meta": {"stage_version": 1},
+        "related_parties": ["Ertis Capital LLP"],
+        "related_quotes": {"Ertis Capital LLP": "q"},
+        "unrestricted_subsidiaries": [],
+        "subsidiary_quotes": {},
+        "reclass": [],
+        "exclude": [],
+        "exclude_quotes": {},
+        "amount_override": {},
+        "override_quotes": {},
+        "fx_rates": [],
+        "doc_facts": {},
+        "doc_fact_quotes": {},
+        "ebitda_addbacks": [],
+        "addback_materiality": "0",
+        "alarms": [],
+    }
+    facts_dir = tmp_path / "facts"
+    facts_dir.mkdir()
+    (facts_dir / f"{acc}.json").write_text(stable_json(facts))
+
+    # Сырой артефакт specs — ровно то, что кладёт на диск specs_extract.py:
+    # {"covenants": [...], "alarms": [...]}, без ключа "clauses".
+    specs_raw = {
+        "_meta": {"stage_version": SPECS_STAGE_VERSION},
+        "covenants": [
+            {
+                "clause": "6.1",
+                "quote": quote,
+                "metric": "doc(icr)",
+                "direction": "min",
+                "limit": "2.50",
+                "trigger": None,
+                "confidence": 0.9,
+            }
+        ],
+        "alarms": [],
+    }
+    specs_dir = tmp_path / "specs"
+    specs_dir.mkdir()
+    (specs_dir / f"{acc}.json").write_text(stable_json(specs_raw))
+
+    dossier = {
+        "_meta": {"stage_version": 4},
+        "account_id": acc,
+        "docs": [{"date": "2025-01-01", "doc_type": "agreement", "file": "test.pdf", "text": agreement_text}],
+        "docs_rejected": [],
+        "quarantined": [],
+    }
+    dossier_dir = tmp_path / "dossier"
+    dossier_dir.mkdir()
+    (dossier_dir / f"{acc}.json").write_text(stable_json(dossier))
+
+    rc = main(Path("unused.zip"), wd=tmp_path)
+
+    out = capsys.readouterr().out
+    assert "Summary" in out
+    # limit 2.50 в артефакте vs 2.00 в эталоне — расхождение обязано быть напечатано,
+    # доказывая, что clauses построились из сырых covenants и дошли до diff_specs.
+    assert "limit" in out
+    assert "2.50" in out and "2.0" in out
+    # facts совпали (related_parties токен-равны), поэтому провалились именно specs.
+    assert "facts: OK" in out
+    assert rc == 1  # specs-расхождение не даёт чистый прогон
