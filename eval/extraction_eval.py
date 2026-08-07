@@ -216,8 +216,12 @@ def main(archive: Path) -> int:
     В конце выводит итоговые проценты: доля заёмщиков без расхождений.
     Формула: good_count / total_count * 100% для каждой категории.
     Возвращает exit code 1 при наличии расхождений, 0 если всё чистое.
+
+    Спеки извлекаются через specs_extract.extract_specs() (как в solve),
+    чтобы получить clauses из сырого артефакта covenants.
     """
     from ledger import extract_archive
+    from specs_extract import extract_specs
     from util import workdir
 
     ds_hash, _ = extract_archive(archive)
@@ -231,7 +235,11 @@ def main(archive: Path) -> int:
     for sc in sorted(FACTS):
         acc = index["scenario_to_account"].get(sc)
         facts = json.loads((wd / "facts" / f"{acc}.json").read_text())
-        specs = json.loads((wd / "specs" / f"{acc}.json").read_text())["clauses"]
+        # Читаем dossier и вызываем extract_specs как solve
+        dossier = json.loads((wd / "dossier" / f"{acc}.json").read_text())
+        spec_art = extract_specs(wd, dossier, set(facts.get("doc_facts", {})))
+        specs = spec_art.get("clauses", {})
+
         df, ds = diff_facts(facts, FACTS[sc]), diff_specs(specs, SPECS[sc])
 
         # Печатаем факты

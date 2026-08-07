@@ -188,3 +188,25 @@ def test_diff_facts_addback_materiality_with_addbacks():
     got_bad = {"ebitda_addbacks": ["100.00"], "addback_materiality": "60000.00"}
     d = diff_facts(got_bad, want)
     assert any("addback_materiality" in x for x in d)
+
+
+def test_diff_specs_with_real_extracted_format():
+    """Интеграционный тест: diff_specs работает с реальным форматом clauses из extract_specs."""
+    # Реальный формат clauses (с валидацией из extract_specs)
+    want = {"6.1": ("icr", "min", 2.00)}
+    got_clauses = {
+        "6.1": {
+            "clause": "6.1",
+            "quote": "Interest coverage ratio",
+            "metric": "icr",
+            "direction": "min",
+            "limit": "2.00",
+            "trigger": None,
+            "confidence": 0.95,
+            "valid": True,
+            "template": "icr",
+            "errors": [],
+        }
+    }
+    # diff_specs читает только нужные поля: direction, limit, template
+    assert diff_specs(got_clauses, want) == []
