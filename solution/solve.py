@@ -341,14 +341,29 @@ def _match_clauses(target_clauses: list[str], extracted_keys: list[str]) -> tupl
     return mapping, remaining
 
 
-def _extracted_cellspec(sp: dict | None, clause: str) -> tuple[object, str]:
+def _metric_text_for(sp: dict, scenario: str, hide_templates: frozenset) -> str:
+    """Текст метрики для спеки: библиотека шаблонов или сырой DSL (LOBO, 7.3).
+
+    Для сценариев из hide_templates библиотека отключается целиком — и
+    match_heading, и сигнатурный матч, — считается сырая формула из спеки:
+    так LOBO ловит шаблон, подогнанный под конкретного заёмщика."""
+    if sp.get("template") and scenario not in hide_templates:
+        return TEMPLATES[sp["template"]]
+    return sp["metric"]
+
+
+def _extracted_cellspec(
+    sp: dict | None, clause: str, scenario: str = "", hide_templates: frozenset = frozenset()
+) -> tuple[object, str]:
     """Cellspec-или-ошибка + цитата пункта из извлечённой спеки (правка 3).
 
     Матч реализации: сначала заголовок пункта (match_heading — основной
     путь, 19 заголовков однозначно определяют метрику), при промахе —
     DSL-сигнатура (sp["template"], её уже посчитал specs_extract), при
     промахе — сырой DSL спеки. Невалидная/ненайденная спека → ошибка,
-    лестница run_cell подхватывает цитату для эвристики."""
+    лестница run_cell подхватывает цитату для эвристики. hide_templates
+    (LOBO, 7.3) глушит и match_heading, и сигнатурный матч для указанного
+    сценария — резолвится только текст спеки без библиотеки."""
     if sp is None:
         return LookupError(f"clause {clause} не найден в договоре"), ""
     quote = sp.get("quote", "")
@@ -356,7 +371,7 @@ def _extracted_cellspec(sp: dict | None, clause: str) -> tuple[object, str]:
         return ValueError(f"невалидная спека: {sp['errors'] or sp['missing_doc_keys']}"), quote
     try:
         template = match_heading(sp["title_key"]) or sp["template"]
-        metric_text = TEMPLATES[template] if template else sp["metric"]
+        metric_text = _metric_text_for({**sp, "template": template}, scenario, hide_templates)
         cellspec = {
             "metric_ast": parse(metric_text),
             "metric_text": metric_text,
@@ -401,6 +416,7 @@ def _spec_only_fallback(
     facts_source: str,
     specs_by_sc: dict[str, dict] | None,
     clause_map: dict[str, str],
+    hide_templates: frozenset = frozenset(),
 ) -> tuple[dict, dict]:
     """Сценарий не загрузился: строк нет, но спека может быть известна —
     лестница сохраняет прочитанные направление и порог вместо скелета."""
@@ -409,7 +425,7 @@ def _spec_only_fallback(
         cs: dict
         if facts_source == "extracted":
             sp = specs_by_sc[scenario]["clauses"].get(clause_map.get(clause, clause)) if specs_by_sc else None
-            cs_or_error, _quote = _extracted_cellspec(sp, clause)
+            cs_or_error, _quote = _extracted_cellspec(sp, clause, scenario, hide_templates)
             if isinstance(cs_or_error, Exception):
                 raise cs_or_error
             assert isinstance(cs_or_error, dict)
@@ -461,7 +477,11 @@ def _write_trace(wd: Path, scenario: str, clause: str, payload: dict) -> None:
     (d / f"{scenario}.{clause}.json").write_text(stable_json(payload))
 
 
-def main(archive: Path, facts_source: str = "extracted") -> dict:
+def main(
+    archive: Path, facts_source: str = "extracted", hide_templates: frozenset[str] = frozenset()
+) -> dict:
+    """hide_templates (LOBO, 7.3) — сценарии, для которых библиотека шаблонов
+    отключена: ячейка считается по сырому DSL спеки вместо TEMPLATES."""
     assert facts_source in ("expected", "extracted"), f"неизвестный источник фактов {facts_source!r}"
     archive = Path(archive)
     ds_hash, input_dir = extract_archive(archive)
@@ -535,7 +555,7 @@ def main(archive: Path, facts_source: str = "extracted") -> dict:
             print(f"ALARM scenario_failed {scenario}: {exc!r}", flush=True)
             for clause in sorted(template["answers"][scenario]):
                 cell, trace = _spec_only_fallback(
-                    scenario, clause, computed, exc, facts_source, specs_by_sc, clause_map
+                    scenario, clause, computed, exc, facts_source, specs_by_sc, clause_map, hide_templates
                 )
                 answers[scenario][clause] = cell
                 try:
@@ -562,7 +582,7 @@ def main(archive: Path, facts_source: str = "extracted") -> dict:
                 try:
                     if facts_source == "extracted":
                         sp = specs_by_sc[scenario]["clauses"].get(clause_map.get(clause, clause))
-                        cellspec_or_error, quote = _extracted_cellspec(sp, clause)
+                        cellspec_or_error, quote = _extracted_cellspec(sp, clause, scenario, hide_templates)
                     else:
                         cellspec_or_error = legacy_spec_to_cellspec(SPECS[scenario][clause])
                 except Exception as exc:
