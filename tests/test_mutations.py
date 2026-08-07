@@ -104,6 +104,29 @@ def test_build_renamed_guard_on_noop(public_hash, monkeypatch):
         build_renamed(PUBLIC_ZIP)
 
 
+def test_build_renamed_is_byte_deterministic_across_reruns(public_hash):
+    """dataset_hash обязан зависеть только от содержимого, не от времени сборки
+    zip: ZipInfo без явного date_time штампует datetime.now(), и повторный
+    прогон той же мутации будил бы routing/facts/specs заново вместо
+    переиспользования уже посчитанного workdir (регрессия, найденная на
+    живом прогоне shift 2026-08-07 — см. task-28-report.md)."""
+    h1 = dataset_hash(build_renamed(PUBLIC_ZIP))
+    h2 = dataset_hash(build_renamed(PUBLIC_ZIP))
+    assert h1 == h2
+
+
+def test_shift_threshold_is_byte_deterministic_across_reruns(public_hash):
+    h1 = dataset_hash(shift_threshold(PUBLIC_ZIP, "B1", "6.1"))
+    h2 = dataset_hash(shift_threshold(PUBLIC_ZIP, "B1", "6.1"))
+    assert h1 == h2
+
+
+def test_build_fx_is_byte_deterministic_across_reruns(public_hash):
+    h1 = dataset_hash(build_fx(PUBLIC_ZIP, n_rows=5))
+    h2 = dataset_hash(build_fx(PUBLIC_ZIP, n_rows=5))
+    assert h1 == h2
+
+
 def test_shift_threshold_produces_new_key_with_shifted_value(public_hash):
     scenario, clause = "B1", "6.1"
     old = float(SPECS[scenario][clause][2])

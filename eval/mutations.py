@@ -119,17 +119,24 @@ def _preseed_text_vision(pub_wd: Path, mut_wd: Path, mutate) -> None:
             (dst / f.name).write_text(stable_json(art))
 
 
+_ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)  # эпоха zip-формата, не время сборки
+
+
 def _new_zip_from_root(root: Path, out_zip: Path, transform) -> None:
     """Пересобрать zip из дерева root; transform(path, bytes) -> bytes решает,
     менять ли содержимое файла. Другие байты zip → другой dataset_hash даже при
-    неизменном содержимом (нужно для shift, где CSV/PDF не трогаются)."""
+    неизменном содержимом (нужно для shift, где CSV/PDF не трогаются) — но байты
+    обязаны зависеть только от СОДЕРЖИМОГО, не от времени сборки: ZipInfo без
+    явного date_time штампует datetime.now(), и одна и та же мутация давала бы
+    новый dataset_hash при каждом перезапуске (см. task-28-report.md)."""
     out_zip.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out_zip, "w") as z:
         for p in sorted(root.rglob("*")):
             if p.is_dir():
                 continue
             rel = str(p.relative_to(root.parent))
-            z.writestr(rel, transform(p))
+            info = zipfile.ZipInfo(rel, date_time=_ZIP_EPOCH)
+            z.writestr(info, transform(p))
 
 
 def build_renamed(archive: Path) -> Path:
