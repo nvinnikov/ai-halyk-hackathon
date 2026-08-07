@@ -501,9 +501,10 @@ def _write_borrower_trace(wd: Path, scenario: str, rows: list, clauses, facts_so
 
 
 def _write_trace(wd: Path, scenario: str, clause: str, payload: dict) -> None:
-    # Filename format <scenario>.<clause>.json: split by first dot only.
-    # Scenarios contain no dots; clauses (which include dot notation) must be
-    # split with split(".", 1) not rsplit to avoid losing the dot structure.
+    # Формат имени файла <scenario>.<clause>.json: делить по первой точке.
+    # В сценариях точек нет; пункты (в них точка — часть номера) нужно
+    # разбирать через split(".", 1), а не rsplit — иначе номер пункта потеряет
+    # структуру.
     d = wd / "trace"
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{scenario}.{clause}.json").write_text(stable_json(payload))

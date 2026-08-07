@@ -1,8 +1,8 @@
-"""Grep gate on knowledge leaks outside extraction layer.
+"""Греп-гейт на утечки знания за пределы слоя извлечения.
 
-Prevents hardcoded borrower names, covenant numbers, thresholds, TXN-/ACC-
-prefixes, and scenario IDs in solution/ and run.sh. Forbidden list built from
-eval data (FACTS/SPECS), template, and official formats.
+Не пускает захардкоженные имена заёмщиков, номера пунктов, пороги, префиксы
+TXN-/ACC- и ID сценариев в solution/ и run.sh. Список запрещённого строится из
+eval-данных (FACTS/SPECS), шаблона и официальных форматов.
 """
 
 import json
@@ -11,18 +11,18 @@ import sys
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
-# Import data sources
+# Источники данных
 from expected_extraction import FACTS, SPECS
 
 
 def _load_scenarios_and_covenants() -> tuple[set[str], set[str]]:
-    """Load scenario IDs and covenant numbers from public submission template.
+    """ID сценариев и номера пунктов — из публичного шаблона submission.
 
-    Ensures gate parameters are not hardcoded and adapt to template changes.
+    Так параметры гейта не хардкодятся и подстраиваются под правки шаблона.
     """
     template_path = Path("dataset/agentic-bank-public/submission_template.json")
     if not template_path.exists():
-        # Fallback for tests/offline mode
+        # Фолбэк для тестов/офлайн-режима
         return {"P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "B1", "B4"}, {
             "6.1",
             "6.2",
@@ -43,11 +43,11 @@ def _load_scenarios_and_covenants() -> tuple[set[str], set[str]]:
 _SCENARIOS, _COVENANT_NUMBERS = _load_scenarios_and_covenants()
 
 
-# Weight constants to exclude from forbidden literals (CASE.ru.md scoring formula)
-# Also exclude 0.0 and 0.00 (initialization/comparison, not a threshold)
+# Веса формулы скоринга (CASE.ru.md) — исключить из запрещённых литералов.
+# 0.0 и 0.00 тоже исключены (инициализация/сравнение, не порог).
 _WEIGHT_SCORES = {"0.50", "0.30", "0.20", "0.05", "0.5", "0.3", "0.2", "0.0", "0.00"}
 
-# Taxonomy categories (template.py): stub-format allowed in solution/
+# Категории таксономии (template.py): формат-заглушка разрешён в solution/
 _TAXONOMY_CATEGORIES = {
     "REVENUE",
     "OTHER_OPEX",
@@ -63,31 +63,31 @@ _TAXONOMY_CATEGORIES = {
 
 
 def _extract_number_formats(num: Decimal | int | float) -> set[str]:
-    """Convert numeric threshold to all possible string representations.
+    """Числовой порог во все возможные строковые представления.
 
-    Handles 9.00, 9.0, 500000, 500_000, 4_000_000 formats.
-    Only add bare integers if > 999 to avoid false positives from small numbers.
-    Uses ROUND_HALF_UP to match scoring logic.
-    Skips rounded results that coincide with weight scores.
+    Форматы 9.00, 9.0, 500000, 500_000, 4_000_000. Голые целые добавляются
+    только при > 999 — иначе ложные срабатывания на маленьких числах.
+    ROUND_HALF_UP — как в score.py. Округлённые результаты, совпавшие с
+    весами скоринга, пропускаются.
     """
     formats = set()
 
-    # Add Decimal variants for fractional thresholds
+    # Decimal-варианты для дробных порогов
     if isinstance(num, (int, float)):  # noqa: UP038
         d = Decimal(str(num))
     else:
         d = num
 
-    # Two decimal places format (using ROUND_HALF_UP to match score.py)
+    # Формат с двумя знаками (ROUND_HALF_UP — как в score.py)
     quantized = d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     quantized_str = str(quantized)
     if quantized_str not in _WEIGHT_SCORES:
         formats.add(quantized_str)
 
-    # One decimal place format
+    # Формат с одним знаком
     quantized_one = d.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
     quantized_one_str = str(quantized_one)
-    # Skip results that are weight scores or match the more precise form
+    # Пропускаем веса скоринга и совпадения с более точной формой
     if (
         quantized_one_str not in {"0.0"}
         and quantized_one_str not in _WEIGHT_SCORES
@@ -95,33 +95,34 @@ def _extract_number_formats(num: Decimal | int | float) -> set[str]:
     ):
         formats.add(quantized_one_str)
 
-    # For integers: add underscore-delimited format (to catch 500_000, 4_000_000)
+    # Для целых: формат с подчёркиваниями-разрядами (500_000, 4_000_000)
     if d == d.to_integral_value():
         int_val = int(d)
         int_str = str(int_val)
 
-        # Only add bare integer for large numbers (> 999)
+        # Голое целое — только для больших чисел (> 999)
         if int_val > 999:
             formats.add(int_str)
-            # Underscore-delimited format
+            # Формат с подчёркиваниями
             if len(int_str) > 3:
                 delimited = "_".join([int_str[max(0, i - 3) : i] for i in range(len(int_str), 0, -3)][::-1])
                 formats.add(delimited)
         elif int_val > 0:
-            # For small integers, only add if explicitly written (e.g., "3.0" from Decimal)
+            # Маленькие целые — добавлять, только если явно записаны (напр. "3.0" из Decimal)
             pass
 
     return formats
 
 
 def _extract_tokens(phrase: str) -> set[str]:
-    """Extract word tokens from phrase (length >= 4 chars), excluding generic suffixes.
+    """Токены-слова из фразы (длина >= 4), без общих суффиксов.
 
-    Used to catch embedded borrower/entity names. Generic corporate suffixes
-    (Capital, Group, Holding, Partners, LLP, etc.) are excluded to avoid
-    false positives when same suffix appears in covenant templates.
+    Ловит вложенные имена заёмщиков/контрагентов. Общие корпоративные
+    суффиксы (Capital, Group, Holding, Partners, LLP и т.п.) исключены —
+    иначе ложные срабатывания, когда тот же суффикс встречается в шаблонах
+    ковенантов.
     """
-    # Generic corporate suffixes that appear in many entity names and templates
+    # Общие корпоративные суффиксы, встречающиеся во многих именах и шаблонах
     generic_suffixes = {
         "Capital",
         "Group",
@@ -137,78 +138,78 @@ def _extract_tokens(phrase: str) -> set[str]:
     }
 
     tokens = re.findall(r"\b\w{4,}\b", phrase)
-    # Keep only tokens that are not generic suffixes
+    # Оставляем только токены, которые не общие суффиксы
     return {t for t in tokens if t not in generic_suffixes}
 
 
 def forbidden_literals() -> list[str]:
-    """Build complete list of forbidden substrings from eval data.
+    """Полный список запрещённых подстрок из eval-данных.
 
-    Sources:
-    - Related parties from FACTS (names + 4+ char tokens)
-    - Covenant numbers from template (6.1, 6.2, 6.3)
-    - Thresholds from SPECS (numeric formats)
-    - Scenario IDs (P1-P10, B1, B4)
-    - Prefixes TXN-, ACC-
+    Источники:
+    - Related parties из FACTS (имена + токены 4+ символов)
+    - Номера пунктов из шаблона (6.1, 6.2, 6.3)
+    - Пороги из SPECS (числовые форматы)
+    - ID сценариев (P1-P10, B1, B4)
+    - Префиксы TXN-, ACC-
     """
     forbidden = set()
 
-    # Related parties and their word tokens
+    # Related parties и их словесные токены
     for scenario_facts in FACTS.values():
         for party_name in scenario_facts.get("related_parties", []):
             forbidden.add(party_name)
-            # Extract word tokens (4+ chars) from entity names
+            # Токены (4+ символов) из имён контрагентов
             forbidden.update(_extract_tokens(party_name))
 
-    # Covenant numbers
+    # Номера пунктов
     forbidden.update(_COVENANT_NUMBERS)
 
-    # Thresholds from SPECS (numeric values in all formats)
+    # Пороги из SPECS (числа во всех форматах)
     for scenario_specs in SPECS.values():
         for _covenant_id, spec in scenario_specs.items():
-            # spec is a tuple: (metric_name, direction, threshold, [optional_dict])
+            # spec — кортеж: (metric_name, direction, threshold, [optional_dict])
             threshold = spec[2]
-            # Exclude weights that match scoring formula
+            # Исключаем веса, совпадающие с формулой скоринга
             threshold_str = str(threshold)
             if threshold_str not in _WEIGHT_SCORES:
                 forbidden.update(_extract_number_formats(threshold))
 
-            # Handle optional trigger dict (e.g., trigger_financing)
+            # Опциональный словарь триггера (например, trigger_financing)
             if len(spec) > 3 and isinstance(spec[3], dict):
                 for trigger_val in spec[3].values():
                     trigger_str = str(trigger_val)
                     if trigger_str not in _WEIGHT_SCORES:
                         forbidden.update(_extract_number_formats(trigger_val))
 
-    # Scenario IDs (as word boundaries to avoid PAGE1 -> P1 match)
+    # ID сценариев (по границам слова, чтобы PAGE1 не совпал с P1)
     forbidden.update(_SCENARIOS)
 
-    # Transaction and account prefixes
+    # Префиксы транзакций и счетов
     forbidden.add("TXN-")
     forbidden.add("ACC-")
 
-    # Remove taxonomy categories (allowed in solution/)
+    # Убираем категории таксономии (разрешены в solution/)
     forbidden.difference_update(_TAXONOMY_CATEGORIES)
 
     return sorted(forbidden)
 
 
 def scan(paths: list[Path]) -> list[dict]:
-    """Scan files for forbidden literals; return {"file", "line", "literal"}.
+    """Сканирует файлы на запрещённые литералы; возвращает {"file", "line", "literal"}.
 
-    Uses word-boundary matching for scenario IDs to avoid false positives.
+    Для ID сценариев — сопоставление по границам слова, иначе ложные срабатывания.
     """
     forbidden = forbidden_literals()
     results = []
 
-    # Build regex patterns: word-boundary for scenario IDs, plain substring for others
+    # Строим паттерны: границы слова для ID сценариев, простая подстрока для остального
     patterns = {}
     for lit in forbidden:
         if lit in _SCENARIOS:
-            # Use word boundary for scenario IDs
+            # Границы слова для ID сценариев
             patterns[lit] = (re.compile(r"\b" + re.escape(lit) + r"\b"), True)
         else:
-            # Plain substring search
+            # Простой поиск подстроки
             patterns[lit] = (None, False)
 
     for path in paths:
@@ -232,7 +233,7 @@ def scan(paths: list[Path]) -> list[dict]:
 
 
 def main() -> None:
-    """Scan solution/*.py and run.sh; exit(1) if violations found."""
+    """Сканирует solution/*.py и run.sh; exit(1), если найдены нарушения."""
     paths = sorted(Path("solution").glob("*.py")) + [Path("run.sh")]
     paths = [p for p in paths if p.exists()]
 

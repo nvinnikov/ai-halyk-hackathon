@@ -187,7 +187,7 @@ def main() -> int:
         if warning:
             print(warning)
         s = {**s, "fallback_rate": rate}
-        BASELINE.write_text(json.dumps(s, ensure_ascii=False, indent=1, sort_keys=True))
+        BASELINE.write_text(json.dumps(s, ensure_ascii=False, indent=1, sort_keys=True) + "\n")
         print(f"baseline записан в {BASELINE}")
         return 0
     if base:
