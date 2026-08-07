@@ -392,7 +392,17 @@ def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) ->
                 max_tokens=16000,
             )
         except llm.SchemaRejected as exc:
-            return {"found": False, "value": "", "quote": "", "error": str(exc)}
+            # alarms — чтобы провал был ВИДЕН сканерам run-report/sanity
+            # (артефакт .doc.<key>.json лежит в facts/ и сканируется наравне
+            # с основными; ревью PR #9, 6-я волна): без поля деградация
+            # кэшировалась бы молча под версией стадии.
+            return {
+                "found": False,
+                "value": "",
+                "quote": "",
+                "error": str(exc),
+                "alarms": [{"kind": "doc_fact_resolve_failed", "key": key, "error": str(exc)}],
+            }
         return ans
 
     art = artifact(wd / "facts" / f"{dossier_art['account_id']}.doc.{key}.json", FACTS_VERSION, build)

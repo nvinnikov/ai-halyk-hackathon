@@ -288,6 +288,11 @@ def _referenced_categories(scenario: str, facts_source: str = "expected", wd: Pa
         try:
             index = json.loads((wd / "index.json").read_text())
             acc = index["scenario_to_account"].get(scenario)
+            if not (wd / "specs" / f"{acc}.json").exists():
+                # Артефакта спек нет — extract_specs пошёл бы в ЖИВОЙ вызов,
+                # а докстринг обещает офлайн (ревью PR #9, 6-я волна): тихий
+                # скип, проверка other_share просто становится мягче.
+                return refs
             dossier = json.loads((wd / "dossier" / f"{acc}.json").read_text())
             facts = json.loads((wd / "facts" / f"{acc}.json").read_text())
             # fact_keys — от обогащённых фактов: производные ключи видимы спекам

@@ -228,23 +228,31 @@ def run_cell(
             trace.update(path="prior", tier=2, alarms=alarms)
             return cell, trace
     trace["spec_error"] = repr(cellspec_or_error)
+    # 5.7: прочитанные направление и порог невалидной спеки не выбрасываются —
+    # _extracted_cellspec вешает их на ошибку, лестница доносит до приора
+    # (ревью PR #9, 6-я волна).
+    spec_direction = getattr(cellspec_or_error, "spec_direction", None)
+    spec_limit = getattr(cellspec_or_error, "spec_limit", None)
     tpl = heuristic_template(quote)
     if tpl is not None:
         try:
             metric_ast = parse(TEMPLATES[tpl])
-            # Порога нет — эвристика даёт только метрику; статус возьмёт приор.
+            # Эвристика даёт метрику; статус берёт приор (направление/семья —
+            # из невалидной спеки, если прочитались), actual — посчитанное.
             _, res = evidence.compute(
                 raw,
                 facts,
                 {"metric_ast": metric_ast, "direction": "max", "limit": Decimal(0), "trigger_ast": None},
             )
-            cell, alarms = fallback_cell(None, family_of(metric_ast, None), None, computed, clause=clause)
+            cell, alarms = fallback_cell(
+                spec_direction, family_of(metric_ast, spec_limit), spec_limit, computed, clause=clause
+            )
             cell["actual"] = q2(abs(res.value))
             trace.update(path="heuristic_template", tier=1, template=tpl, alarms=alarms)
             return cell, trace
         except Exception as exc:
             trace["heuristic_error"] = repr(exc)
-    cell, alarms = fallback_cell(None, None, None, computed, clause=clause)
+    cell, alarms = fallback_cell(spec_direction, None, spec_limit, computed, clause=clause)
     trace.update(path="prior", tier=2, alarms=alarms)
     return cell, trace
 
@@ -459,7 +467,15 @@ def _extracted_cellspec(
         return LookupError(f"clause {clause} не найден в договоре"), ""
     quote = sp.get("quote", "")
     if not sp["valid"]:
-        return ValueError(f"невалидная спека: {sp['errors'] or sp['missing_doc_keys']}"), quote
+        err = ValueError(f"невалидная спека: {sp['errors'] or sp['missing_doc_keys']}")
+        # 5.7: направление и порог прочитаны и не выбрасываются — едут на
+        # ошибке до лестницы run_cell (ревью PR #9, 6-я волна).
+        try:
+            err.spec_direction = sp["direction"]  # type: ignore[attr-defined]
+            err.spec_limit = Decimal(sp["limit"])  # type: ignore[attr-defined]
+        except (InvalidOperation, KeyError, TypeError):
+            pass
+        return err, quote
     try:
         template = match_heading(sp["title_key"]) or sp["template"]
         metric_text = _metric_text_for({**sp, "template": template}, scenario, hide_templates)

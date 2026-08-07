@@ -144,9 +144,37 @@ def _degroup_thousands(text: str) -> str:
     return _THOUSANDS_SEP.sub("", text)
 
 
+# Масштабные вёрстки порога: «10 млн», «1.5 million», «2 млрд» (ревью PR #9,
+# 6-я волна). Слова языкозависимы, но деградация мягкая: не совпало — работают
+# обычные цифровые формы, провал всех форм отправляет ячейку на лестницу.
+_SCALE_WORDS = {
+    Decimal(1_000): r"(?:тыс\.?|thousand|k)",
+    Decimal(1_000_000): r"(?:млн\.?|million|mln|m)",
+    Decimal(1_000_000_000): r"(?:млрд\.?|billion|bn|b)",
+}
+
+
+def _scaled_in_quote(d: Decimal, quote: str) -> bool:
+    for scale, words in _SCALE_WORDS.items():
+        q = d / scale
+        # «1.5 million» тоже легитимен: множитель с точностью до сотых.
+        if q != q.quantize(Decimal("0.01")) or q >= scale:
+            continue
+        base = _strip_trailing_zeros(format(q, "f"))
+        for num in {base, base.replace(".", ",")}:
+            if re.search(re.escape(num) + r"\s?" + words + r"(?![a-zа-я])", quote, re.IGNORECASE):
+                return True
+    return False
+
+
 def _limit_in_quote(limit: str, quote: str) -> bool:
     degrouped = _degroup_thousands(quote)
-    return any(form in quote or form in degrouped for form in _limit_forms(limit))
+    if any(form in quote or form in degrouped for form in _limit_forms(limit)):
+        return True
+    try:
+        return _scaled_in_quote(Decimal(limit), quote)
+    except InvalidOperation:
+        return False
 
 
 def _heading_key_from_text(agreement_text: str, clause: str) -> str:
@@ -191,6 +219,13 @@ def _check(sp: dict, fact_keys: set[str], agreement_text: str) -> tuple[dict, ob
     # Порог — самая чувствительная точка prompt-injection: подменённый limit
     # тихо переворачивает вердикт, поэтому и цитата, и порог обязаны быть
     # верифицируемы в исходном тексте договора, а не просто правдоподобны.
+    # И порог обязан быть ЧИСЛОМ уже здесь: «грамматика проверяет до
+    # исполнения» — иначе «5%» доехал бы валидным до Decimal() в solve
+    # и ушёл на лестницу без алярма invalid_spec (ревью PR #9, 6-я волна).
+    try:
+        Decimal(sp["limit"])
+    except (InvalidOperation, TypeError):
+        errors.append("limit: не число")
     if not verify_quote(sp["quote"], agreement_text):
         errors.append("quote_unverified")
     elif not _limit_in_quote(sp["limit"], sp["quote"]):

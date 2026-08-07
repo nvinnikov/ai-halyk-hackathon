@@ -208,3 +208,26 @@ def test_limit_forms_decimal_comma_and_spaced_percent():
     assert specs_extract._limit_in_quote("1.44", "не ниже 1,44х по итогам года")
     assert specs_extract._limit_in_quote("0.04", "не более 4 % от выручки")
     assert not specs_extract._limit_in_quote("1.44", "не ниже 2,00х по итогам года")
+
+
+def test_limit_scaled_form_in_quote():
+    """Ревью PR #9 (6-я волна): «10 млн» / «1.5 million» — масштабная вёрстка
+    порога не должна стоить ячейку; несовпавший масштаб — по-прежнему провал."""
+    assert specs_extract._limit_in_quote("10000000", "не более 10 млн долларов")
+    assert specs_extract._limit_in_quote("1500000", "not exceeding 1.5 million")
+    assert not specs_extract._limit_in_quote("10000000", "не более 20 млн долларов")
+
+
+def test_non_numeric_limit_invalid_in_check(tmp_path, monkeypatch):
+    """«5%» вместо числа — спека невалидна уже в _check с внятной ошибкой,
+    а не молча на лестнице после Decimal() в solve."""
+    quote = "Пункт 6.1: доля не выше 5% от выручки"
+    monkeypatch.setattr(
+        specs_extract.llm,
+        "call",
+        lambda *a, **k: {"covenants": [covenant(clause="6.1", quote=quote, limit="5%")]},
+    )
+    art = specs_extract.extract_specs(tmp_path, make_dossier(quote), set())
+    sp = art["clauses"]["6.1"]
+    assert sp["valid"] is False
+    assert any("не число" in e for e in sp["errors"])
