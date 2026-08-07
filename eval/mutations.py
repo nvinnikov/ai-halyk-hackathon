@@ -37,6 +37,7 @@ import json
 import re
 import sys
 import zipfile
+from contextlib import contextmanager
 from decimal import Decimal
 from pathlib import Path
 
@@ -71,6 +72,25 @@ _RENAMES = {
 }
 
 FX_RATE = Decimal("1.16")  # сколько USD за 1 EUR
+
+
+@contextmanager
+def _isolated_solve_out(archive: Path):
+    """solve.OUT биндится по имени при импорте (`from util import OUT` в
+    solve.py), поэтому без подмены каждый сравнительный прогон mutations
+    писал бы submission.json/run-report.json поверх боевого out/ (тот же
+    приём изоляции, что в tests/test_faults.py). Каталог — подкаталог
+    work/<hash своего архива>, а не общий tmp: у baseline и мутации разные
+    dataset_hash, они не должны затирать друг друга при последовательных
+    вызовах."""
+    import solve
+
+    prev = solve.OUT
+    solve.OUT = workdir(dataset_hash(Path(archive))) / "eval-out"
+    try:
+        yield
+    finally:
+        solve.OUT = prev
 
 
 def rename_map() -> dict[str, str]:
@@ -359,11 +379,13 @@ def main(archive: Path, which: str) -> bool:
     import solve
 
     archive = Path(archive)
-    baseline = solve.main(archive, facts_source="extracted")
+    with _isolated_solve_out(archive):
+        baseline = solve.main(archive, facts_source="extracted")
 
     if which == "rename":
         mutated_archive = build_renamed(archive)
-        mutated = solve.main(mutated_archive, facts_source="extracted")
+        with _isolated_solve_out(mutated_archive):
+            mutated = solve.main(mutated_archive, facts_source="extracted")
         mismatches = _diff_answers(baseline, mutated)
         if mismatches:
             print(f"rename: расхождение в {len(mismatches)} ячейках:")
@@ -383,7 +405,8 @@ def main(archive: Path, which: str) -> bool:
         expected_status = predict_status(gt_actual, direction, new)
 
         mutated_archive = shift_threshold(archive, scenario, clause)
-        mutated = solve.main(mutated_archive, facts_source="extracted")
+        with _isolated_solve_out(mutated_archive):
+            mutated = solve.main(mutated_archive, facts_source="extracted")
 
         mismatches = []
         for sc in sorted(baseline):
@@ -404,7 +427,8 @@ def main(archive: Path, which: str) -> bool:
 
     if which == "fx":
         mutated_archive = build_fx(archive)
-        mutated = solve.main(mutated_archive, facts_source="extracted")
+        with _isolated_solve_out(mutated_archive):
+            mutated = solve.main(mutated_archive, facts_source="extracted")
         mismatches = _diff_answers(baseline, mutated)
         if mismatches:
             print(f"fx: расхождение в {len(mismatches)} ячейках:")

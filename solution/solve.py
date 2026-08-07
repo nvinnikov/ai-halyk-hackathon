@@ -65,11 +65,13 @@ _VERSIONED_MODULES = (
 def submission_meta() -> dict:
     """Реквизиты отправки (раздел 3) — из env, а не хардкод: команда и
     контакт задаются перед боевым прогоном, модель по умолчанию — та, что
-    реально зовёт llm.call."""
+    реально зовёт llm.call (провайдер учитывается так же, как в
+    _build_run_report — иначе gemini-прогон подписывался бы anthropic-моделью)."""
+    default_model = llm.GEMINI_MODEL if llm._provider() == "gemini" else llm.MODEL
     return {
         "team": os.environ.get("TEAM_NAME", ""),
         "contact_email": os.environ.get("CONTACT_EMAIL", ""),
-        "model": os.environ.get("MODEL_NAME", llm.MODEL),
+        "model": os.environ.get("MODEL_NAME", default_model),
     }
 
 

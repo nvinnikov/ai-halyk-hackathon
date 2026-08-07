@@ -176,6 +176,22 @@ def test_submission_meta_defaults_model_to_llm_model(monkeypatch):
     assert meta == {"team": "", "contact_email": "", "model": llm.MODEL}
 
 
+def test_submission_meta_defaults_model_to_gemini_when_provider_gemini(monkeypatch):
+    """Реквизиты не должны подписывать gemini-прогон anthropic-моделью
+    (та же развилка провайдера, что в _build_run_report)."""
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.delenv("MODEL_NAME", raising=False)
+    meta = solve.submission_meta()
+    assert meta["model"] == llm.GEMINI_MODEL
+
+
+def test_submission_meta_model_name_overrides_gemini_default(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("MODEL_NAME", "custom-model")
+    meta = solve.submission_meta()
+    assert meta["model"] == "custom-model"
+
+
 def test_submission_written_to_out(answers):
     sub = json.loads(Path("out/submission.json").read_text())
     assert set(sub) == {"team", "contact_email", "model", "answers"}
