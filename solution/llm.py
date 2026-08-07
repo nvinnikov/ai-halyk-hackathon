@@ -359,13 +359,24 @@ _GEMINI_FINISH_MAX_TOKENS = {"MAX_TOKENS"}
 _GEMINI_FINISH_OK = {"STOP", None}
 
 
-def _request_gemini(blocks: list, max_tokens: int, delay: float, attempts_left: int):
+def _request_gemini(blocks: list, schema: dict, max_tokens: int, delay: float, attempts_left: int):
     """Аналог _request для gemini: тот же общий бюджет попыток MAX_ATTEMPTS,
-    тот же экспоненциальный бэкоф на транзиентных ошибках (429/5xx)."""
+    тот же экспоненциальный бэкоф на транзиентных ошибках (429/5xx).
+
+    responseJsonSchema (не responseSchema — тот на урезанном OpenAPI-диалекте,
+    режет additionalProperties/type-union/pattern, которыми пользуются наши
+    схемы) передаётся серверу как ХИНТ: снижает частоту диалектных квирков
+    формы ответа (см. tests/test_llm.py и fix report — живым прогоном
+    подтверждено на счетах, где модель путала dict/list, теряла
+    required-поля), но не заменяет клиентскую jsonschema.validate — сервер её
+    не гарантирует железно, а наш кэш обязан содержать только то, что прошло
+    НАШУ схему.
+    """
     body = {
         "contents": _gemini_contents(blocks),
         "generationConfig": {
             "responseMimeType": "application/json",
+            "responseJsonSchema": schema,
             "maxOutputTokens": max_tokens,
         },
     }
@@ -450,7 +461,7 @@ def call(
     if provider == "gemini":
 
         def send(mt, attempts_left):
-            return _request_gemini(blocks, mt, delay, attempts_left)
+            return _request_gemini(blocks, schema, mt, delay, attempts_left)
     else:
         request_blocks = _with_cache_control(blocks)
 

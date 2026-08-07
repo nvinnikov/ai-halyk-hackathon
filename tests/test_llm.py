@@ -342,6 +342,78 @@ def test_gemini_body_has_response_mime_type_and_inline_pdf(monkeypatch):
     assert inline == {"mime_type": "application/pdf", "data": "QkFTRTY0"}
 
 
+# --- Серверный structured output: responseJsonSchema (фикс-раунд 3) ---
+
+
+def test_gemini_request_includes_response_json_schema(monkeypatch):
+    """Ревью п.1: серверная схема снижает частоту диалектных квирков (round
+    2/3 багов), НЕ заменяет клиентскую валидацию. responseJsonSchema — не
+    responseSchema (тот на диалекте OpenAPI 3.0, режет additionalProperties/
+    type-union/pattern, которыми пользуются наши реальные схемы — см.
+    живую проверку в отчёте)."""
+    captured = {}
+
+    def fake_gemini_create(model, body):
+        captured["body"] = body
+        return gemini_ok({"a": 1})
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    llm.call("p", SCHEMA, "v1")
+
+    assert captured["body"]["generationConfig"]["responseJsonSchema"] == SCHEMA
+    assert "responseSchema" not in captured["body"]["generationConfig"]
+
+
+def test_gemini_response_json_schema_uses_real_specs_schema_unmodified(monkeypatch):
+    """Регрессия: боевая SPECS_SCHEMA (additionalProperties:false, type
+    union у "trigger") уходит в responseJsonSchema как есть — без перевода
+    в урезанный OpenAPI-диалект (транслятор не строился, см. отчёт: живой
+    вызов подтвердил, что gemini-3.6-flash принимает JSON Schema напрямую)."""
+    import specs_extract
+
+    captured = {}
+
+    def fake_gemini_create(model, body):
+        captured["body"] = body
+        return gemini_ok({"covenants": []})
+
+    monkeypatch.setattr(llm, "_gemini_create", fake_gemini_create)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    llm.call("p", specs_extract.SPECS_SCHEMA, "v1")
+
+    sent_schema = captured["body"]["generationConfig"]["responseJsonSchema"]
+    assert sent_schema == specs_extract.SPECS_SCHEMA
+    assert sent_schema["additionalProperties"] is False
+    assert sent_schema["properties"]["covenants"]["items"]["properties"]["trigger"]["type"] == [
+        "string",
+        "null",
+    ]
+
+
+def test_gemini_cache_key_unaffected_by_response_json_schema(monkeypatch):
+    """Ревью п.3: cache_key = sha256(model+prompt+schema+version) не должен
+    измениться от того, что тело HTTP-запроса теперь несёт responseJsonSchema
+    — конструкция запроса в ключ не входит. Закрепляем ПОВЕДЕНИЕМ: заранее
+    посчитанный (тем же cache_key(), что был ДО этой правки) кэш-хит должен
+    сработать без единого сетевого вызова."""
+
+    def fail_network(model, body):
+        raise AssertionError("кэш-хит не должен идти в сеть")
+
+    monkeypatch.setattr(llm, "_gemini_create", fail_network)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    blocks = llm._build_blocks("p", None)
+    key = llm.cache_key(llm.GEMINI_MODEL, blocks, SCHEMA, "v1")
+    llm.CACHE.mkdir(parents=True, exist_ok=True)
+    (llm.CACHE / f"{key}.json").write_text(json.dumps({"result": {"a": 99}}))
+
+    assert llm.call("p", SCHEMA, "v1") == {"a": 99}
+
+
 def test_gemini_unwraps_emit_key_quirk(monkeypatch):
     """Живым вызовом (test_gemini_live_smoke) воспроизведено: промпты,
     написанные под anthropic tool-calling («верни результат через emit»),
