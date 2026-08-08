@@ -1029,7 +1029,16 @@ def main(
     # снапшот с приватных ответов упавшего боевого прогона. Отсутствие отчёта
     # означает «происхождение не установлено», а это fail-open — ровно то, чего
     # требует точка принятия решений ранбука про упавший прогон.
-    (OUT / "run-report.json").unlink(missing_ok=True)
+    #
+    # Обёрнуто тем же приёмом, что и запись отчёта в конце main (ревью PR #18,
+    # круг 8): снятие решает ту же диагностическую задачу и ячейки стоить не
+    # может, а `missing_ok=True` глушит только FileNotFoundError — каталог с
+    # этим именем или неудачные права на out/ уронили бы весь прогон здесь, до
+    # первого посчитанного сценария.
+    try:
+        (OUT / "run-report.json").unlink(missing_ok=True)
+    except Exception as exc:
+        print(f"ALARM stale_run_report_unlink_failed: {exc!r}", flush=True)
 
     targets = sorted(template["answers"])
     ledger_art = load_ledger(wd, input_dir, target_scenarios=targets)

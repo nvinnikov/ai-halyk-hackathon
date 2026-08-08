@@ -387,6 +387,27 @@ def test_stale_run_report_removed_with_skeleton(isolated_out, monkeypatch):
     assert not stale.exists(), "отчёт прошлого прогона пережил начало нового"
 
 
+def test_stale_run_report_unlink_failure_does_not_kill_run(isolated_out, capsys):
+    """Снятие отчёта — диагностика, и ячейки оно стоить не может (ревью PR #18,
+    круг 8). `missing_ok=True` глушит только FileNotFoundError; каталог с этим
+    именем или неудачные права на `out/` уронили бы прогон на строке, чей
+    единственный смысл — чтобы submit потом не спутал происхождение.
+
+    Каталог вместо файла даёт настоящую ошибку unlink на обеих платформах
+    (IsADirectoryError на Linux, PermissionError на macOS) — мока не нужно.
+    """
+    blocker = isolated_out / "run-report.json"
+    if blocker.exists():
+        blocker.unlink()
+    blocker.mkdir()
+    try:
+        answers = solve.main(PUBLIC_ZIP, facts_source="expected")
+        assert score(answers, GT, verbose=False) >= BASELINE, "ячейки потеряны из-за диагностики"
+        assert "ALARM stale_run_report_unlink_failed" in capsys.readouterr().out
+    finally:
+        blocker.rmdir()
+
+
 def test_submission_meta_empty_requisites_alarm(monkeypatch, capsys):
     """Ревью PR #9 (12-я волна): забытые TEAM_NAME/CONTACT_EMAIL не молчат."""
     monkeypatch.delenv("TEAM_NAME", raising=False)
