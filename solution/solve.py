@@ -68,11 +68,20 @@ def submission_meta() -> dict:
     реально зовёт llm.call (провайдер учитывается так же, как в
     _build_run_report — иначе gemini-прогон подписывался бы anthropic-моделью)."""
     default_model = llm.GEMINI_MODEL if llm._provider() == "gemini" else llm.MODEL
-    return {
+    meta = {
         "team": os.environ.get("TEAM_NAME", ""),
         "contact_email": os.environ.get("CONTACT_EMAIL", ""),
         "model": os.environ.get("MODEL_NAME", default_model),
     }
+    for field in ("team", "contact_email"):
+        if not meta[field]:
+            # Забытый .env не роняет прогон (submission валиден и без
+            # реквизитов), но и не молчит (ревью PR #9, 12-я волна).
+            print(
+                f"ALARM submission_meta_empty: {field} пуст — проверь TEAM_NAME/CONTACT_EMAIL в .env",
+                flush=True,
+            )
+    return meta
 
 
 # --- ядро на эталонных фактах (источник подменяется задачами 16/24) ----------

@@ -256,3 +256,13 @@ def test_run_report_failure_does_not_kill_run(monkeypatch):
     for sc, cells in answers.items():
         for clause, cell in cells.items():
             assert_cell_valid(cell, f"{sc} {clause}")
+
+
+def test_submission_meta_empty_requisites_alarm(monkeypatch, capsys):
+    """Ревью PR #9 (12-я волна): забытые TEAM_NAME/CONTACT_EMAIL не молчат."""
+    monkeypatch.delenv("TEAM_NAME", raising=False)
+    monkeypatch.delenv("CONTACT_EMAIL", raising=False)
+    meta = solve.submission_meta()
+    out = capsys.readouterr().out
+    assert meta["team"] == "" and meta["contact_email"] == ""
+    assert out.count("ALARM submission_meta_empty") == 2
