@@ -207,7 +207,9 @@ def test_specs_failure_keeps_extracted_facts(monkeypatch, tmp_path):
     import facts_extract as fe
 
     monkeypatch.setattr(solve, "find_inputs", lambda d: {"pdfs": []})
-    monkeypatch.setattr(solve, "build_dossiers", lambda wd, pdfs, index: {"ACC-X": {"account_id": "ACC-X"}})
+    monkeypatch.setattr(
+        solve, "build_dossiers", lambda wd, pdfs, index, all_accounts=None: {"ACC-X": {"account_id": "ACC-X"}}
+    )
     good_facts = {**fe._empty_facts(), "fx_rates": [{"currency": "EUR", "usd_per_unit": "1.1"}]}
     monkeypatch.setattr(solve, "extract_facts", lambda wd, d: dict(good_facts))
 

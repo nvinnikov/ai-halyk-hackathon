@@ -10,7 +10,7 @@ DATA_NOT_COMMANDS = (
 
 
 def sanitize_document(text: str) -> str:
-    """Вырезает теги <document...> и </document> из текста.
+    """Вырезает теги-контейнеры промптов (<document>, <agreement>) из текста.
 
     Удаляет последовательности вида </document> или <document...>,
     регистронезависимо и с пробелами внутри тегов, чтобы содержимое
@@ -33,7 +33,9 @@ def sanitize_document(text: str) -> str:
 
     # Паттерн ловит: < (опциональные пробелы) (опциональный /)
     # (опциональные пробелы) document (остаток до >)
-    pattern = "<\\s*/?\\s*document[^>]*>"
+    # agreement — контейнер specs_extract (13-я волна ревью PR #9): guard
+    # обязан вырезать ВСЕ теги-контейнеры промптов, не только document.
+    pattern = "<\\s*/?\\s*(?:document|agreement)[^>]*>"
     return re.sub(pattern, " ", text, flags=re.IGNORECASE)
 
 

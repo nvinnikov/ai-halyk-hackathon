@@ -33,7 +33,7 @@ import evidence
 import facts_extract
 import llm
 from dossier import build_dossiers
-from dsl import Agg, DslError, Ratio, parse, signature, walk
+from dsl import Agg, Doc, DslError, Ratio, parse, signature, walk
 from engine import agg, prepare_rows, select_rows, sign_divergence
 from facts_extract import extract_facts, resolve_doc_fact
 from fallbacks import fallback_cell, family_of, heuristic_template
@@ -347,7 +347,14 @@ def _extracted_inputs(
     specs_by_sc: dict[str, dict] = {}
     try:
         pdfs = find_inputs(input_dir)["pdfs"]
-        dossiers = build_dossiers(wd, pdfs, index)
+        # all_accounts (целевые + фоновые) — иначе ветка background_document в
+        # route недостижима и каждый фоновый PDF шумел бы routing_quarantine
+        # (ревью PR #9, 13-я волна).
+        all_accounts = sorted(
+            set(index["scenario_to_account"].values())
+            | set(index.get("background", {}).get("account_ids", []))
+        )
+        dossiers = build_dossiers(wd, pdfs, index, all_accounts)
     except Exception as exc:
         print(f"ALARM dossier_build_failed: {exc!r}", flush=True)
         for sc in targets:
@@ -477,7 +484,11 @@ def _category_divergence(extracted_text: str, template_text: str) -> tuple[list,
 
 
 def _extracted_cellspec(
-    sp: dict | None, clause: str, scenario: str = "", hide_templates: frozenset = frozenset()
+    sp: dict | None,
+    clause: str,
+    scenario: str = "",
+    hide_templates: frozenset = frozenset(),
+    fact_keys: frozenset | None = None,
 ) -> tuple[object, str]:
     """Cellspec-или-ошибка + цитата пункта из извлечённой спеки (правка 3).
 
@@ -504,6 +515,20 @@ def _extracted_cellspec(
     try:
         template = match_heading(sp["title_key"]) or sp["template"]
         metric_text = _metric_text_for({**sp, "template": template}, scenario, hide_templates)
+        # Подмена шаблоном не имеет права вводить doc()-ключи, которых нет в
+        # фактах (ревью PR #9, 13-я волна): _check валидировал ключи
+        # ИЗВЛЕЧЁННОЙ формулы, а шаблон может требовать свой — KeyError в
+        # evaluate уронил бы валидную ячейку на приор. При недостающем ключе —
+        # откат на извлечённый DSL с алярмом.
+        if fact_keys is not None and metric_text != sp["metric"]:
+            tpl_doc_keys = {n.key for n in walk(parse(metric_text)) if isinstance(n, Doc)}
+            missing_tpl = sorted(tpl_doc_keys - set(fact_keys))
+            if missing_tpl:
+                print(
+                    f"ALARM heading_doc_keys_missing {scenario} {clause}: {missing_tpl}",
+                    flush=True,
+                )
+                metric_text = sp["metric"]
         cellspec = {
             "metric_ast": parse(metric_text),
             "metric_text": metric_text,
@@ -917,7 +942,13 @@ def main(
                 try:
                     if facts_source == "extracted":
                         sp = specs_by_sc[scenario]["clauses"].get(clause_map.get(clause, clause))
-                        cellspec_or_error, quote = _extracted_cellspec(sp, clause, scenario, hide_templates)
+                        cellspec_or_error, quote = _extracted_cellspec(
+                            sp,
+                            clause,
+                            scenario,
+                            hide_templates,
+                            fact_keys=frozenset(facts.get("doc_facts", {})),
+                        )
                     else:
                         cellspec_or_error = legacy_spec_to_cellspec(SPECS[scenario][clause])
                 except Exception as exc:
