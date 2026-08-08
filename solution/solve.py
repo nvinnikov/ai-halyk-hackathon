@@ -250,6 +250,119 @@ def _metric_inputs(node, raw: list, facts: dict) -> dict:
     }
 
 
+# Во сколько раз посчитанное значение должно ПРЕВЫСИТЬ порог, чтобы счесть их
+# величинами разной природы. Промах эвристики, который мы ловим, — долларовый
+# шаблон при коэффициентном пороге, то есть 10^6 против 10^0.
+#
+# Guard срабатывает ТОЛЬКО там, где кратный разрыв невозможен, а не там, где он
+# всего лишь велик. Критерий один и применяется к обеим сторонам одинаково
+# (ревью PR #21, два круга):
+#
+#   max-ковенант, значение НИЖЕ порога   — комфортное соблюдение, разрыв
+#                                          неограничен (пустая категория);
+#   max-ковенант, значение ВЫШЕ порога   — нарушение, и кратное превышение
+#                                          однородной пары абсурдно;
+#   min-ковенант, значение ВЫШЕ порога   — комфортное соблюдение, разрыв
+#                                          неограничен (крошечный знаменатель:
+#                                          покрытие процентов у заёмщика почти
+#                                          без процентных расходов);
+#   min-ковенант, значение НИЖЕ порога    — нарушение, но знаменатель тот же,
+#                                          так что разрыв опять неограничен.
+#
+# Абсурдна ровно одна клетка из четырёх, поэтому guard живёт только в ней.
+# Цена честная: промах семьёй на min-ковенанте и на нижней стороне max мы не
+# ловим. Он стоит те же ≤0.50, что и ложное срабатывание, но в отличие от него
+# гарантированно не портит верно посчитанную ячейку.
+_FAMILY_MISMATCH_FACTOR = Decimal(10_000)
+
+
+def _family_mismatch(value: Decimal, limit: Decimal | None, direction: str | None) -> bool:
+    """Посчитанное значение НАСТОЛЬКО больше порога, что это величины разной
+    природы?
+
+    Только для max-ковенанта: на min кратное превышение порога — это
+    соблюдение, а не признак промаха (см. таблицу выше). Неизвестное
+    направление считается небезопасным: не зная, с какой стороны порога
+    лежит норма, отличить абсурд от комфорта нечем.
+
+    Ноль исключён по той же причине: относительное сравнение на нём не
+    определено, а ноль — законный ответ («таких операций не было»), и
+    подменять его порогом значило бы терять верную ячейку ради защиты от
+    неверной.
+    """
+    if direction != "max" or limit is None or limit <= 0 or value <= 0:
+        return False
+    return value > limit * _FAMILY_MISMATCH_FACTOR
+
+
+def _shadow_compare(
+    trace: dict,
+    cellspec: dict,
+    raw: list,
+    facts: dict,
+    scenario: str,
+    clause: str,
+    status: str,
+    res,
+    ev_txn: str | None,
+) -> None:
+    """Теневой расчёт извлечённой формулы, подменённой шаблоном.
+
+    Диагностика, а не расчёт: ячейку по-прежнему считает шаблон, значение
+    тени в submission не попадает. Своего try здесь нет намеренно — ловит
+    вызывающий, и потому инвариант «тень не может стоить ячейки» держится
+    структурой вызова, а не тем, что все опасные строки оказались внутри
+    внутреннего try (ревью PR #21).
+
+    Зачем. Решение «шаблон исполняется и при расхождении» измерено и остаётся
+    (откат стоил −5.0 офлайн-скора), но текст двух формул не отвечает на
+    единственный вопрос, который в окне важен: изменила ли подмена ответ.
+    Совпал ответ — расхождение ничего не стоило и смотреть нечего; разошёлся —
+    ячейку надо сверить глазами, и алярм называет её поимённо.
+
+    Ответ — это ВСЯ тройка ячейки, включая улику (ревью PR #21, круг 3):
+    evidence.find перебирает кандидатов через cellspec["metric_ast"], поэтому
+    подмена формулы двигает и множество переворачивающих. Базовое значение
+    двух формул может совпасть до второго знака, а «ровно один
+    переворачивающий» — разойтись, и весь вес улики прошёл бы молча.
+    Улика считается только при BREACH — при COMPLIANT find сразу отдаёт None.
+
+    Строки и факты уже в памяти, сеть не нужна, цена — проход по леджеру плюс
+    по контрфактуалу на кандидата.
+    """
+    shadow_text = cellspec.get("shadow_metric_text")
+    if not shadow_text:
+        return
+    shadow_cs = {**cellspec, "metric_ast": parse(shadow_text), "metric_text": shadow_text}
+    shadow_status, shadow_res = evidence.compute(raw, facts, shadow_cs)
+    shadow_actual = q2(abs(shadow_res.value))
+    shadow_txn, _ = evidence.find(raw, facts, shadow_cs, shadow_status)
+    actual = q2(abs(res.value))
+    changed = shadow_status != status or shadow_actual != actual or shadow_txn != ev_txn
+    trace["shadow"] = {
+        "metric": shadow_text,
+        "status": shadow_status,
+        "actual": shadow_actual,
+        "evidence_txn_id": shadow_txn,
+        "changed_answer": changed,
+    }
+    if not changed:
+        return
+    alarm = {
+        "kind": "heading_divergence_changed_answer",
+        "template": {"status": status, "actual": actual, "evidence_txn_id": ev_txn},
+        "extracted": {
+            "status": shadow_status,
+            "actual": shadow_actual,
+            "evidence_txn_id": shadow_txn,
+        },
+    }
+    # scenario/clause внутрь словаря — иначе глобальный дедуп точных дублей в
+    # _alarm_counts схлопнул бы одинаковые расхождения разных ячеек в «1».
+    trace.setdefault("alarms", []).append({**alarm, "scenario": scenario, "clause": clause})
+    print(f"ALARM heading_divergence_changed_answer {scenario} {clause}: {alarm}", flush=True)
+
+
 def run_cell(
     scenario: str,
     clause: str,
@@ -298,6 +411,30 @@ def run_cell(
                 flags=sorted(res.flags),
             )
             cell = {"status": status, "actual": q2(abs(res.value)), "evidence_txn_id": ev_txn}
+            try:
+                _shadow_compare(trace, cellspec, raw, facts, scenario, clause, status, res, ev_txn)
+            except Exception as shadow_exc:
+                # Ячейка уже собрана и остаётся ярусом 0: диагностика не имеет
+                # права уронить расчёт во внешний except и заменить посчитанное
+                # приором. Свой except именно здесь, а не внутри функции, —
+                # тогда инвариант структурный (ревью PR #21).
+                trace["shadow"] = {
+                    "metric": cellspec.get("shadow_metric_text", ""),
+                    "error": repr(shadow_exc),
+                }
+                # И отдельным алярмом (ревью PR #21, круг 4): run-report читает
+                # только alarms/fx_alarms, поэтому молча упавшая тень делала бы
+                # ноль по heading_divergence_changed_answer неотличимым от «ни
+                # одна подмена не изменила ответ». Ранбук называет эту строку
+                # главной, значит её ноль обязан значить ровно то, что написан.
+                failed = {
+                    "kind": "shadow_failed",
+                    "scenario": scenario,
+                    "clause": clause,
+                    "error": repr(shadow_exc),
+                }
+                trace.setdefault("alarms", []).append(failed)
+                print(f"ALARM shadow_failed {scenario} {clause}: {failed}", flush=True)
             return cell, trace
         except Exception as exc:
             # Спека построилась, вычисление упало: направление и порог прочитаны,
@@ -332,10 +469,46 @@ def run_cell(
                 facts,
                 {"metric_ast": metric_ast, "direction": "max", "limit": Decimal(0), "trigger_ast": None},
             )
-            cell, alarms = fallback_cell(
-                spec_direction, family_of(metric_ast, spec_limit), spec_limit, computed, clause=clause
-            )
-            cell["actual"] = q2(abs(res.value))
+            value = abs(res.value)
+            mismatched = _family_mismatch(value, spec_limit, spec_direction)
+            # Семья считается по AST ЭТОГО ЖЕ шаблона, поэтому признанный
+            # промахом шаблон не имеет права кондиционировать ею приор: она
+            # заведомо не та, и ступень by[направление|семья] увела бы статус
+            # по чужой статистике (ревью PR #21). На публичном наборе это
+            # замаскировано — prior_status до неё не доходит, by_clause всегда
+            # попадает; на приватном номер пункта может и не найтись. None —
+            # честный глобальный приор.
+            #
+            # Осторожно при чтении отчёта: пометка fallback_coin_flip, которой
+            # приор себя при этом клеймит, приходит из fallback_cell СТРОКОЙ, а
+            # _alarm_kind считает видом только dict с "kind" — в run-report она
+            # неотличима от прочего мусора в "other" (ревью PR #21, круг 5).
+            # Видно её только в trace["alarms"] конкретной ячейки. Перевод пары
+            # fallback_used/fallback_coin_flip на словари — правка вне этого
+            # PR и не в окно: она сдвинет счётчик "other", на который ранбук
+            # ссылается ориентиром.
+            family = None if mismatched else family_of(metric_ast, spec_limit)
+            cell, alarms = fallback_cell(spec_direction, family, spec_limit, computed, clause=clause)
+            if mismatched:
+                # Эвристика по ключевым словам цитаты угадала не ту СЕМЬЮ:
+                # шаблон меряет доллары, а порог — коэффициент. Порог от
+                # fallback_cell остаётся: он хотя бы того же порядка, что
+                # искомое значение, а посчитанное — заведомо не оно.
+                # Словарём, а не строкой: _alarm_kind считает видом только
+                # dict с "kind", строка ушла бы в общий мусорный "other" и в
+                # run-report была бы неразличима. scenario/clause внутрь —
+                # от глобального дедупа точных дублей.
+                mismatch = {
+                    "kind": "heuristic_family_mismatch",
+                    "scenario": scenario,
+                    "clause": clause,
+                    "value": str(value),
+                    "limit": str(spec_limit),
+                }
+                alarms = alarms + [mismatch]
+                print(f"ALARM heuristic_family_mismatch {scenario} {clause}: {mismatch}", flush=True)
+            else:
+                cell["actual"] = q2(value)
             trace.update(path="heuristic_template", tier=1, template=tpl, alarms=alarms)
             return cell, trace
         except Exception as exc:
@@ -707,6 +880,23 @@ def _extracted_cellspec(
         }
         if match_alarms:
             cellspec["match_alarms"] = match_alarms
+        # Тень для диагностики (не для расчёта): ячейку считает шаблон, но
+        # извлечённая формула сохраняется, чтобы run_cell посчитал её вторым
+        # проходом. Без этого подмена видна только текстами двух формул, а
+        # единственный вопрос, который в окне имеет значение, — изменила ли
+        # подмена ОТВЕТ — остаётся без ответа на 19 ячейках из 36.
+        #
+        # Условие — сам факт подмены, а НЕ diverged (ревью PR #21). diverged
+        # слеп ровно там, где подмена меняет число молча: signature() намеренно
+        # затирает знак Agg и константы, поэтому пара net/out с одинаковой
+        # сигнатурой расхождением не считается — а знак прямо меняет actual.
+        # Тем же слепым пятном накрыт весь класс матча по сигнатуре
+        # (sp["template"]): у него сигнатуры равны по построению. Фильтровать
+        # шум здесь нечем и незачем — у тени свой фильтр, алярм поднимается
+        # только при changed_answer. Цена — лишний проход по леджеру там, где
+        # формулы разошлись, а сигнатура совпала.
+        if metric_text != sp["metric"]:
+            cellspec["shadow_metric_text"] = sp["metric"]
         return cellspec, quote
     except (DslError, InvalidOperation, KeyError) as exc:
         return exc, quote

@@ -11,7 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import solve
-from dsl import parse
+from dsl import parse, signature
 from ledger import extract_archive, find_inputs, load_ledger, rows_of
 from scindex import INDEX_VERSION, build_index
 from stages import artifact
@@ -129,6 +129,273 @@ def test_extracted_cellspec_category_divergence_keeps_template_with_alarm():
     assert cellspec["metric_text"] == TEMPLATES["capex"]
     kinds = [a["kind"] for a in cellspec["match_alarms"]]
     assert kinds == ["heading_category_divergence"]
+
+
+def test_extracted_cellspec_stashes_shadow_metric_on_divergence():
+    # Расхождение есть, шаблон победил — извлечённая формула обязана уцелеть
+    # тенью: без неё run_cell нечего сравнивать, и подмена снова становится
+    # видимой только текстом формулы.
+    heading = title_key("Максимальные расходы по категории")
+    sp = _spec(title_key=heading, template=None, metric="agg(TAX, out)")
+    cellspec, _quote = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["shadow_metric_text"] == "agg(TAX, out)"
+
+
+def test_shadow_set_when_signatures_agree_but_text_differs():
+    """Тень ставится по факту подмены, а не по diverged.
+
+    Регрессия на ревью PR #21, круг 2: signature() намеренно затирает знак
+    Agg, поэтому пара net/out расхождением не считается — а знак прямо
+    меняет actual. Раньше такая подмена шла молча; теперь тень есть, а от
+    шума защищает changed_answer внутри _shadow_compare.
+    """
+    heading = title_key("Максимальные расходы по категории")
+    sp = _spec(title_key=heading, template=None, metric="agg(CAPEX, net)")
+    cellspec, _quote = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == TEMPLATES["capex"]  # исполняется шаблон
+    assert cellspec["shadow_metric_text"] == "agg(CAPEX, net)"
+    # Сигнатуры равны — старое условие diverged тень бы не поставило.
+    assert signature(parse("agg(CAPEX, net)")) == signature(parse(TEMPLATES["capex"]))
+
+
+def test_extracted_cellspec_no_shadow_when_template_matches_extracted():
+    # Формулы совпали — подменять нечего, тень не нужна: лишний проход по
+    # леджеру ради заведомо равного значения не делаем.
+    heading = title_key("Максимальные расходы по категории")
+    sp = _spec(title_key=heading, template=None, metric=TEMPLATES["capex"])
+    cellspec, _quote = solve._extracted_cellspec(sp, "6.1")
+    assert "shadow_metric_text" not in cellspec
+
+
+def _shadow_cellspec(shadow_metric: str, metric: str = "agg(CAPEX, out)") -> dict:
+    return {
+        "metric_ast": parse(metric),
+        "metric_text": metric,
+        "direction": "max",
+        "limit": Decimal("100"),
+        "trigger_ast": None,
+        "shadow_metric_text": shadow_metric,
+    }
+
+
+def _row(txn: str, cat: str, amt: str) -> dict:
+    return {
+        "txn_id": txn,
+        "account_id": "ACC-0000",
+        "counterparty": "Contoso",
+        "description": "",
+        "date": "2025-06-01",
+        "cat": cat,
+        "amt": Decimal(amt),
+    }
+
+
+def test_shadow_records_both_answers_and_alarms_when_they_differ():
+    # Шаблон считает CAPEX (50 — COMPLIANT), извлечённая формула — TAX
+    # (500 — BREACH). Ячейка остаётся шаблонной, но расхождение ОТВЕТА
+    # обязано попасть и в трейс, и в alarms: только его читает run-report.
+    rows = [_row("TXN-1", "CAPEX", "-50"), _row("TXN-2", "TAX", "-500")]
+    cellspec = _shadow_cellspec("agg(TAX, out)")
+    cell, trace = solve.run_cell("SC-S", "6.1", rows, {}, cellspec, [])
+    assert cell["status"] == "COMPLIANT" and cell["actual"] == 50.0  # ячейку считает шаблон
+    assert trace["shadow"] == {
+        "metric": "agg(TAX, out)",
+        "status": "BREACH",
+        "actual": 500.0,
+        "evidence_txn_id": None,
+        "changed_answer": True,
+    }
+    got = [a for a in trace["alarms"] if a["kind"] == "heading_divergence_changed_answer"]
+    assert got and got[0]["scenario"] == "SC-S" and got[0]["clause"] == "6.1"
+
+
+def test_shadow_catches_evidence_divergence_at_equal_value():
+    """Улика — треть ответа, и она зависит от той же формулы.
+
+    Регрессия на ревью PR #21, круг 3: evidence.find перебирает кандидатов
+    через cellspec["metric_ast"], поэтому подмена двигает множество
+    переворачивающих. Здесь обе формулы дают одинаковые BREACH и actual, но
+    исключаемая связанная сторона входит только в одну из них — улика
+    расходится, и это обязано поднять алярм.
+    """
+    facts = {
+        "related_parties": ["Contoso"],
+        "related_quotes": {"Contoso": "доля 51%"},
+    }
+    rows = [_row("TXN-1", "CAPEX", "-500"), _row("TXN-2", "TAX", "-500")]
+    # Шаблон считает CAPEX и видит связанную сторону в кандидатах; тень
+    # считает TAX, где та же сумма набрана строкой того же контрагента.
+    cellspec = {
+        "metric_ast": parse("agg(CAPEX, out, counterparty_in(related_parties))"),
+        "metric_text": "agg(CAPEX, out, counterparty_in(related_parties))",
+        "direction": "max",
+        "limit": Decimal("100"),
+        "trigger_ast": None,
+        "shadow_metric_text": "agg(TAX, out, counterparty_in(related_parties))",
+    }
+    cell, trace = solve.run_cell("SC-E", "6.3", rows, facts, cellspec, [])
+    assert cell["status"] == "BREACH" and cell["actual"] == 500.0
+    sh = trace["shadow"]
+    assert sh["status"] == "BREACH" and sh["actual"] == 500.0  # значение совпало
+    assert sh["evidence_txn_id"] != cell["evidence_txn_id"]  # а улика — нет
+    assert sh["changed_answer"] is True
+    assert [a["kind"] for a in trace["alarms"] if isinstance(a, dict)] == [
+        "heading_divergence_changed_answer"
+    ]
+
+
+def test_shadow_stays_silent_when_answers_agree():
+    # Формулы разные, ответ один и тот же — расхождение ничего не стоило,
+    # и алярма быть не должно: иначе в окне 19 строк шума вместо короткого
+    # списка ячеек, которые правда надо смотреть.
+    rows = [_row("TXN-1", "CAPEX", "-50"), _row("TXN-2", "TAX", "-50")]
+    cellspec = _shadow_cellspec("agg(TAX, out)")
+    _cell, trace = solve.run_cell("SC-S", "6.1", rows, {}, cellspec, [])
+    assert trace["shadow"]["changed_answer"] is False
+    assert not [a for a in trace.get("alarms", []) if a["kind"] == "heading_divergence_changed_answer"]
+
+
+def test_shadow_failure_never_costs_the_cell():
+    # Тень не считается (doc-ключа нет) — ячейка обязана остаться посчитанной
+    # шаблоном, ошибка уходит в трейс и никуда больше.
+    rows = [_row("TXN-1", "CAPEX", "-50")]
+    cellspec = _shadow_cellspec("doc(missing_key)")
+    cell, trace = solve.run_cell("SC-S", "6.1", rows, {"doc_facts": {}}, cellspec, [])
+    assert cell["status"] == "COMPLIANT" and cell["actual"] == 50.0
+    assert trace["tier"] == 0 and "error" in trace["shadow"]
+    # Отказ тени обязан быть виден в run-report, иначе ноль по
+    # heading_divergence_changed_answer неотличим от «тень не считалась»
+    # (ревью PR #21, круг 4). Только alarms читают _alarm_counts.
+    assert [a["kind"] for a in trace["alarms"] if isinstance(a, dict)] == ["shadow_failed"]
+
+
+def test_shadow_failure_is_caught_structurally_not_by_luck(monkeypatch):
+    """Падение ЛЮБОЙ строки тени не роняет ячейку во внешний except.
+
+    Регрессия на ревью PR #21: раньше внутренний try покрывал только
+    parse/compute, а q2 и print лежали снаружи — инвариант держался
+    расположением строк. Ловит вызывающий, поэтому проверяем именно это:
+    функция взрывается целиком, ячейка остаётся ярусом 0.
+    """
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("тень взорвалась целиком")
+
+    monkeypatch.setattr(solve, "_shadow_compare", boom)
+    rows = [_row("TXN-1", "CAPEX", "-50")]
+    cellspec = _shadow_cellspec("agg(TAX, out)")
+    cell, trace = solve.run_cell("SC-S", "6.1", rows, {}, cellspec, [])
+    assert cell["status"] == "COMPLIANT" and cell["actual"] == 50.0
+    assert trace["tier"] == 0 and trace["path"] == "dsl"
+    assert "тень взорвалась целиком" in trace["shadow"]["error"]
+    got = [a for a in trace["alarms"] if isinstance(a, dict) and a["kind"] == "shadow_failed"]
+    assert got and got[0]["scenario"] == "SC-S" and got[0]["clause"] == "6.1"
+
+
+def test_family_mismatch_detects_dollars_against_ratio_limit():
+    # Доллары против «9.00x» на max-ковенанте — 189 тысяч раз, величины
+    # разной природы, и кратное превышение здесь абсурдно.
+    assert solve._family_mismatch(Decimal("1703882.44"), Decimal("9.00"), "max") is True
+
+
+def test_family_mismatch_silent_on_homogeneous_pair():
+    # Самое дальнее расхождение однородной пары на публичном наборе — ±45%.
+    assert solve._family_mismatch(Decimal("8104772.36"), Decimal("6500000"), "max") is False
+    assert solve._family_mismatch(Decimal("0.0411"), Decimal("0.04"), "max") is False
+
+
+def test_family_mismatch_never_fires_below_the_limit():
+    """Значение много меньше порога — законный ответ, а не промах семьёй.
+
+    Регрессия на ревью PR #21, круг 1: нижняя ветвь guard'а била по
+    комфортному соблюдению max-ковенанта, и разрыв там ничем не ограничен —
+    пустая категория даёт сколь угодно большой. Ни один из этих случаев
+    (200x, 13 тысяч, 133 тысячи — последний вплотную к настоящему промаху
+    в 189 тысяч) не имеет права поднимать guard.
+    """
+    assert solve._family_mismatch(Decimal("0.0002"), Decimal("0.04"), "max") is False
+    assert solve._family_mismatch(Decimal("150"), Decimal("2000000"), "max") is False
+    assert solve._family_mismatch(Decimal("15"), Decimal("2000000"), "max") is False
+    # Та же сторона у коэффициентного шаблона при долларовом пороге: ловить
+    # её магнитудой нельзя, не задев строки выше.
+    assert solve._family_mismatch(Decimal("0.33"), Decimal("1800000"), "max") is False
+
+
+def test_family_mismatch_never_fires_on_min_covenant():
+    """На min-ковенанте кратное превышение порога — соблюдение, не промах.
+
+    Регрессия на ревью PR #21, круг 2: аргумент, которым убрана нижняя
+    ветвь, симметрично применим к верхней на min. Покрытие процентов у
+    заёмщика с крошечными процентными расходами уходит за порог в тысячи
+    раз при совершенно верном шаблоне и верном значении — guard обязан
+    молчать, иначе он выбросит правильный actual.
+    """
+    assert solve._family_mismatch(Decimal("20000"), Decimal("2.00"), "min") is False
+    assert solve._family_mismatch(Decimal("2000"), Decimal("0.20"), "min") is False
+    # Направление не прочиталось — отличить абсурд от комфорта нечем.
+    assert solve._family_mismatch(Decimal("1703882.44"), Decimal("9.00"), None) is False
+
+
+def test_family_mismatch_never_fires_on_zero_or_unknown_limit():
+    # Ноль — законный ответ («таких операций не было»), подменять его порогом
+    # значило бы терять верную ячейку; порога нет — сравнивать не с чем.
+    assert solve._family_mismatch(Decimal("0"), Decimal("500000"), "max") is False
+    assert solve._family_mismatch(Decimal("500000"), None, "max") is False
+    assert solve._family_mismatch(Decimal("500000"), Decimal("0"), "max") is False
+
+
+def _invalid_spec_error(limit: str, direction: str = "max") -> ValueError:
+    err = ValueError("невалидная спека")
+    err.spec_direction = direction  # type: ignore[attr-defined]
+    err.spec_limit = Decimal(limit)  # type: ignore[attr-defined]
+    return err
+
+
+def test_heuristic_tier_keeps_limit_as_actual_on_family_mismatch():
+    # Спека невалидна, эвристика по цитате даёт долларовый шаблон, а порог —
+    # коэффициент: посчитанные доллары в actual не идут, остаётся порог.
+    rows = [_row("TXN-1", "CAPEX", "-1703882.44")]
+    cell, trace = solve.run_cell(
+        "SC-M", "6.1", rows, {}, _invalid_spec_error("9.00"), [], quote="капитальные затраты Группы"
+    )
+    assert trace["tier"] == 1 and trace["template"] == "capex"
+    assert cell["actual"] == 9.0
+    kinds = [a["kind"] for a in trace["alarms"] if isinstance(a, dict)]
+    assert "heuristic_family_mismatch" in kinds
+
+
+def test_family_mismatch_does_not_condition_the_prior(monkeypatch):
+    """Семья отвергнутого шаблона не имеет права выбирать ступень приора.
+
+    Регрессия на ревью PR #21, круг 2: family_of считается по AST того же
+    шаблона, который признан не той природы, и уходила в fallback_cell
+    ключом direction|family. На публичном наборе замаскировано — до этой
+    ступени prior_status не доходит, by_clause всегда попадает.
+    """
+    seen: dict = {}
+
+    def spy(direction, family, limit, computed, clause=None):
+        seen.update(direction=direction, family=family)
+        return {"status": "BREACH", "actual": 0.0, "evidence_txn_id": None}, ["fallback_used"]
+
+    monkeypatch.setattr(solve, "fallback_cell", spy)
+    rows = [_row("TXN-1", "CAPEX", "-1703882.44")]
+    solve.run_cell(
+        "SC-M", "6.1", rows, {}, _invalid_spec_error("9.00"), [], quote="капитальные затраты Группы"
+    )
+    assert seen["direction"] == "max"
+    assert seen["family"] is None  # не "absolute" от долларового шаблона
+
+
+def test_heuristic_tier_still_uses_computed_actual_when_families_agree():
+    # Однородная пара — поведение прежнее: actual берётся посчитанным.
+    rows = [_row("TXN-1", "CAPEX", "-1652704.31")]
+    cell, trace = solve.run_cell(
+        "SC-M", "6.2", rows, {}, _invalid_spec_error("1800000"), [], quote="капитальные затраты"
+    )
+    assert trace["tier"] == 1 and cell["actual"] == 1652704.31
+    kinds = [a["kind"] for a in trace["alarms"] if isinstance(a, dict)]
+    assert "heuristic_family_mismatch" not in kinds
 
 
 def test_with_doc_facts_keeps_model_total_when_no_addbacks():
