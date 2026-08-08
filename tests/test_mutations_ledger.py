@@ -207,8 +207,8 @@ def test_all_floors_are_measured():
     на второй ярус не смотрело бы ничего, и «не измерено» выглядело бы как
     «прошло». Тип сохраняет `| None` намеренно: состояние «порог ещё не
     снят» законно между заменой модели и пересъёмом, но обязано падать
-    здесь, а не тихо выпадать из проверки в test_recovery_by_category_
-    worst_of_three_orders (там условие `if floor is not None`)."""
+    здесь, а не тихо выпадать из условия `if floor is not None` в
+    llm-тесте восстановления по трём перестановкам."""
     unmeasured = sorted(c for c, floor in FLOORS.items() if floor is None)
     assert unmeasured == [], (
         f"пороги не измерены: {unmeasured}. Снимаются живым прогоном — "
