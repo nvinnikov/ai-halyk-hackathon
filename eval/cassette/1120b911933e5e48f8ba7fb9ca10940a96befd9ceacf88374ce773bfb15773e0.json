@@ -1,0 +1,23 @@
+{
+ "result": {
+  "shares": [
+   {
+    "name": "\"Turan Capital\" LLP",
+    "quote": "\"Turan Capital\" LLP 28.8%",
+    "share_percent": "28.8"
+   },
+   {
+    "name": "KazMunayGas Refining JSC",
+    "quote": "KazMunayGas Refining JSC 4.1%",
+    "share_percent": "4.1"
+   },
+   {
+    "name": "Shymkent Plant Services LLP",
+    "quote": "Shymkent Plant Services LLP 22.9%",
+    "share_percent": "22.9"
+   }
+  ],
+  "threshold_percent": "25.0",
+  "threshold_quote": "Организации, в которых Группа владеет 25.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}
