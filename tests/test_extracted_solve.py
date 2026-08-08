@@ -263,6 +263,10 @@ def test_shadow_failure_never_costs_the_cell():
     cell, trace = solve.run_cell("SC-S", "6.1", rows, {"doc_facts": {}}, cellspec, [])
     assert cell["status"] == "COMPLIANT" and cell["actual"] == 50.0
     assert trace["tier"] == 0 and "error" in trace["shadow"]
+    # Отказ тени обязан быть виден в run-report, иначе ноль по
+    # heading_divergence_changed_answer неотличим от «тень не считалась»
+    # (ревью PR #21, круг 4). Только alarms читают _alarm_counts.
+    assert [a["kind"] for a in trace["alarms"] if isinstance(a, dict)] == ["shadow_failed"]
 
 
 def test_shadow_failure_is_caught_structurally_not_by_luck(monkeypatch):
@@ -284,6 +288,8 @@ def test_shadow_failure_is_caught_structurally_not_by_luck(monkeypatch):
     assert cell["status"] == "COMPLIANT" and cell["actual"] == 50.0
     assert trace["tier"] == 0 and trace["path"] == "dsl"
     assert "тень взорвалась целиком" in trace["shadow"]["error"]
+    got = [a for a in trace["alarms"] if isinstance(a, dict) and a["kind"] == "shadow_failed"]
+    assert got and got[0]["scenario"] == "SC-S" and got[0]["clause"] == "6.1"
 
 
 def test_family_mismatch_detects_dollars_against_ratio_limit():

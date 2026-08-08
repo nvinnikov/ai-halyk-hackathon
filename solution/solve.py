@@ -422,6 +422,19 @@ def run_cell(
                     "metric": cellspec.get("shadow_metric_text", ""),
                     "error": repr(shadow_exc),
                 }
+                # И отдельным алярмом (ревью PR #21, круг 4): run-report читает
+                # только alarms/fx_alarms, поэтому молча упавшая тень делала бы
+                # ноль по heading_divergence_changed_answer неотличимым от «ни
+                # одна подмена не изменила ответ». Ранбук называет эту строку
+                # главной, значит её ноль обязан значить ровно то, что написан.
+                failed = {
+                    "kind": "shadow_failed",
+                    "scenario": scenario,
+                    "clause": clause,
+                    "error": repr(shadow_exc),
+                }
+                trace.setdefault("alarms", []).append(failed)
+                print(f"ALARM shadow_failed {scenario} {clause}: {failed}", flush=True)
             return cell, trace
         except Exception as exc:
             # Спека построилась, вычисление упало: направление и порог прочитаны,
