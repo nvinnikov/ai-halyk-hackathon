@@ -81,6 +81,13 @@ def test_parse_agg_kwargs_filters_list_equals_bare_tail():
     assert kw == bare
 
 
+def test_parse_empty_filters_kwarg_equals_no_tail():
+    # Ревью PR #11, раунд 2: самая вероятная форма эха — пустое значение поля,
+    # agg(ALL, out, filters=[]). Семантически это agg(ALL, out), неоднозначности
+    # нет — в отличие от разрядной запятой, громкое падение здесь не оправдано.
+    assert parse("agg(ALL, out, filters=[])") == parse("agg(ALL, out)")
+
+
 def test_parse_filters_kwarg_outside_agg_tail_is_error():
     with pytest.raises(DslError):
         parse("ratio(filters=[period(2025-01-01,2025-12-31)], agg(REVENUE, in))")
