@@ -131,6 +131,139 @@ def test_extracted_cellspec_category_divergence_keeps_template_with_alarm():
     assert kinds == ["heading_category_divergence"]
 
 
+def test_extracted_cellspec_stashes_shadow_metric_on_divergence():
+    # Расхождение есть, шаблон победил — извлечённая формула обязана уцелеть
+    # тенью: без неё run_cell нечего сравнивать, и подмена снова становится
+    # видимой только текстом формулы.
+    heading = title_key("Максимальные расходы по категории")
+    sp = _spec(title_key=heading, template=None, metric="agg(TAX, out)")
+    cellspec, _quote = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["shadow_metric_text"] == "agg(TAX, out)"
+
+
+def test_extracted_cellspec_no_shadow_when_template_matches_extracted():
+    # Формулы совпали — подменять нечего, тень не нужна: лишний проход по
+    # леджеру ради заведомо равного значения не делаем.
+    heading = title_key("Максимальные расходы по категории")
+    sp = _spec(title_key=heading, template=None, metric=TEMPLATES["capex"])
+    cellspec, _quote = solve._extracted_cellspec(sp, "6.1")
+    assert "shadow_metric_text" not in cellspec
+
+
+def _shadow_cellspec(shadow_metric: str, metric: str = "agg(CAPEX, out)") -> dict:
+    return {
+        "metric_ast": parse(metric),
+        "metric_text": metric,
+        "direction": "max",
+        "limit": Decimal("100"),
+        "trigger_ast": None,
+        "shadow_metric_text": shadow_metric,
+    }
+
+
+def _row(txn: str, cat: str, amt: str) -> dict:
+    return {
+        "txn_id": txn,
+        "account_id": "ACC-0000",
+        "counterparty": "Contoso",
+        "description": "",
+        "date": "2025-06-01",
+        "cat": cat,
+        "amt": Decimal(amt),
+    }
+
+
+def test_shadow_records_both_answers_and_alarms_when_they_differ():
+    # Шаблон считает CAPEX (50 — COMPLIANT), извлечённая формула — TAX
+    # (500 — BREACH). Ячейка остаётся шаблонной, но расхождение ОТВЕТА
+    # обязано попасть и в трейс, и в alarms: только его читает run-report.
+    rows = [_row("TXN-1", "CAPEX", "-50"), _row("TXN-2", "TAX", "-500")]
+    cellspec = _shadow_cellspec("agg(TAX, out)")
+    cell, trace = solve.run_cell("SC-S", "6.1", rows, {}, cellspec, [])
+    assert cell["status"] == "COMPLIANT" and cell["actual"] == 50.0  # ячейку считает шаблон
+    assert trace["shadow"] == {
+        "metric": "agg(TAX, out)",
+        "status": "BREACH",
+        "actual": 500.0,
+        "changed_answer": True,
+    }
+    got = [a for a in trace["alarms"] if a["kind"] == "heading_divergence_changed_answer"]
+    assert got and got[0]["scenario"] == "SC-S" and got[0]["clause"] == "6.1"
+
+
+def test_shadow_stays_silent_when_answers_agree():
+    # Формулы разные, ответ один и тот же — расхождение ничего не стоило,
+    # и алярма быть не должно: иначе в окне 19 строк шума вместо короткого
+    # списка ячеек, которые правда надо смотреть.
+    rows = [_row("TXN-1", "CAPEX", "-50"), _row("TXN-2", "TAX", "-50")]
+    cellspec = _shadow_cellspec("agg(TAX, out)")
+    _cell, trace = solve.run_cell("SC-S", "6.1", rows, {}, cellspec, [])
+    assert trace["shadow"]["changed_answer"] is False
+    assert not [a for a in trace.get("alarms", []) if a["kind"] == "heading_divergence_changed_answer"]
+
+
+def test_shadow_failure_never_costs_the_cell():
+    # Тень не считается (doc-ключа нет) — ячейка обязана остаться посчитанной
+    # шаблоном, ошибка уходит в трейс и никуда больше.
+    rows = [_row("TXN-1", "CAPEX", "-50")]
+    cellspec = _shadow_cellspec("doc(missing_key)")
+    cell, trace = solve.run_cell("SC-S", "6.1", rows, {"doc_facts": {}}, cellspec, [])
+    assert cell["status"] == "COMPLIANT" and cell["actual"] == 50.0
+    assert trace["tier"] == 0 and "error" in trace["shadow"]
+
+
+def test_family_mismatch_detects_dollars_against_ratio_limit():
+    # Доллары против «9.00x» — 189 тысяч раз, величины разной природы.
+    assert solve._family_mismatch(Decimal("1703882.44"), Decimal("9.00")) is True
+    # И обратная сторона: коэффициент против долларового порога.
+    assert solve._family_mismatch(Decimal("0.33"), Decimal("1800000")) is True
+
+
+def test_family_mismatch_silent_on_homogeneous_pair():
+    # Самое дальнее расхождение однородной пары на публичном наборе — ±45%.
+    assert solve._family_mismatch(Decimal("8104772.36"), Decimal("6500000")) is False
+    assert solve._family_mismatch(Decimal("0.0411"), Decimal("0.04")) is False
+
+
+def test_family_mismatch_never_fires_on_zero_or_unknown_limit():
+    # Ноль — законный ответ («таких операций не было»), подменять его порогом
+    # значило бы терять верную ячейку; порога нет — сравнивать не с чем.
+    assert solve._family_mismatch(Decimal("0"), Decimal("500000")) is False
+    assert solve._family_mismatch(Decimal("500000"), None) is False
+    assert solve._family_mismatch(Decimal("500000"), Decimal("0")) is False
+
+
+def _invalid_spec_error(limit: str, direction: str = "max") -> ValueError:
+    err = ValueError("невалидная спека")
+    err.spec_direction = direction  # type: ignore[attr-defined]
+    err.spec_limit = Decimal(limit)  # type: ignore[attr-defined]
+    return err
+
+
+def test_heuristic_tier_keeps_limit_as_actual_on_family_mismatch():
+    # Спека невалидна, эвристика по цитате даёт долларовый шаблон, а порог —
+    # коэффициент: посчитанные доллары в actual не идут, остаётся порог.
+    rows = [_row("TXN-1", "CAPEX", "-1703882.44")]
+    cell, trace = solve.run_cell(
+        "SC-M", "6.1", rows, {}, _invalid_spec_error("9.00"), [], quote="капитальные затраты Группы"
+    )
+    assert trace["tier"] == 1 and trace["template"] == "capex"
+    assert cell["actual"] == 9.0
+    kinds = [a["kind"] for a in trace["alarms"] if isinstance(a, dict)]
+    assert "heuristic_family_mismatch" in kinds
+
+
+def test_heuristic_tier_still_uses_computed_actual_when_families_agree():
+    # Однородная пара — поведение прежнее: actual берётся посчитанным.
+    rows = [_row("TXN-1", "CAPEX", "-1652704.31")]
+    cell, trace = solve.run_cell(
+        "SC-M", "6.2", rows, {}, _invalid_spec_error("1800000"), [], quote="капитальные затраты"
+    )
+    assert trace["tier"] == 1 and cell["actual"] == 1652704.31
+    kinds = [a["kind"] for a in trace["alarms"] if isinstance(a, dict)]
+    assert "heuristic_family_mismatch" not in kinds
+
+
 def test_with_doc_facts_keeps_model_total_when_no_addbacks():
     # Добавок не извлечено, модель дала итог numeric_fact'ом: ноль поверх
     # извлечённого числа — потеря данных, модельное значение остаётся

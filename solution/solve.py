@@ -250,6 +250,83 @@ def _metric_inputs(node, raw: list, facts: dict) -> dict:
     }
 
 
+# Во сколько раз посчитанное значение должно разойтись с порогом, чтобы счесть
+# их величинами разной природы. Однородная пара (доллары против долларов,
+# коэффициент против коэффициента) так разойтись не может: на публичном наборе
+# все посчитанные ячейки лежат в пределах ±45% от своего порога, то есть запас
+# здесь — больше двух порядков. Разнородная пара (сумма в долларах против
+# коэффициента) расходится сразу на пять-шесть порядков, так что промежуток
+# между «однородно» и «разнородно» пустой и выбор множителя внутри него
+# ни на что не влияет.
+_FAMILY_MISMATCH_FACTOR = Decimal(100)
+
+
+def _family_mismatch(value: Decimal, limit: Decimal | None) -> bool:
+    """Посчитанное значение и порог — величины разной природы?
+
+    Ноль исключён намеренно: относительное сравнение на нём не определено, а
+    ноль — законный ответ («таких операций не было»), и подменять его порогом
+    значило бы терять верную ячейку ради защиты от неверной.
+    """
+    if limit is None or limit <= 0 or value <= 0:
+        return False
+    return value > limit * _FAMILY_MISMATCH_FACTOR or value * _FAMILY_MISMATCH_FACTOR < limit
+
+
+def _shadow_compare(
+    trace: dict,
+    cellspec: dict,
+    raw: list,
+    facts: dict,
+    scenario: str,
+    clause: str,
+    status: str,
+    res,
+) -> None:
+    """Теневой расчёт извлечённой формулы, подменённой шаблоном.
+
+    Диагностика, а не расчёт: ячейку по-прежнему считает шаблон, значение
+    тени в submission не попадает, и упасть эта функция права не имеет —
+    любая её ошибка уходит в трейс полем shadow.error.
+
+    Зачем. Решение «шаблон исполняется и при расхождении» измерено и остаётся
+    (откат стоил −5.0 офлайн-скора), но текст двух формул не отвечает на
+    единственный вопрос, который в окне важен: изменила ли подмена ответ.
+    Совпали статус и actual — расхождение ничего не стоило и смотреть нечего;
+    разошлись — ячейку надо сверить глазами, и алярм называет её поимённо.
+    Строки и факты уже в памяти, сеть не нужна, цена — один проход по леджеру.
+    """
+    shadow_text = cellspec.get("shadow_metric_text")
+    if not shadow_text:
+        return
+    try:
+        shadow_cs = {**cellspec, "metric_ast": parse(shadow_text), "metric_text": shadow_text}
+        shadow_status, shadow_res = evidence.compute(raw, facts, shadow_cs)
+        shadow_actual = q2(abs(shadow_res.value))
+    except Exception as exc:  # тень не считается — это не повод трогать ячейку
+        trace["shadow"] = {"metric": shadow_text, "error": repr(exc)}
+        return
+    actual = q2(abs(res.value))
+    changed = shadow_status != status or shadow_actual != actual
+    trace["shadow"] = {
+        "metric": shadow_text,
+        "status": shadow_status,
+        "actual": shadow_actual,
+        "changed_answer": changed,
+    }
+    if not changed:
+        return
+    alarm = {
+        "kind": "heading_divergence_changed_answer",
+        "template": {"status": status, "actual": actual},
+        "extracted": {"status": shadow_status, "actual": shadow_actual},
+    }
+    # scenario/clause внутрь словаря — иначе глобальный дедуп точных дублей в
+    # _alarm_counts схлопнул бы одинаковые расхождения разных ячеек в «1».
+    trace.setdefault("alarms", []).append({**alarm, "scenario": scenario, "clause": clause})
+    print(f"ALARM heading_divergence_changed_answer {scenario} {clause}: {alarm}", flush=True)
+
+
 def run_cell(
     scenario: str,
     clause: str,
@@ -298,6 +375,7 @@ def run_cell(
                 flags=sorted(res.flags),
             )
             cell = {"status": status, "actual": q2(abs(res.value)), "evidence_txn_id": ev_txn}
+            _shadow_compare(trace, cellspec, raw, facts, scenario, clause, status, res)
             return cell, trace
         except Exception as exc:
             # Спека построилась, вычисление упало: направление и порог прочитаны,
@@ -335,7 +413,27 @@ def run_cell(
             cell, alarms = fallback_cell(
                 spec_direction, family_of(metric_ast, spec_limit), spec_limit, computed, clause=clause
             )
-            cell["actual"] = q2(abs(res.value))
+            value = abs(res.value)
+            if _family_mismatch(value, spec_limit):
+                # Эвристика по ключевым словам цитаты угадала не ту СЕМЬЮ:
+                # шаблон меряет доллары, а порог — коэффициент (или наоборот).
+                # Порог от fallback_cell остаётся: он хотя бы того же порядка,
+                # что искомое значение, а посчитанное — заведомо не оно.
+                # Словарём, а не строкой: _alarm_kind считает видом только
+                # dict с "kind", строка ушла бы в общий мусорный "other" и в
+                # run-report была бы неразличима. scenario/clause внутрь —
+                # от глобального дедупа точных дублей.
+                mismatch = {
+                    "kind": "heuristic_family_mismatch",
+                    "scenario": scenario,
+                    "clause": clause,
+                    "value": str(value),
+                    "limit": str(spec_limit),
+                }
+                alarms = alarms + [mismatch]
+                print(f"ALARM heuristic_family_mismatch {scenario} {clause}: {mismatch}", flush=True)
+            else:
+                cell["actual"] = q2(value)
             trace.update(path="heuristic_template", tier=1, template=tpl, alarms=alarms)
             return cell, trace
         except Exception as exc:
@@ -707,6 +805,13 @@ def _extracted_cellspec(
         }
         if match_alarms:
             cellspec["match_alarms"] = match_alarms
+        # Тень для диагностики (не для расчёта): ячейку считает шаблон, но
+        # извлечённая формула сохраняется, чтобы run_cell посчитал её вторым
+        # проходом. Без этого подмена видна только текстами двух формул, а
+        # единственный вопрос, который в окне имеет значение, — изменила ли
+        # подмена ОТВЕТ — остаётся без ответа на 19 ячейках из 36.
+        if diverged and metric_text != sp["metric"]:
+            cellspec["shadow_metric_text"] = sp["metric"]
         return cellspec, quote
     except (DslError, InvalidOperation, KeyError) as exc:
         return exc, quote
