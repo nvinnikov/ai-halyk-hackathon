@@ -341,7 +341,7 @@ def test_invariants_main_does_not_touch_real_out(monkeypatch):
 def test_collect_report_alarms_sees_facts_and_specs_stage_failures(tmp_path):
     """facts_extraction_failed/specs_extraction_failed запекаются ВНУТРЬ
     build()-результата stages.artifact и кэшируются под текущей версией
-    стадии (recovery-playbook.md) — отчёт обязан их видеть, иначе отравленный
+    стадии (docs/ops/recovery-playbook.md) — отчёт обязан их видеть, иначе отравленный
     work/<hash> выглядит чистым."""
     (tmp_path / "facts").mkdir()
     (tmp_path / "facts" / "ACC-1.json").write_text(

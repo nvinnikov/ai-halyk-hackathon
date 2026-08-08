@@ -25,12 +25,12 @@ ROUTE_VERSION = 1
 # LLM-маршрутизацию (META/WHOSE) по всем документам публичного workdir и
 # новые платные вызовы при близком к нулю балансе Anthropic API (тот же
 # механизм, что уже сжёг бюджет при попытке активировать FACTS_VERSION —
-# см. facts_extract.py и debug-extracted-report.md). Риск принят: футер-
+# см. facts_extract.py и docs/ops/debug-extracted-report.md). Риск принят: футер-
 # номер страницы (1-3 символа в конце текста) практически не может изменить
 # doc_type/account_id/edition/mentions/routing_quote — это метаданные с
 # первой страницы и контекст вокруг счёта, не пограничные предложения
 # ковенантов, где сшивка футера ломала verify_quote. Бамп до 2 — обязательный
-# шаг активации (см. activation-step.md), не делать его молча на публичном
+# шаг активации (см. docs/ops/activation-step.md), не делать его молча на публичном
 # кэше.
 META_SCHEMA_VERSION = "route-meta-1"
 WHOSE_SCHEMA_VERSION = "route-whose-1"

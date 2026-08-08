@@ -431,7 +431,17 @@ def _extracted_inputs(
                         # (_with_doc_facts); адресный LLM-резолв не имеет
                         # права затенить арифметику (ревью PR #9, 3-я волна).
                         continue
-                    resolved = resolve_doc_fact(wd, dossiers[acc], key, sp["quote"])
+                    try:
+                        resolved = resolve_doc_fact(wd, dossiers[acc], key, sp["quote"])
+                    except Exception as exc:
+                        # Транзиентный сбой резолва (бюджет, сеть, конфигурация
+                        # провайдера) стоит максимум этого doc-ключа, не всех
+                        # спек заёмщика: без локального рубежа исключение
+                        # долетало до внешнего except и заменяло уже
+                        # полученный валидный spec_art пустым — три ячейки на
+                        # приоре на ровном месте (ревью PR #9, 26-я волна).
+                        print(f"ALARM doc_fact_resolve_error {sc} {_cl} {key}: {exc!r}", flush=True)
+                        resolved = None
                     if resolved is not None:
                         facts["doc_facts"][key] = resolved["value"]
                         facts["doc_fact_quotes"][key] = resolved["quote"]
@@ -775,7 +785,7 @@ def _alarm_counts(wd: Path) -> dict[str, int]:
 
     facts/specs обязательны отдельно от route/dossier: `facts_extraction_
     failed`/`specs_extraction_failed`/`no_agreement` запекаются ВНУТРЬ
-    build()-результата stages.artifact (см. recovery-playbook.md) — деградация
+    build()-результата stages.artifact (см. docs/ops/recovery-playbook.md) — деградация
     молча кэшируется под текущей версией стадии и без этого поля run-report
     выглядела бы чистой на отравленном work/<hash>."""
     alarms: list = []

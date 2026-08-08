@@ -291,3 +291,43 @@ def test_specs_failure_keeps_extracted_facts(monkeypatch, tmp_path):
     assert facts_by_sc["S1"]["fx_rates"] == good_facts["fx_rates"]
     assert specs_by_sc["S1"]["clauses"] == {}
     assert specs_by_sc["S1"]["alarms"][0]["kind"] == "specs_failed"
+
+
+def test_resolve_failure_keeps_spec_art(monkeypatch, tmp_path):
+    """Транзиентный сбой resolve_doc_fact стоит максимум своего doc-ключа:
+    уже извлечённые спеки заёмщика не заменяются пустышкой specs_failed
+    (ревью PR #9, 26-я волна)."""
+    import facts_extract as fe
+
+    monkeypatch.setattr(solve, "find_inputs", lambda d: {"pdfs": []})
+    monkeypatch.setattr(
+        solve, "build_dossiers", lambda wd, pdfs, index, all_accounts=None: {"ACC-X": {"account_id": "ACC-X"}}
+    )
+    monkeypatch.setattr(solve, "extract_facts", lambda wd, d: fe._empty_facts())
+    spec_art = {
+        "clauses": {
+            "6.1": {
+                "valid": False,
+                "errors": [],
+                "missing_doc_keys": ["insurance_min"],
+                "quote": "страховое покрытие",
+                "direction": "min",
+                "limit": "1",
+                "trigger": None,
+                "metric": "doc(insurance_min)",
+                "template": None,
+                "title_key": "",
+            }
+        },
+        "alarms": [],
+    }
+    monkeypatch.setattr(solve, "extract_specs", lambda wd, d, keys: spec_art)
+
+    def resolve_boom(*a, **k):
+        raise RuntimeError("gemini 429 storm")
+
+    monkeypatch.setattr(solve, "resolve_doc_fact", resolve_boom)
+    index = {"scenario_to_account": {"S1": "ACC-X"}}
+    _facts_by_sc, specs_by_sc = solve._extracted_inputs(tmp_path, tmp_path, index, ["S1"])
+    assert "6.1" in specs_by_sc["S1"]["clauses"]  # спеки уцелели
+    assert not any(a.get("kind") == "specs_failed" for a in specs_by_sc["S1"]["alarms"])

@@ -1,7 +1,7 @@
 """Сквозная проверка мутаций через solve.main — живой прогон, маркер llm.
 
 Мутированный текст — новый ключ кэша llm.call (сколько живых вызовов и на
-какие документы — см. task-28-report.md). Юниты самих mutations.py (build_
+какие документы — см. docs/ops/task-28-report.md). Юниты самих mutations.py (build_
 renamed/shift_threshold/build_fx, guard от холостой мутации) — офлайн, в
 test_mutations.py."""
 

@@ -64,7 +64,7 @@ def _fallback_rate(wd: Path) -> float | None:
 
 def _stage_alarms(wd: Path) -> dict[str, int] | None:
     """Число алярмов по видам в route/dossier/facts/specs — отравленный
-    прогон виден до боевого запуска, без LLM (recovery-playbook.md).
+    прогон виден до боевого запуска, без LLM (docs/ops/recovery-playbook.md).
 
     stages.artifact кэширует по версии стадии, не по успешности build(): если
     build() поймал ошибку модели (в первую очередь llm.SchemaRejected —

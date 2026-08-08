@@ -229,7 +229,7 @@ def test_run_report_written_with_expected_fields(answers, isolated_out):
 def test_alarm_counts_include_facts_and_specs_stage_alarms(tmp_path):
     """Правка по разбору инцидентов (задача 31): facts_extraction_failed/
     specs_extraction_failed запекаются ВНУТРЬ артефактов work/<hash>/facts,
-    work/<hash>/specs (см. .superpowers/sdd/.../recovery-playbook.md) — их
+    work/<hash>/specs (см. docs/ops/recovery-playbook.md) — их
     обязан видеть тот же счётчик, что и алярмы route/dossier/trace, иначе
     отравленный прогон в run-report выглядит чистым."""
     (tmp_path / "facts").mkdir()

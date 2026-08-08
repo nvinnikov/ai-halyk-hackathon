@@ -380,7 +380,7 @@ def _collect_report_alarms(wd: Path) -> list[dict]:
     facts/specs обязательны наравне с route/dossier: facts_extraction_failed/
     specs_extraction_failed запекаются ВНУТРЬ build()-результата
     stages.artifact и кэшируются под текущей версией стадии — см.
-    .superpowers/sdd/2026-08-06-halyk-pipeline/recovery-playbook.md. Без этих
+    docs/ops/recovery-playbook.md. Без этих
     двух каталогов отчёт мог бы выглядеть чистым на отравленном work/<hash>."""
     alarms: list[dict] = []
     index_path = wd / "index.json"

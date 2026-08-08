@@ -63,7 +63,7 @@ def test_resolve_fallback_rate_none_over_none_no_warning():
 
 
 # --- stage_alarms: видимость отравленных facts/specs/route/dossier ---------
-# (recovery-playbook.md, задача 31) ------------------------------------------
+# (docs/ops/recovery-playbook.md, задача 31) ------------------------------------------
 
 
 def test_stage_alarms_none_before_any_extracted_run(tmp_path):

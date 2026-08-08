@@ -146,7 +146,7 @@ _ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)  # эпоха zip-формата, не вре
 def _new_zip_from_root(root: Path, out_zip: Path, transform, marker: str | None = None) -> None:
     """Пересобрать zip из дерева root; transform(path, bytes) -> bytes решает,
     менять ли содержимое файла. Байты зависят только от СОДЕРЖИМОГО, не от
-    времени сборки (ZipInfo с фиксированной эпохой — см. task-28-report.md).
+    времени сборки (ZipInfo с фиксированной эпохой — см. docs/ops/task-28-report.md).
 
     marker — детерминированная запись MUTATION.txt: мутации, не меняющие
     файлы датасета (shift/fx живут в предзасеянных text-артефактах), без неё

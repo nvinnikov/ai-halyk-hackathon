@@ -117,7 +117,7 @@ def test_build_renamed_is_byte_deterministic_across_reruns(public_hash):
     zip: ZipInfo без явного date_time штампует datetime.now(), и повторный
     прогон той же мутации будил бы routing/facts/specs заново вместо
     переиспользования уже посчитанного workdir (регрессия, найденная на
-    живом прогоне shift 2026-08-07 — см. task-28-report.md)."""
+    живом прогоне shift 2026-08-07 — см. docs/ops/task-28-report.md)."""
     h1 = dataset_hash(build_renamed(PUBLIC_ZIP))
     h2 = dataset_hash(build_renamed(PUBLIC_ZIP))
     assert h1 == h2
