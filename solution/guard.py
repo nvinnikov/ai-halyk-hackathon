@@ -39,18 +39,34 @@ def sanitize_document(text: str) -> str:
     return re.sub(pattern, " ", text, flags=re.IGNORECASE)
 
 
+# Многоточие в цитате: и типографское, и три точки подряд, с любыми пробелами.
+_ELLIPSIS = re.compile(r"\s*(?:…|\.{3,})\s*")
+
+# Ниже этой длины фрагмент цитаты ничего не доказывает: одиночный символ
+# найдётся почти в любом документе, и многоточие превратилось бы в способ
+# протащить выдуманное число.
+_MIN_FRAGMENT = 2
+
+
 def verify_quote(quote: str, source: str) -> bool:
     """Проверяет, присутствует ли цитата в исходном тексте.
 
-    Нормализует оба текста (нижний регистр, схлопывает пробелы)
-    и ищет цитату как подстроку. Пустая цитата всегда возвращает False.
+    Нормализует оба текста (нижний регистр, схлопывает пробелы) и ищет цитату
+    как подстроку. Пустая цитата всегда возвращает False.
+
+    Многоточие в цитате — не буквальный текст, а пропуск: модель так цитирует
+    строку таблицы, выбрасывая разделители колонок («Организация … доля …
+    23.4%»). Дословной подстроки в источнике нет, поэтому цитата режется по
+    многоточию и каждый фрагмент ищется в источнике **после** предыдущего.
+    Защита от выдумок сохраняется: каждый фрагмент обязан быть настоящим
+    текстом документа и стоять на своём месте.
 
     Args:
         quote: Цитата для проверки.
         source: Исходный текст.
 
     Returns:
-        True если нормализованная цитата найдена в нормализованном источнике.
+        True если все фрагменты цитаты найдены в источнике в том же порядке.
     """
     if not quote:
         return False
@@ -59,4 +75,17 @@ def verify_quote(quote: str, source: str) -> bool:
         """Нормализует текст: нижний регистр, схлопывает пробелы."""
         return " ".join(text.lower().split())
 
-    return normalize(quote) in normalize(source)
+    src = normalize(source)
+    fragments = [f for f in _ELLIPSIS.split(normalize(quote)) if f]
+    if not fragments:
+        return False
+    if len(fragments) > 1 and any(len(f) < _MIN_FRAGMENT for f in fragments):
+        return False
+
+    pos = 0
+    for fragment in fragments:
+        found = src.find(fragment, pos)
+        if found < 0:
+            return False
+        pos = found + len(fragment)
+    return True
