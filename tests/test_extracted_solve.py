@@ -202,10 +202,46 @@ def test_shadow_records_both_answers_and_alarms_when_they_differ():
         "metric": "agg(TAX, out)",
         "status": "BREACH",
         "actual": 500.0,
+        "evidence_txn_id": None,
         "changed_answer": True,
     }
     got = [a for a in trace["alarms"] if a["kind"] == "heading_divergence_changed_answer"]
     assert got and got[0]["scenario"] == "SC-S" and got[0]["clause"] == "6.1"
+
+
+def test_shadow_catches_evidence_divergence_at_equal_value():
+    """Улика — треть ответа, и она зависит от той же формулы.
+
+    Регрессия на ревью PR #21, круг 3: evidence.find перебирает кандидатов
+    через cellspec["metric_ast"], поэтому подмена двигает множество
+    переворачивающих. Здесь обе формулы дают одинаковые BREACH и actual, но
+    исключаемая связанная сторона входит только в одну из них — улика
+    расходится, и это обязано поднять алярм.
+    """
+    facts = {
+        "related_parties": ["Contoso"],
+        "related_quotes": {"Contoso": "доля 51%"},
+    }
+    rows = [_row("TXN-1", "CAPEX", "-500"), _row("TXN-2", "TAX", "-500")]
+    # Шаблон считает CAPEX и видит связанную сторону в кандидатах; тень
+    # считает TAX, где та же сумма набрана строкой того же контрагента.
+    cellspec = {
+        "metric_ast": parse("agg(CAPEX, out, counterparty_in(related_parties))"),
+        "metric_text": "agg(CAPEX, out, counterparty_in(related_parties))",
+        "direction": "max",
+        "limit": Decimal("100"),
+        "trigger_ast": None,
+        "shadow_metric_text": "agg(TAX, out, counterparty_in(related_parties))",
+    }
+    cell, trace = solve.run_cell("SC-E", "6.3", rows, facts, cellspec, [])
+    assert cell["status"] == "BREACH" and cell["actual"] == 500.0
+    sh = trace["shadow"]
+    assert sh["status"] == "BREACH" and sh["actual"] == 500.0  # значение совпало
+    assert sh["evidence_txn_id"] != cell["evidence_txn_id"]  # а улика — нет
+    assert sh["changed_answer"] is True
+    assert [a["kind"] for a in trace["alarms"] if isinstance(a, dict)] == [
+        "heading_divergence_changed_answer"
+    ]
 
 
 def test_shadow_stays_silent_when_answers_agree():

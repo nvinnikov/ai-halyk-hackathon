@@ -304,6 +304,7 @@ def _shadow_compare(
     clause: str,
     status: str,
     res,
+    ev_txn: str | None,
 ) -> None:
     """Теневой расчёт извлечённой формулы, подменённой шаблоном.
 
@@ -316,9 +317,18 @@ def _shadow_compare(
     Зачем. Решение «шаблон исполняется и при расхождении» измерено и остаётся
     (откат стоил −5.0 офлайн-скора), но текст двух формул не отвечает на
     единственный вопрос, который в окне важен: изменила ли подмена ответ.
-    Совпали статус и actual — расхождение ничего не стоило и смотреть нечего;
-    разошлись — ячейку надо сверить глазами, и алярм называет её поимённо.
-    Строки и факты уже в памяти, сеть не нужна, цена — один проход по леджеру.
+    Совпал ответ — расхождение ничего не стоило и смотреть нечего; разошёлся —
+    ячейку надо сверить глазами, и алярм называет её поимённо.
+
+    Ответ — это ВСЯ тройка ячейки, включая улику (ревью PR #21, круг 3):
+    evidence.find перебирает кандидатов через cellspec["metric_ast"], поэтому
+    подмена формулы двигает и множество переворачивающих. Базовое значение
+    двух формул может совпасть до второго знака, а «ровно один
+    переворачивающий» — разойтись, и весь вес улики прошёл бы молча.
+    Улика считается только при BREACH — при COMPLIANT find сразу отдаёт None.
+
+    Строки и факты уже в памяти, сеть не нужна, цена — проход по леджеру плюс
+    по контрфактуалу на кандидата.
     """
     shadow_text = cellspec.get("shadow_metric_text")
     if not shadow_text:
@@ -326,20 +336,26 @@ def _shadow_compare(
     shadow_cs = {**cellspec, "metric_ast": parse(shadow_text), "metric_text": shadow_text}
     shadow_status, shadow_res = evidence.compute(raw, facts, shadow_cs)
     shadow_actual = q2(abs(shadow_res.value))
+    shadow_txn, _ = evidence.find(raw, facts, shadow_cs, shadow_status)
     actual = q2(abs(res.value))
-    changed = shadow_status != status or shadow_actual != actual
+    changed = shadow_status != status or shadow_actual != actual or shadow_txn != ev_txn
     trace["shadow"] = {
         "metric": shadow_text,
         "status": shadow_status,
         "actual": shadow_actual,
+        "evidence_txn_id": shadow_txn,
         "changed_answer": changed,
     }
     if not changed:
         return
     alarm = {
         "kind": "heading_divergence_changed_answer",
-        "template": {"status": status, "actual": actual},
-        "extracted": {"status": shadow_status, "actual": shadow_actual},
+        "template": {"status": status, "actual": actual, "evidence_txn_id": ev_txn},
+        "extracted": {
+            "status": shadow_status,
+            "actual": shadow_actual,
+            "evidence_txn_id": shadow_txn,
+        },
     }
     # scenario/clause внутрь словаря — иначе глобальный дедуп точных дублей в
     # _alarm_counts схлопнул бы одинаковые расхождения разных ячеек в «1».
@@ -396,7 +412,7 @@ def run_cell(
             )
             cell = {"status": status, "actual": q2(abs(res.value)), "evidence_txn_id": ev_txn}
             try:
-                _shadow_compare(trace, cellspec, raw, facts, scenario, clause, status, res)
+                _shadow_compare(trace, cellspec, raw, facts, scenario, clause, status, res, ev_txn)
             except Exception as shadow_exc:
                 # Ячейка уже собрана и остаётся ярусом 0: диагностика не имеет
                 # права уронить расчёт во внешний except и заменить посчитанное
