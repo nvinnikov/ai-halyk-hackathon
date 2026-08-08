@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "6.1",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "0.08",
+    "metric": "ratio(agg(ALL, out, counterparty_in(related_parties)), agg(OPEX_TOTAL, out))",
+    "quote": "Заёмщик, Taraz Cement Works JSC, обязуется не допускать, чтобы совокупный объём платежей в пользу связанных сторон за период с 2025-01-01 по 2025-12-31 превышал 0.08x Операционных расходов Заёмщика за этот период.",
+    "trigger": null
+   },
+   {
+    "clause": "6.2",
+    "confidence": 0.95,
+    "direction": "min",
+    "limit": "3.0",
+    "metric": "ratio(agg(REVENUE, in), add(agg(PAYROLL, out), agg(UTILITIES, out)))",
+    "quote": "Заёмщик, Taraz Cement Works JSC, обеспечивает, чтобы Выручка за период с 2025-01-01 по 2025-12-31 составляла не менее 3.00x совокупной величины Расходов на оплату труда и Коммунальных расходов за этот период.",
+    "trigger": null
+   },
+   {
+    "clause": "6.3",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "1600000",
+    "metric": "agg(CAPEX, out)",
+    "quote": "Заёмщик, Taraz Cement Works JSC, обязуется не допускать, чтобы совокупный объём расходов по статье «Капитальные затраты» за период с 2025-01-01 по 2025-12-31 превышал $1,600,000.00.",
+    "trigger": null
+   }
+  ]
+ }
+}

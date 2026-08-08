@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "6.1",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "0.30",
+    "metric": "ratio(agg(TAX, out, period(2025-01-01, 2025-12-31)), add(agg(UTILITIES, out, period(2025-01-01, 2025-12-31))), sub(agg(REVENUE, in, period(2025-01-01, 2025-12-31)), agg(OPEX_TOTAL, out, period(2025-01-01, 2025-12-31))))",
+    "quote": "На протяжении периода с 2025-01-01 по 2025-12-31 Atyrau Pipeline Services JSC обеспечивает, чтобы отношение суммы Налогов и Коммунальных расходов к EBITDA не превышало 0.30x.",
+    "trigger": null
+   },
+   {
+    "clause": "6.2",
+    "confidence": 0.98,
+    "direction": "min",
+    "limit": "8700000.00",
+    "metric": "agg(REVENUE, in, period(2025-01-01, 2025-12-31))",
+    "quote": "Atyrau Pipeline Services JSC обязуется обеспечить, чтобы совокупные поступления по статье «Выручка» за период с 2025-01-01 по 2025-12-31 составляли не менее $8,700,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "6.3",
+    "confidence": 0.9,
+    "direction": "max",
+    "limit": "275000.00",
+    "metric": "agg(ALL, out, period(2025-01-01, 2025-12-31), counterparty_in(related_parties))",
+    "quote": "За исключением случаев, прямо согласованных Кредитором в письменной форме, Atyrau Pipeline Services JSC не вправе прямо или косвенно перечислять, передавать или иным образом предоставлять связанным сторонам суммы, совокупный размер которых за период с 2025-01-01 по 2025-12-31 превышает $275,000.00.",
+    "trigger": null
+   }
+  ]
+ }
+}

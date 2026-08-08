@@ -1,0 +1,32 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "maximum_capital_intensity_ratio",
+    "quote": "Заёмщик, Aktau Port Services JSC, обязуется не допускать, чтобы коэффициент капиталоёмкости за период с 2025-01-01 по 2025-12-31 превышал 0.42x.",
+    "value": "0.42"
+   },
+   {
+    "key": "minimum_revenue",
+    "quote": "Aktau Port Services JSC обязуется поддерживать совокупный объём таких поступлений за период с 2025-01-01 по 2025-12-31 на уровне не менее $7,100,000.00.",
+    "value": "7100000.00"
+   },
+   {
+    "key": "maximum_related_party_payments",
+    "quote": "Заёмщик, Aktau Port Services JSC, обязуется не допускать, чтобы совокупный объём платежей в пользу связанных сторон за период с 2025-01-01 по 2025-12-31 превышал $450,000.00.",
+    "value": "450000.00"
+   },
+   {
+    "key": "maximum_unbudgeted_capex",
+    "quote": "Капитальные вложения, не предусмотренные инвестиционным бюджетом, допускаются при условии, что их совокупный размер за финансовый год не превышает $6,050,000.00.",
+    "value": "6050000.00"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

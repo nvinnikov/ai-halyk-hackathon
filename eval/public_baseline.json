@@ -16,10 +16,12 @@
  },
  "dataset_hash": "f2c65d2cfc8d8527",
  "dirty_rows": 2,
- "fallback_rate": 0.08333333333333333,
+ "fallback_rate": 0.05555555555555555,
  "index_alarms": [],
  "pdf_count": 200,
+ "public_score": 30.0,
  "stage_alarms": {
+  "quote_unverified": 1,
   "routing_quarantine": 133
  },
  "targets": 12

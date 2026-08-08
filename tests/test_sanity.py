@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from sanity import _resolve_fallback_rate, _stage_alarms, collect, diff_baselines
+from sanity import _resolve_fallback_rate, _resolve_public_score, _stage_alarms, collect, diff_baselines
 
 PUBLIC_ZIP = Path("6a741640c31eb032062683.zip")
 
@@ -66,6 +66,35 @@ def test_resolve_fallback_rate_none_over_none_no_warning():
     rate, warning = _resolve_fallback_rate(None, {"fallback_rate": None})
     assert rate is None
     assert warning is None
+
+
+# --- public_score: якорь скоринга публичного набора, не поле collect() -----
+# (ревью PR #12: diff_baselines шумел DIFF public_score: N -> None на каждом
+# запуске, --write-baseline тихо стирал якорь при перегенерации baseline) --
+
+
+def test_diff_baselines_silent_on_public_score():
+    # collect() никогда не отдаёт public_score — без skip это вечный DIFF.
+    s = collect(PUBLIC_ZIP)
+    base = {**s, "public_score": 12.34}
+    assert diff_baselines(s, base) == []
+
+
+def test_resolve_public_score_keeps_old_value_on_matching_dataset_hash():
+    # --write-baseline не должен молча стирать ранее записанный якорь того же набора.
+    base = {"public_score": 12.34, "dataset_hash": "abc123"}
+    assert _resolve_public_score(base, "abc123") == 12.34
+
+
+def test_resolve_public_score_none_on_first_generation():
+    assert _resolve_public_score(None, "abc123") is None
+
+
+def test_resolve_public_score_dropped_on_dataset_hash_mismatch():
+    # Ревью PR #12, круг 4: чужой набор (другой dataset_hash) не должен
+    # протащить свой public_score на baseline нового архива.
+    base = {"public_score": 12.34, "dataset_hash": "abc123"}
+    assert _resolve_public_score(base, "def456") is None
 
 
 # --- stage_alarms: видимость отравленных facts/specs/route/dossier ---------

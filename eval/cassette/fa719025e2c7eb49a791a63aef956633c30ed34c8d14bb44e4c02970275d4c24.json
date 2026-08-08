@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "Пункт 6.1",
+    "confidence": 0.95,
+    "direction": "min",
+    "limit": "0.28",
+    "metric": "ratio(add(sub(agg(REVENUE, in), agg(OPEX_TOTAL, out)), doc(ebitda_addbacks_material_total)), agg(REVENUE, in))",
+    "quote": "На протяжении периода с 2025-01-01 по 2025-12-31 Aktobe Grain Terminal JSC обеспечивает, чтобы отношение Скорректированной EBITDA к Выручке составляло не менее 0.28x.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.2",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "1800000.00",
+    "metric": "agg(CAPEX, out)",
+    "quote": "Aktobe Grain Terminal JSC обязуется обеспечить, чтобы совокупные расходы по указанной статье, понесённые в период с 2025-01-01 по 2025-12-31, не превышали $1,800,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.3",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "0.04",
+    "metric": "ratio(agg(ALL, out, counterparty_in(related_parties)), agg(REVENUE, in))",
+    "quote": "Заёмщик, Aktobe Grain Terminal JSC, обязуется не допускать, чтобы совокупные Ограниченные платежи в пользу аффилированных лиц за период с 2025-01-01 по 2025-12-31 превышали 0.04x от выручки за тот же период.",
+    "trigger": null
+   }
+  ]
+ }
+}

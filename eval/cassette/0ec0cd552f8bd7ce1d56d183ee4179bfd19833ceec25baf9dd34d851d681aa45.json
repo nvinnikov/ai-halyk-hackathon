@@ -1,0 +1,18 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [
+   {
+    "counterparty": null,
+    "quote": "Операция TXN-P9-0025, первоначально учтённая как Капитальные затраты ($418,204.37), переклассифицирована для целей соблюдения ковенантов как Расходы на оплату труда.",
+    "to_category": "PAYROLL",
+    "txn_id": "TXN-P9-0025"
+   }
+  ],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

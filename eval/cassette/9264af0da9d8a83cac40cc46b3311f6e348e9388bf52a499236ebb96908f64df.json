@@ -1,0 +1,35 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "atyrau_pipeline_engineering_llp_voting_rights_percent",
+    "quote": "Atyrau Pipeline Engineering LLP 11.7%",
+    "value": "11.7"
+   },
+   {
+    "key": "syr_darya_investment_partners_llp_voting_rights_percent",
+    "quote": "Группе принадлежит 27.3% голосующих прав в Syr Darya Investment Partners LLP",
+    "value": "27.3"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [
+   {
+    "name": "Kazyna Capital LLP",
+    "quote": "Казына Capital LLP. 38.9%"
+   },
+   {
+    "name": "Shymkent Fuel Distributors LLP",
+    "quote": "Shymkent Fuel Distributors LLP 48.0%"
+   },
+   {
+    "name": "Turkistan Petroleum Traders LLP",
+    "quote": "Turkistan Petroleum Traders LLP 29.4%"
+   }
+  ],
+  "unrestricted_subsidiaries": []
+ }
+}

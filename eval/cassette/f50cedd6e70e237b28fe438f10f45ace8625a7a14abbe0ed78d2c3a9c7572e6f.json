@@ -1,0 +1,27 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "max_group_capex_to_ebitda_ratio",
+    "quote": "отношение совокупных капитальных затрат Группы к EBITDA Заёмщика не превышало 9.00x",
+    "value": "9.00"
+   },
+   {
+    "key": "min_revenue",
+    "quote": "Ekibastuz Power Services JSC обязуется поддерживать совокупный объём таких поступлений за период с 2025-01-01 по 2025-12-31 на уровне не менее $7,500,000.00.",
+    "value": "7500000.00"
+   },
+   {
+    "key": "max_related_party_payments",
+    "quote": "совокупные платежи Заёмщика (Ekibastuz Power Services JSC) в адрес аффилированных и связанных сторон не должны превышать $260,000.00.",
+    "value": "260000.00"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

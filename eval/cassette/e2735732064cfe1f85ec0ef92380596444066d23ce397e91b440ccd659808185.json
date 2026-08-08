@@ -1,0 +1,23 @@
+{
+ "result": {
+  "amount_corrections": [
+   {
+    "corrected_amount": "-884204.16",
+    "quote": "Операция TXN-P8-0031 (Kyzylorda Drilling Personnel LLP): сумма не отражена в выгрузке реестра; фактическая сумма операции составляет $884,204.16 (расход).",
+    "txn_id": "TXN-P8-0031"
+   }
+  ],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "severance_liability",
+    "quote": "(7.1) Для целей агрегирования по ковенантам совокупное обязательство по программе выходных пособий в размере $918,447.52 раскрывается и не отражается отдельной операцией в бухгалтерской книге.",
+    "value": "918447.52"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

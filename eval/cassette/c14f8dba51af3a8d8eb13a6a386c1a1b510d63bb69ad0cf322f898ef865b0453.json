@@ -1,0 +1,26 @@
+{
+ "result": {
+  "amount_corrections": [
+   {
+    "corrected_amount": "-486204.19",
+    "quote": "Операция TXN-P7-0033 (State Revenue Committee): сумма не отражена в выгрузке реестра; фактическая сумма операции составляет $486,204.19 (расход).",
+    "txn_id": "TXN-P7-0033"
+   }
+  ],
+  "excluded_txns": [],
+  "fx_rates": [
+   {
+    "currency": "EUR",
+    "derivation": "table",
+    "effective_from": "2025-01-01",
+    "effective_to": "2025-12-31",
+    "source_quote": "Курс EUR: 1 EUR = 1.16 USD, действует весь 2025 год.",
+    "usd_per_unit": "1.16"
+   }
+  ],
+  "numeric_facts": [],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

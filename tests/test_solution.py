@@ -52,8 +52,12 @@ def test_score_not_below_baseline(answers):
 
 def test_hash_printed_first(capsys):
     solve.main(PUBLIC_ZIP, facts_source="expected")
-    first = capsys.readouterr().out.splitlines()[0]
-    assert first.startswith("dataset_hash: ")
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].startswith("dataset_hash: ")
+    # Провайдер/модель — сразу следующей строкой (ревью PR #12, круг 4):
+    # LLM_PROVIDER переключает бэкенд молча, без этой строки не видно, каким
+    # провайдером реально шёл прогон.
+    assert lines[1].startswith("provider: ")
 
 
 def test_template_cells_have_expected_fields():

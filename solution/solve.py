@@ -934,6 +934,12 @@ def main(
     archive = Path(archive)
     ds_hash, input_dir = extract_archive(archive)
     print(f"dataset_hash: {ds_hash}", flush=True)
+    # Каким провайдером/моделью реально идёт прогон — рядом с dataset_hash:
+    # LLM_PROVIDER молча переключает бэкенд (llm._provider(), дефолт anthropic),
+    # и без явного лога это не видно ни в логе прогона, ни в кассете (ревью PR #12,
+    # круг 4).
+    active_model = llm.GEMINI_MODEL if llm._provider() == "gemini" else llm.MODEL
+    print(f"provider: {llm._provider()} {active_model}", flush=True)
     wd = workdir(ds_hash)
 
     # Скелет — как можно раньше: без шаблона нельзя построить даже его, всё

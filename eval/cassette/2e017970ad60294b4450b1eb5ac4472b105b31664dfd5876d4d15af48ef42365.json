@@ -1,0 +1,17 @@
+{
+ "result": {
+  "amount_corrections": [
+   {
+    "corrected_amount": "-486204.19",
+    "quote": "Операция TXN-P7-0033 (State Revenue Committee): сумма не отражена в выгрузке реестра; фактическая сумма операции составляет $486,204.19 (расход).",
+    "txn_id": "TXN-P7-0033"
+   }
+  ],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

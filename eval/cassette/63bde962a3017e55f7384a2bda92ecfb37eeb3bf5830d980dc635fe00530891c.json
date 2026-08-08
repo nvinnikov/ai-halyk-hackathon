@@ -1,0 +1,22 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "related_party_threshold",
+    "quote": "Организации, в которых Группа владеет 30.0% и более голосующих прав, признаются связанными сторонами для целей Договора.",
+    "value": "30.0"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [
+   {
+    "name": "Aral Capital Partners, LLP",
+    "quote": "Aral Capital Partners, LLP 33.4%"
+   }
+  ],
+  "unrestricted_subsidiaries": []
+ }
+}

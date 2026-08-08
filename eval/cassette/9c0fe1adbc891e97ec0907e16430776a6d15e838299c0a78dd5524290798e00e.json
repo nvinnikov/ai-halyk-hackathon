@@ -1,0 +1,17 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "no_covenant_reclassifications_required",
+    "quote": "Переклассификаций за ковенантный период не требовалось.",
+    "value": "0"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

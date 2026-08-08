@@ -1,0 +1,20 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [
+   {
+    "currency": "EUR",
+    "derivation": "paired_payment",
+    "effective_from": "",
+    "effective_to": "",
+    "source_quote": "(9.1) Расчёты с контрагентом «Rheinland Katalyse Service GmbH»: счёт на сумму 72,146.75 EUR урегулирован платежом в долларах США в размере $83,690.23.",
+    "usd_per_unit": "1.16"
+   }
+  ],
+  "numeric_facts": [],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

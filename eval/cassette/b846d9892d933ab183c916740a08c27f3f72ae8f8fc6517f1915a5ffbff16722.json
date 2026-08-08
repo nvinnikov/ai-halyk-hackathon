@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "6.1",
+    "confidence": 1.0,
+    "direction": "min",
+    "limit": "3500000",
+    "metric": "doc(min_q4_revenue)",
+    "quote": "Заёмщик, Shymkent Refinery JSC, обязуется обеспечить Выручку за четвёртый финансовый квартал периода, оканчивающегося 2025-12-31, в размере не менее $3,500,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "6.2",
+    "confidence": 1.0,
+    "direction": "max",
+    "limit": "2000000",
+    "metric": "doc(max_capex)",
+    "quote": "Shymkent Refinery JSC не вправе допускать, чтобы такие совокупные расходы за период с 2025-01-01 по 2025-12-31 превысили $2,000,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "6.3",
+    "confidence": 1.0,
+    "direction": "max",
+    "limit": "500000",
+    "metric": "doc(max_related_party_payments)",
+    "quote": "Shymkent Refinery JSC обязуется не допускать, чтобы совокупный размер Ограниченных платежей в пользу связанных сторон за период с 2025-01-01 по 2025-12-31 превышал $500,000.00.",
+    "trigger": null
+   }
+  ]
+ }
+}

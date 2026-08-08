@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "6.1",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "0.42",
+    "metric": "ratio(agg(CAPEX, out, period('2025-01-01','2025-12-31')), add(agg(OPEX_TOTAL, out, period('2025-01-01','2025-12-31')), agg(RENT, out, period('2025-01-01','2025-12-31'))))",
+    "quote": "Заёмщик, Aktau Port Services JSC, обязуется не допускать, чтобы коэффициент капиталоёмкости за период с 2025-01-01 по 2025-12-31 превышал 0.42x.",
+    "trigger": null
+   },
+   {
+    "clause": "6.2",
+    "confidence": 0.95,
+    "direction": "min",
+    "limit": "7100000.00",
+    "metric": "agg(REVENUE, in, period('2025-01-01','2025-12-31'))",
+    "quote": "Aktau Port Services JSC обязуется поддерживать совокупный объём таких поступлений за период с 2025-01-01 по 2025-12-31 на уровне не менее $7,100,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "6.3",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "450000.00",
+    "metric": "agg(ALL, out, period('2025-01-01','2025-12-31'), counterparty_in(related_parties))",
+    "quote": "Заёмщик, Aktau Port Services JSC, обязуется не допускать, чтобы совокупный объём платежей в пользу связанных сторон за период с 2025-01-01 по 2025-12-31 превышал $450,000.00.",
+    "trigger": null
+   }
+  ]
+ }
+}

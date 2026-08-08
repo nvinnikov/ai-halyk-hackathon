@@ -1,0 +1,12 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "6.1",
+    "confidence": 1.0,
+    "direction": "max",
+    "trigger": null
+   }
+  ]
+ }
+}

@@ -60,6 +60,10 @@ jobs:
         run: ./run.sh 6a741640c31eb032062683.zip
         env:
           LLM_OFFLINE: "1"
+          # Кассета заморожена под gemini (llm.py: ключ = sha256(model+...), model
+          # зависит от LLM_PROVIDER) — без этой переменной все ключи мимо
+          # кассеты, и extracted-путь молча уходит на лестницу фолбэков.
+          LLM_PROVIDER: "gemini"
 
   secret-scan:
     name: Secret scan

@@ -1,0 +1,18 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [
+   {
+    "counterparty": "Tengiz Risk Engineering Bureau",
+    "quote": "Сумма в размере $142,118.64, выплаченная контрагенту Tengiz Risk Engineering Bureau, первоначально учтённая как Операционные расходы, переклассифицирована для целей соблюдения ковенантов как Страховые премии.",
+    "to_category": "INSURANCE",
+    "txn_id": null
+   }
+  ],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

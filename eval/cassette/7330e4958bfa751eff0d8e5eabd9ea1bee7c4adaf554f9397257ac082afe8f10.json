@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "Пункт 6.1",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "9.0",
+    "metric": "ratio(doc(group_capex), sub(agg(REVENUE, in, period(2025-01-01,2025-12-31)), agg(OPEX_TOTAL, out, period(2025-01-01,2025-12-31))))",
+    "quote": "На протяжении периода с 2025-01-01 по 2025-12-31 Ekibastuz Power Services JSC обеспечивает, чтобы отношение совокупных капитальных затрат Группы к EBITDA Заёмщика не превышало 9.00x.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.2",
+    "confidence": 0.95,
+    "direction": "min",
+    "limit": "$7,500,000.00",
+    "metric": "agg(REVENUE, in, period(2025-01-01,2025-12-31))",
+    "quote": "Ekibastuz Power Services JSC обязуется поддерживать совокупный объём таких поступлений за период с 2025-01-01 по 2025-12-31 на уровне не менее $7,500,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.3",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "$260,000.00",
+    "metric": "agg(ALL, out, period(2025-01-01,2025-12-31), counterparty_in(related_parties))",
+    "quote": "За период с 2025-01-01 по 2025-12-31 совокупные платежи Заёмщика (Ekibastuz Power Services JSC) в адрес аффилированных и связанных сторон не должны превышать $260,000.00.",
+    "trigger": null
+   }
+  ]
+ }
+}

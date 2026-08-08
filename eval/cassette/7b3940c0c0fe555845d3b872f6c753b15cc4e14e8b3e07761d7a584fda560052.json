@@ -1,0 +1,31 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "related_party_threshold",
+    "quote": "Организации, в которых Группа владеет 34.0% и более голосующих прав, признаются связанными сторонами для целей Договора.",
+    "value": "34.0"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [
+   {
+    "name": "Ulytau Capital LLP",
+    "quote": "Организация Доля голосующих прав Ulytau Capital LLP. 39.7%"
+   },
+   {
+    "name": "Ural Haul Systems LLP",
+    "quote": "Организация Доля голосующих прав Ural Haul Systems LLP 31.4%"
+   }
+  ],
+  "unrestricted_subsidiaries": [
+   {
+    "name": "Zhezkazgan Processing Holdings LLP",
+    "quote": "Дочерняя организация Доля активов в залоге Zhezkazgan Processing Holdings LLP 11,4%. Дочерние организации, у которых доля активов в залоге ниже 50,0%, находятся вне периметра обеспечения и для целей Договора рассматриваются как необремененные."
+   }
+  ]
+ }
+}

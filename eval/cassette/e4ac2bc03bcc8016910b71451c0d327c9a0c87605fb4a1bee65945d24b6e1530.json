@@ -1,0 +1,16 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [
+   {
+    "quote": "Операция TXN-B4-0026, датированная 2025-11-20, исключена из ковенантного периода 2025 года.",
+    "txn_id": "TXN-B4-0026"
+   }
+  ],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

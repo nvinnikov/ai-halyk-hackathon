@@ -24,7 +24,10 @@ from pdftext import doc_hash
 from route import full_text, route_doc
 from stages import artifact
 
-DOSSIER_VERSION = 5  # v5: алярмы карантина (routing_failed) пишутся в артефакт досье
+# v6 — активационный бамп (2026-08-08): досье собиралось из route-артефактов
+# v1; после ROUTE_VERSION=2 (META/WHOSE по тексту без футера) кэшированное
+# досье устарело по входу. v5: алярмы карантина в артефакте досье.
+DOSSIER_VERSION = 6
 _EDITION_RANK = {"final": 0, "unmarked": 1, "draft": 2, "superseded": 3}
 # Редакционная фильтрация — только для перевыпускаемых целиком типов. Отчёты
 # и записки кумулятивны: каждый несёт своё документальное решение, и отброс

@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "Пункт 6.1",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "0.15",
+    "metric": "ratio(agg(CAPEX, out, counterparty_in(unrestricted_subsidiaries), period(2025-01-01,2025-12-31)), agg(CAPEX, out, period(2025-01-01,2025-12-31)))",
+    "quote": "Заёмщик, Zhezkazgan Mining Services JSC, обязуется не допускать, чтобы совокупная стоимость капитальных активов, переданных Неограниченным дочерним организациям за период с 2025-01-01 по 2025-12-31, превышала 0.15x совокупных капитальных затрат Заёмщика за этот период.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.2",
+    "confidence": 0.95,
+    "direction": "min",
+    "limit": "6900000",
+    "metric": "agg(REVENUE, in, period(2025-01-01,2025-12-31))",
+    "quote": "Заёмщик, Zhezkazgan Mining Services JSC, обязуется обеспечить, чтобы совокупная выручка по статье «Выручка» за период с 2025-01-01 по 2025-12-31 составляла не менее $6,900,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.3",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "225000",
+    "metric": "agg(ALL, out, counterparty_in(related_parties), period(2025-01-01,2025-12-31))",
+    "quote": "В период с 2025-01-01 по 2025-12-31 Zhezkazgan Mining Services JSC не вправе совершать Ограниченные платежи в пользу связанных сторон на совокупную сумму свыше $225,000.00.",
+    "trigger": null
+   }
+  ]
+ }
+}

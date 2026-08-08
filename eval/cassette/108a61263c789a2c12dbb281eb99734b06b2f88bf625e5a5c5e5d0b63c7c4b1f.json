@@ -1,0 +1,16 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [],
+  "related_parties": [
+   {
+    "name": "Kazyna Capital LLP.",
+    "quote": "Kazyna Capital LLP. 38.9%"
+   }
+  ],
+  "unrestricted_subsidiaries": []
+ }
+}

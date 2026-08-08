@@ -1,0 +1,32 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "min_interest_coverage_ratio",
+    "quote": "Заёмщик, Ekibastuz Energy JSC, обязуется не допускать снижения Коэффициента покрытия процентов ниже величины 2.00x за период с 2025-01-01 по 2025-12-31.",
+    "value": "2.00"
+   },
+   {
+    "key": "individual_overhead_line_ceiling",
+    "quote": "Заёмщик, Ekibastuz Energy JSC, обязуется не допускать, чтобы какая-либо отдельная статья накладных расходов превышала $1,500,000.00 за период с 2025-01-01 по 2025-12-31.",
+    "value": "1500000"
+   },
+   {
+    "key": "max_related_party_payments",
+    "quote": "За период с 2025-01-01 по 2025-12-31 совокупные платежи Заёмщика (Ekibastuz Energy JSC) в адрес аффилированных и связанных сторон не должны превышать $500,000.00.",
+    "value": "500000"
+   },
+   {
+    "key": "unbudgeted_capex_limit",
+    "quote": "Капитальные вложения, не предусмотренные инвестиционным бюджетом, допускаются при условии, что их совокупный размер за финансовый год не превышает $8,300,000.00.",
+    "value": "8300000"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

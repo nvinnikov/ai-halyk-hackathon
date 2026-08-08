@@ -1,0 +1,18 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [
+   {
+    "counterparty": null,
+    "quote": "Операция TXN-P8-0016, первоначально учтённая как Консультационные услуги ($342,118.65), переклассифицирована для целей соблюдения ковенантов как Расходы на оплату труда.",
+    "to_category": "PAYROLL",
+    "txn_id": "TXN-P8-0016"
+   }
+  ],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}
