@@ -277,8 +277,10 @@ def _percent(value: str) -> Decimal | None:
     return d if d.is_finite() else None
 
 
-def _merge_ownership(facts: dict, raw: dict, doc: dict, text: str) -> None:
-    """Порог владения применяет код: сравнение доли с порогом — арифметика.
+def _ownership_rows(facts: dict, raw: dict, doc: dict, text: str) -> tuple[list, list]:
+    """Строки таблицы владения, разложенные по порогу: (выше-или-равно, ниже).
+
+    Порог владения применяет код: сравнение доли с порогом — арифметика.
 
     Модель называет связанные стороны сама, но это решение держится на том, что
     она сделала сравнение (у каждого заёмщика свой порог) — на живом прогоне
@@ -290,6 +292,11 @@ def _merge_ownership(facts: dict, raw: dict, doc: dict, text: str) -> None:
     таблице есть: доля ниже порога — не связанная сторона, даже если модель её
     назвала. Организация вне таблицы порогом не отменяется — её связанность
     могла быть раскрыта в другом документе.
+
+    Раскладка отделена от применения (_apply_ownership) намеренно: строки
+    собираются по ВСЕМ досье комплаенс-проверки и применяются один раз, иначе
+    порядок документов решал бы исход — таблица второго документа снимала бы
+    признанное по таблице первого.
     """
     # Проверять существование цитаты мало: число обязано в ней стоять. Тот же
     # инвариант, что у resolve_doc_fact ниже — иначе доля 12.5% из документа
@@ -312,10 +319,10 @@ def _merge_ownership(facts: dict, raw: dict, doc: dict, text: str) -> None:
         return number
 
     if not raw["threshold_percent"]:
-        return
+        return [], []
     threshold = number_from_quote(raw["threshold_percent"], raw["threshold_quote"], "ownership_threshold")
     if threshold is None:
-        return
+        return [], []
 
     above: list[dict] = []
     below: list[dict] = []
@@ -323,12 +330,26 @@ def _merge_ownership(facts: dict, raw: dict, doc: dict, text: str) -> None:
         share = number_from_quote(item["share_percent"], item["quote"], "ownership_share")
         if share is None:
             continue
-        (above if share >= threshold else below).append(item)
+        row = {**item, "threshold_percent": raw["threshold_percent"]}
+        (above if share >= threshold else below).append(row)
+    return above, below
 
+
+def _apply_ownership(facts: dict, above: list[dict], below: list[dict]) -> None:
+    """Признанное таблицей — в набор; ниже порога — снять, но не своё же.
+
+    Порядок строк не должен решать исход: организация приходит в таблицу двумя
+    строками (прямая доля и косвенная), дублируется в ответе модели или
+    встречается в двух досье. Достаточно одной строки не ниже порога, чтобы
+    организация была связанной, поэтому строки ниже порога не трогают то, что
+    признано таблицей.
+    """
     for item in above:
         if item["name"] not in facts["related_parties"]:
             facts["related_parties"].append(item["name"])
         facts["related_quotes"].setdefault(item["name"], item["quote"])
+
+    above_tokens = {tokens(item["name"]) for item in above}
     # Равенство наборов токенов, а не is_related: тот матчит подмножество в обе
     # стороны, и короткое имя из таблицы вычищало бы более длинные чужие — имя
     # из двух слов поглощало бы одноимённую организацию из трёх, раскрытую в
@@ -336,9 +357,25 @@ def _merge_ownership(facts: dict, raw: dict, doc: dict, text: str) -> None:
     # переживает пунктуацию юрформы, ради которой токены и брались.
     for item in below:
         table_tokens = tokens(item["name"])
-        for name in [n for n in facts["related_parties"] if tokens(n) == table_tokens]:
+        if table_tokens in above_tokens:
+            continue
+        removed = [n for n in facts["related_parties"] if tokens(n) == table_tokens]
+        for name in removed:
             facts["related_parties"].remove(name)
             facts["related_quotes"].pop(name, None)
+        if removed:
+            # Добавление оставляет след в related_quotes, снятие молчало бы:
+            # сузившийся набор — это статус ячейки, и в окне прогона надо
+            # видеть, кого сняли, по какой доле и против какого порога.
+            facts["alarms"].append(
+                {
+                    "kind": "ownership_below_threshold",
+                    "name": item["name"],
+                    "share": item["share_percent"],
+                    "threshold": item["threshold_percent"],
+                    "quote": item["quote"],
+                }
+            )
 
 
 def _merge_doc(facts: dict, raw: dict, doc: dict, text: str) -> None:
@@ -488,6 +525,10 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
         # набор, который назвала модель, затем правило таблицы поверх него.
         # Только досье комплаенс-проверки: раскрытие долей с порогом живёт
         # там, и ограничение держит стоимость на одном вызове за заёмщика.
+        # Строки собираются по всем таким документам и применяются один раз —
+        # иначе порядок документов решал бы исход.
+        all_above: list[dict] = []
+        all_below: list[dict] = []
         for doc in dossier_art["docs"]:
             if doc["doc_type"] != "kyc":
                 continue
@@ -506,7 +547,10 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
                     {"kind": "ownership_extraction_failed", "file": doc["file"], "error": repr(exc)}
                 )
                 continue
-            _merge_ownership(facts, own, doc, text)
+            above, below = _ownership_rows(facts, own, doc, text)
+            all_above.extend(above)
+            all_below.extend(below)
+        _apply_ownership(facts, all_above, all_below)
         for key in ("related_parties", "unrestricted_subsidiaries", "exclude"):
             facts[key] = sorted(facts[key])
         # Численная сортировка: лексикографическая ставит "1000000.00" перед

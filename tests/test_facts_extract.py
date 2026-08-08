@@ -408,6 +408,58 @@ def test_ownership_below_threshold_does_not_absorb_other_names(tmp_path, monkeyp
     assert facts["related_parties"] == ["Ertis Capital Trading LLP"]
 
 
+TWO_ROW_TEXT = (
+    "Организация Доля голосующих прав Ertis Capital, LLP прямая 38.9% "
+    "Ertis Capital, LLP косвенная 5.0% "
+    "Организации, в которых Группа владеет 20.0% и более голосующих прав, "
+    "признаются связанными сторонами."
+)
+TWO_ROW_DOSSIER = {
+    "account_id": "ACC-1",
+    "scenario_id": "S1",
+    "docs": [{"file": "kyc.pdf", "doc_type": "kyc", "date": "2025-12-31", "text": TWO_ROW_TEXT}],
+    "docs_rejected": [],
+    "quarantined": [],
+}
+
+
+def test_ownership_row_above_threshold_wins_over_row_below(tmp_path, monkeypatch):
+    """Организация в таблице двумя строками остаётся связанной по большей доле.
+
+    Прямая доля 38.9% и косвенная 5.0% — две строки об одной организации.
+    Проход по строкам ниже порога не имеет права снять то, что та же таблица
+    признала связанным: иначе организация с долей выше порога выпадает из
+    набора, related-фильтр сужается, и цена — статус ячейки целиком. Тот же
+    механизм срабатывает на дубле строки в ответе модели.
+    """
+    own = ownership(
+        [
+            ("Ertis Capital, LLP", "38.9", "Ertis Capital, LLP прямая 38.9%"),
+            ("Ertis Capital, LLP", "5.0", "Ertis Capital, LLP косвенная 5.0%"),
+        ]
+    )
+    monkeypatch.setattr(facts_extract.llm, "call", _dispatch([], own))
+    facts = facts_extract.extract_facts(tmp_path, TWO_ROW_DOSSIER)
+    assert facts["related_parties"] == ["Ertis Capital, LLP"]
+
+
+def test_ownership_removal_is_alarmed(tmp_path, monkeypatch):
+    """Снятие связанной стороны видно в трейсе: имя, доля и порог.
+
+    Добавление оставляет след в related_quotes, а снятие молчало — в окне
+    прогона не было видно ни того, что набор сузился, ни по какой цитате.
+    """
+    own = ownership([("Irtysh Advisory Bureau", "18.6", "Irtysh Advisory Bureau 18.6%")])
+    model = [{"name": "Irtysh Advisory Bureau", "quote": "Irtysh Advisory Bureau 18.6%"}]
+    monkeypatch.setattr(facts_extract.llm, "call", _dispatch(model, own))
+    facts = facts_extract.extract_facts(tmp_path, OWNERSHIP_DOSSIER)
+    assert facts["related_parties"] == []
+    alarm = next(a for a in facts["alarms"] if a["kind"] == "ownership_below_threshold")
+    assert alarm["name"] == "Irtysh Advisory Bureau"
+    assert alarm["share"] == "18.6"
+    assert alarm["threshold"] == "20.0"
+
+
 def test_ownership_call_failure_costs_only_the_threshold(tmp_path, monkeypatch):
     """Сбой вызова таблицы владения — потеря уточнения, а не всех фактов.
 
