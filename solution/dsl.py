@@ -104,7 +104,7 @@ class Cmp:
 _FILTER_TYPES = (Period, Quarter, CounterpartyIn, TxnIn, MinAmount, DescContains)
 
 _TOKEN = re.compile(
-    r"\s*(?:(?P<lpar>\()|(?P<rpar>\))|(?P<lbr>\[)|(?P<rbr>\])|(?P<comma>,)"
+    r"\s*(?:(?P<lpar>\()|(?P<rpar>\))|(?P<lbr>\[)|(?P<rbr>\])|(?P<comma>,)|(?P<eq>=)"
     r"|(?P<str>'[^']*')|(?P<date>\d{4}-\d{2}-\d{2})|(?P<num>-?\d+(?:\.\d+)?)"
     r"|(?P<name>[A-Za-z_][A-Za-z0-9_]*))"
 )
@@ -163,6 +163,27 @@ class _Parser:
 
     def parse_arg(self, in_agg: bool, pos: int):
         k, v = self.peek()
+        if (
+            k == "name"
+            and v == "filters"
+            and self.i + 1 < len(self.toks)
+            and self.toks[self.i + 1][0] == "eq"
+        ):
+            # Модель эхом печатает имя поля AST: agg(..., filters=[f1, f2])
+            # вместо голого хвоста фильтров (живой паттерн Gemini, task-28).
+            # Список после filters= — тот же хвост, легален там же, где
+            # легален фильтр: только в хвосте agg (позиция ≥ 2).
+            if not (in_agg and pos >= 2):
+                raise DslError("filters=[...] вне хвоста agg")
+            self.take("name")
+            self.take("eq")
+            self.take("lbr")
+            items = [self.parse_call(allow_filter=True)]
+            while self.peek()[0] == "comma":
+                self.take("comma")
+                items.append(self.parse_call(allow_filter=True))
+            self.take("rbr")
+            return ("filters_list", tuple(items))
         if k == "name" and self.i + 1 < len(self.toks) and self.toks[self.i + 1][0] == "lpar":
             # вложенный вызов; фильтр легален только в хвосте agg (позиция ≥ 2)
             return self.parse_call(allow_filter=in_agg and pos >= 2)
@@ -201,7 +222,22 @@ def _expr(x):
     return x
 
 
+_DATE_SHAPE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_NAME_SHAPE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
 def _lit(x, *kinds):
+    if not _is_lit(x, *kinds) and _is_lit(x, "str"):
+        # Та же путаница форм, что у counterparty_in('related_parties'):
+        # модель кавычит то, что грамматика ждёт голым литералом —
+        # period('2025-01-01', ...) и doc('ключ') с живых прогонов Gemini
+        # (task-28, «третий паттерн»). Строка, чьё содержимое имеет форму
+        # ожидаемого литерала, — тот же литерал; любая другая — ошибка.
+        s = x[1]
+        if "date" in kinds and _DATE_SHAPE.fullmatch(s):
+            return s
+        if "name" in kinds and _NAME_SHAPE.fullmatch(s):
+            return s
     if not _is_lit(x, *kinds):
         raise DslError(f"ожидался литерал {kinds}, встретился {x!r}")
     return x[1]
@@ -216,6 +252,12 @@ def _build_node(name, args):
             raise DslError(f"sign {sign!r} не из {sorted(_SIGNS)}")
         filters = []
         for a in args[2:]:
+            if _is_lit(a, "filters_list"):
+                for f in a[1]:
+                    if not isinstance(f, _FILTER_TYPES):
+                        raise DslError(f"в filters=[...] ожидался фильтр, встретился {f!r}")
+                    filters.append(f)
+                continue
             if not isinstance(a, _FILTER_TYPES):
                 raise DslError(f"в хвосте agg ожидался фильтр, встретился {a!r}")
             filters.append(a)
