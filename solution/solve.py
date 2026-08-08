@@ -753,7 +753,14 @@ def _write_borrower_trace(
                 cs = legacy_spec_to_cellspec(SPECS[scenario][clause])
         except Exception:
             continue
-        referenced |= {n.category for n in walk(cs["metric_ast"]) if isinstance(n, Agg)}
+        # Триггер наравне с метрикой: несработавший триггер даёт безусловный
+        # COMPLIANT (evidence.compute), значит его категория — такой же путь к
+        # статусу. referenced уходит в coverage_report и решает эскалацию
+        # warn → critical; без триггера springing-ковенант, чьё условие читает
+        # OTHER_OPEX или OPEX_TOTAL, оставил бы заёмщицкий алярм на warn.
+        referenced |= _all_metric_categories(cs["metric_ast"])
+        if cs.get("trigger_ast") is not None:
+            referenced |= _all_metric_categories(cs["trigger_ast"])
     docs_used: list = []
     docs_rejected: list = []
     if facts_source == "extracted" and index is not None:
@@ -1089,9 +1096,17 @@ def main(
                         )
                         if oa is not None:
                             trace["other_unassigned"] = oa
+                            # severity=None означает inputs_sum == 0: метрика не
+                            # видит НИ ОДНОЙ своей строки, весь объём осел в
+                            # OTHER. Это максимальная тяжесть, и печатать её
+                            # как None нельзя — разбор в окне идёт сортировкой
+                            # по severity, и такая ячейка встала бы ниже любой
+                            # с посчитанной долей.
                             print(
                                 f"ALARM other_unassigned {scenario} {clause}: "
-                                f"blind={','.join(oa['blind'])} severity={oa['severity']}",
+                                f"blind={','.join(oa['blind'])} "
+                                f"severity={oa['severity'] or 'MAX(inputs=0)'} "
+                                f"other_sum={oa['other_sum']}",
                                 flush=True,
                             )
                     except Exception as exc:
