@@ -395,8 +395,8 @@ def _collect_report_alarms(wd: Path) -> list[dict]:
             seen_shared: set[str] = set()
             for p in sorted(d.glob("*.json")):
                 for a in json.loads(p.read_text()).get("alarms", []):
-                    # routing_failed дублируется во всех пер-аккаунтных досье.
-                    if sub == "dossier" and a.get("kind") == "routing_failed":
+                    # Все алярмы досье дублируются во всех пер-аккаунтных артефактах.
+                    if sub == "dossier":
                         key = json.dumps(a, sort_keys=True, ensure_ascii=False)
                         if key in seen_shared:
                             continue

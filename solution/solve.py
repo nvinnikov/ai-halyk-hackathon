@@ -725,9 +725,11 @@ def _alarm_counts(wd: Path) -> dict[str, int]:
             seen_shared: set[str] = set()
             for p in sorted(d.glob("*.json")):
                 for a in json.loads(p.read_text()).get("alarms", []):
-                    # Карантинные алярмы (routing_failed) дублируются во всех
-                    # пер-аккаунтных артефактах досье — считаем один раз.
-                    if sub_dir == "dossier" and a.get("kind") == "routing_failed":
+                    # ВСЕ алярмы досье — карантинного происхождения и дублируются
+                    # во всех пер-аккаунтных артефактах (ревью PR #9, 11-я волна:
+                    # routing_quarantine/meta_extraction_failed/ambiguous_routing
+                    # считались xN заёмщиков) — считаем один раз.
+                    if sub_dir == "dossier":
                         skey = stable_json(a)
                         if skey in seen_shared:
                             continue

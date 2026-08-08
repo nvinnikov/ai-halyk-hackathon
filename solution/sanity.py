@@ -84,9 +84,9 @@ def _stage_alarms(wd: Path) -> dict[str, int] | None:
         for p in sorted(d.glob("*.json")):
             for alarm in json.loads(p.read_text()).get("alarms", []):
                 kind = str(alarm.get("kind", "other")) if isinstance(alarm, dict) else "other"
-                # routing_failed дублируется во всех пер-аккаунтных досье —
-                # считаем один раз (как в solve._alarm_counts).
-                if d.name == "dossier" and kind == "routing_failed":
+                # Все алярмы досье дублируются во всех пер-аккаунтных
+                # артефактах — считаем один раз (как в solve._alarm_counts).
+                if d.name == "dossier":
                     key = json.dumps(alarm, sort_keys=True, ensure_ascii=False)
                     if key in seen_shared:
                         continue
