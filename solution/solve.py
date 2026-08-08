@@ -95,15 +95,23 @@ _DERIVED_DOC_KEYS = frozenset({"ebitda_addbacks_material_total"})
 def _with_doc_facts(facts: dict) -> dict:
     """doc_facts для doc()-метрик DSL: считается детерминированно из сырых
     фактов досье — арифметика (порог материальности, сумма добавок) остаётся
-    в коде, LLM отдаёт только исходные числа."""
+    в коде, LLM отдаёт только исходные числа. Производные ключи код ПЕРЕБИВАЕТ
+    (не setdefault): модель, вернувшая ebitda_addbacks_material_total своим
+    numeric_facts, не имеет права затенить арифметику (ревью PR #9, 16-я
+    волна — та же дисциплина, что _DERIVED_DOC_KEYS для адресного резолва)."""
     out = dict(facts)
     doc_facts = dict(out.get("doc_facts", {}))
     addbacks = [Decimal(str(a)) for a in out.get("ebitda_addbacks", [])]
     materiality = Decimal(str(out.get("addback_materiality", 0)))
-    doc_facts.setdefault(
-        "ebitda_addbacks_material_total",
-        str(sum((a for a in addbacks if a >= materiality), Decimal(0))),
-    )
+    derived_total = str(sum((a for a in addbacks if a >= materiality), Decimal(0)))
+    model_value = doc_facts.get("ebitda_addbacks_material_total")
+    if model_value is not None and str(model_value) != derived_total:
+        print(
+            f"ALARM derived_doc_key_overridden: ebitda_addbacks_material_total "
+            f"модели ({model_value}) заменён арифметикой кода ({derived_total})",
+            flush=True,
+        )
+    doc_facts["ebitda_addbacks_material_total"] = derived_total
     if "severance_liability" in out:
         doc_facts.setdefault("severance_liability", str(out["severance_liability"]))
     out["doc_facts"] = doc_facts

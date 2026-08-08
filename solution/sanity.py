@@ -136,7 +136,10 @@ def collect(archive: Path) -> dict:
     return {
         "dataset_hash": ds_hash,
         "targets": len(targets),
-        "background": index["background"],
+        # account_ids (сотни счетов) в снимок не тащим (ревью PR #9, 16-я
+        # волна): DIFF на приватном наборе превращался бы в блоб, полезный
+        # сигнал — счётчики accounts/rows/row_share.
+        "background": {k: v for k, v in index["background"].items() if k != "account_ids"},
         "index_alarms": index["alarms"],
         "pdf_count": len(inputs["pdfs"]),
         "blind_pages": blind,

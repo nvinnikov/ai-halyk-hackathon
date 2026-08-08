@@ -143,13 +143,16 @@ def _preseed_text_vision(pub_wd: Path, mut_wd: Path, mutate) -> None:
 _ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)  # эпоха zip-формата, не время сборки
 
 
-def _new_zip_from_root(root: Path, out_zip: Path, transform) -> None:
+def _new_zip_from_root(root: Path, out_zip: Path, transform, marker: str | None = None) -> None:
     """Пересобрать zip из дерева root; transform(path, bytes) -> bytes решает,
-    менять ли содержимое файла. Другие байты zip → другой dataset_hash даже при
-    неизменном содержимом (нужно для shift, где CSV/PDF не трогаются) — но байты
-    обязаны зависеть только от СОДЕРЖИМОГО, не от времени сборки: ZipInfo без
-    явного date_time штампует datetime.now(), и одна и та же мутация давала бы
-    новый dataset_hash при каждом перезапуске (см. task-28-report.md)."""
+    менять ли содержимое файла. Байты зависят только от СОДЕРЖИМОГО, не от
+    времени сборки (ZipInfo с фиксированной эпохой — см. task-28-report.md).
+
+    marker — детерминированная запись MUTATION.txt: мутации, не меняющие
+    файлы датасета (shift/fx живут в предзасеянных text-артефактах), без неё
+    давали бы ОДИНАКОВЫЕ байты → один dataset_hash → общий work/<hash>, и
+    вторая цель считалась бы на закэшированных спеках первой (ревью PR #9,
+    16-я волна)."""
     out_zip.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out_zip, "w") as z:
         for p in sorted(root.rglob("*")):
@@ -158,6 +161,8 @@ def _new_zip_from_root(root: Path, out_zip: Path, transform) -> None:
             rel = str(p.relative_to(root.parent))
             info = zipfile.ZipInfo(rel, date_time=_ZIP_EPOCH)
             z.writestr(info, transform(p))
+        if marker is not None:
+            z.writestr(zipfile.ZipInfo("MUTATION.txt", date_time=_ZIP_EPOCH), marker)
 
 
 def build_renamed(archive: Path) -> Path:
@@ -242,7 +247,7 @@ def shift_threshold(archive: Path, scenario: str, clause: str) -> Path:
 
     root = find_inputs(input_dir)["root"]
     out_zip = Path("work") / f"mutated-shift-{scenario}-{clause.replace('.', '_')}.zip"
-    _new_zip_from_root(root, out_zip, lambda p: p.read_bytes())
+    _new_zip_from_root(root, out_zip, lambda p: p.read_bytes(), marker=f"shift {scenario} {clause} x0.72")
 
     mut_hash = dataset_hash(out_zip)
     mut_wd = workdir(mut_hash)
