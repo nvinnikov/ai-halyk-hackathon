@@ -81,18 +81,13 @@ def _extract_number_formats(num: Decimal | int | float) -> set[str]:
     # Формат с двумя знаками (ROUND_HALF_UP — как в score.py)
     quantized = d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     quantized_str = str(quantized)
-    if quantized_str not in _WEIGHT_SCORES:
-        formats.add(quantized_str)
+    formats.add(quantized_str)
 
     # Формат с одним знаком
     quantized_one = d.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
     quantized_one_str = str(quantized_one)
     # Пропускаем веса скоринга и совпадения с более точной формой
-    if (
-        quantized_one_str not in {"0.0"}
-        and quantized_one_str not in _WEIGHT_SCORES
-        and quantized_one_str != quantized_str
-    ):
+    if quantized_one_str not in {"0.0"} and quantized_one_str != quantized_str:
         formats.add(quantized_one_str)
 
     # Для целых: формат с подчёркиваниями-разрядами (500_000, 4_000_000)
@@ -201,6 +196,12 @@ def scan(paths: list[Path]) -> list[dict]:
     """
     forbidden = forbidden_literals()
     results = []
+    # Пороги, совпавшие с ВЕСАМИ скоринга (0.30/0.20/0.05...), раньше глушились
+    # ГЛОБАЛЬНО — гейт был слеп к трём реальным ковенантам (ревью PR #9, 8-я
+    # волна). Теперь они запрещены везде, кроме единственного легитимного дома
+    # весов — solution/score.py (узкое, задокументированное исключение; НЕ
+    # общий allowlist-механизм).
+    weight_home = str(Path("solution") / "score.py")
 
     # Строим паттерны: границы слова для ID сценариев, простая подстрока для остального
     patterns = {}
@@ -222,6 +223,8 @@ def scan(paths: list[Path]) -> list[dict]:
         lines = content.splitlines()
         for line_num, line in enumerate(lines, 1):
             for lit, (regex, use_regex) in patterns.items():
+                if lit in _WEIGHT_SCORES and path_str.endswith(weight_home):
+                    continue
                 if use_regex:
                     if regex.search(line):
                         results.append({"file": path_str, "line": line_num, "literal": lit})

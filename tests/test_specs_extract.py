@@ -231,3 +231,45 @@ def test_non_numeric_limit_invalid_in_check(tmp_path, monkeypatch):
     sp = art["clauses"]["6.1"]
     assert sp["valid"] is False
     assert any("не число" in e for e in sp["errors"])
+
+
+def test_trigger_doc_key_missing_soft_discards_trigger(tmp_path, monkeypatch):
+    """Ревью PR #9 (8-я волна): doc()-ключ в триггере без факта — триггер мягко
+    отброшен (не KeyError в evaluate), ключ попадает в missing_doc_keys для
+    резолва, спека остаётся валидной."""
+    monkeypatch.setattr(
+        specs_extract.llm,
+        "call",
+        lambda *a, **k: {
+            "covenants": [
+                covenant(
+                    metric="agg(CAPEX, out)",
+                    trigger="gt(doc(financing_threshold), const(1))",
+                )
+            ]
+        },
+    )
+    art = specs_extract.extract_specs(tmp_path, make_dossier(covenant()["quote"]), set())
+    sp = art["clauses"]["6.1"]
+    assert sp["valid"] is True
+    assert sp["trigger"] is None
+    assert "financing_threshold" in sp["missing_doc_keys"]
+    assert any(a["kind"] == "trigger_discarded" for a in art["alarms"])
+
+
+def test_trigger_doc_key_present_keeps_trigger(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        specs_extract.llm,
+        "call",
+        lambda *a, **k: {
+            "covenants": [
+                covenant(
+                    metric="agg(CAPEX, out)",
+                    trigger="gt(doc(financing_threshold), const(1))",
+                )
+            ]
+        },
+    )
+    art = specs_extract.extract_specs(tmp_path, make_dossier(covenant()["quote"]), {"financing_threshold"})
+    sp = art["clauses"]["6.1"]
+    assert sp["valid"] is True and sp["trigger"] is not None

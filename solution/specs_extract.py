@@ -212,8 +212,8 @@ def _check(sp: dict, fact_keys: set[str], agreement_text: str) -> tuple[dict, ob
     except DslError as exc:
         out["errors"].append(f"metric: {exc}")
         return out, None
-    missing = sorted({n.key for n in walk(node) if isinstance(n, Doc)} - fact_keys)
-    out["missing_doc_keys"] = missing
+    metric_missing = sorted({n.key for n in walk(node) if isinstance(n, Doc)} - fact_keys)
+    out["missing_doc_keys"] = metric_missing
     errors = [e for e in validate(node, fact_keys) if "doc-ключ" not in e]
 
     # Порог — самая чувствительная точка prompt-injection: подменённый limit
@@ -238,6 +238,20 @@ def _check(sp: dict, fact_keys: set[str], agreement_text: str) -> tuple[dict, ob
             trig_node = parse(trig_value)
             trig_errors = [e for e in validate(trig_node, fact_keys) if "doc-ключ" not in e]
             discard = bool(trig_errors) or not isinstance(trig_node, Cmp)
+            # doc()-ключи триггера (ревью PR #9, 8-я волна): без учёта они не
+            # попадали ни в missing (resolve не получал шанса), ни в отброс —
+            # спека была valid и падала KeyError в evaluate. Даём резолву шанс
+            # через missing_doc_keys; ключ так и не нашёлся — мягкий отброс
+            # триггера, не ячейки (та же логика, что у кривого триггера).
+            if not discard:
+                trig_missing = sorted({n.key for n in walk(trig_node) if isinstance(n, Doc)} - fact_keys)
+                if trig_missing:
+                    # В missing_doc_keys — чтобы resolve получил шанс (на
+                    # ре-чеке после резолва ключ найдётся и триггер выживет);
+                    # валидность спеки при этом меряется ТОЛЬКО по ключам
+                    # метрики — нерешённый триггер-ключ стоит триггера, не ячейки.
+                    out["missing_doc_keys"] = sorted(set(out["missing_doc_keys"]) | set(trig_missing))
+                    discard = True
         except DslError:
             discard = True
         if discard:
@@ -248,7 +262,7 @@ def _check(sp: dict, fact_keys: set[str], agreement_text: str) -> tuple[dict, ob
     out["trigger"] = trig_value
 
     out["errors"] = errors
-    out["valid"] = not errors and not missing
+    out["valid"] = not errors and not metric_missing
     out["template"] = match_signature(node) if out["valid"] else None
     return out, node
 
@@ -335,6 +349,12 @@ def extract_specs(wd: Path, dossier_art: dict, fact_keys: set[str]) -> dict:
             parsed_nodes[clause_key] = node
         if not checked["valid"] and not checked["missing_doc_keys"]:
             alarms.append({"kind": "invalid_spec", "clause": clause_key, "errors": checked["errors"]})
+        elif checked["missing_doc_keys"]:
+            # Тихих отбросов нет (ревью PR #9, 8-я волна): недостающие doc-ключи
+            # видны сразу, а не реверс-инжинирятся по tier в трейсе.
+            alarms.append(
+                {"kind": "missing_doc_keys", "clause": clause_key, "keys": checked["missing_doc_keys"]}
+            )
 
     _flag_outliers(clauses, parsed_nodes, alarms)
     return {"clauses": clauses, "alarms": alarms}

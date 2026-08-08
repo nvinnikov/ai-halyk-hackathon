@@ -1,7 +1,7 @@
 """Факты досье (5.2/5.3): LLM извлекает с цитатами, код сливает детерминированно."""
 
 import hashlib
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import llm
@@ -417,6 +417,14 @@ def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) ->
     # импорт по месту: модули solution не пакет, цикла нет.
     from specs_extract import _limit_in_quote
 
-    if not _limit_in_quote(str(art["value"]), art["quote"]):
+    # Знак — не часть вёрстки: «-1 200 000» в цитате обычно печатается как
+    # «минус 1 200 000» или суммой в скобках; сверяем модуль (ревью PR #9,
+    # 8-я волна — иначе отрицательные doc-факты, которые RESOLVE_PROMPT сам
+    # просит, отбрасывались бы всегда).
+    try:
+        unsigned = str(abs(Decimal(str(art["value"]))))
+    except InvalidOperation:
+        unsigned = str(art["value"]).lstrip("-")
+    if not _limit_in_quote(unsigned, art["quote"]):
         return None  # число не из цитаты — факта нет
     return {"value": art["value"], "quote": art["quote"]}

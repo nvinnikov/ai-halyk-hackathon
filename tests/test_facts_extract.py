@@ -236,3 +236,15 @@ def test_garbage_number_dropped_with_alarm(tmp_path, monkeypatch):
     facts = facts_extract.extract_facts(tmp_path, DOSSIER)
     assert facts["amount_override"] == {}
     assert any(a["kind"] == "invalid_number" for a in facts["alarms"])
+
+
+def test_resolve_doc_fact_negative_value_matches_unsigned_quote(tmp_path, monkeypatch):
+    """Ревью PR #9 (8-я волна): отрицательный doc-факт сверяется с цитатой по
+    модулю — знак в вёрстке живёт словом («минус») или скобками."""
+
+    def fake_call(prompt, schema, schema_version, **kw):
+        return {"found": True, "value": "-9450000.00", "quote": "консолидированный CapEx $9,450,000.00"}
+
+    monkeypatch.setattr(facts_extract.llm, "call", fake_call)
+    got = facts_extract.resolve_doc_fact(tmp_path, DOSSIER, "group_capex3", "CapEx Группы")
+    assert got == {"value": "-9450000.00", "quote": "консолидированный CapEx $9,450,000.00"}

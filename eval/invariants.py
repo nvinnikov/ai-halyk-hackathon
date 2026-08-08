@@ -67,12 +67,13 @@ def check_sum_conservation(sc, raw_rows, facts):
     for r in sorted(raw_rows, key=lambda x: x["txn_id"]):
         if r["txn_id"] in excluded:
             continue
-        amt = r["amt"]
+        # Как prepare_rows: override применяется к ЛЮБОЙ строке, не только к
+        # нечитаемой (ревью PR #9, 8-я волна — иначе записка казначейства,
+        # исправляющая читаемую сумму, давала ложный INVARIANT_FAIL).
+        override = overrides.get(r["txn_id"])
+        amt = Decimal(str(override)) if override is not None else r["amt"]
         if amt is None:
-            override = overrides.get(r["txn_id"])
-            if override is None:
-                continue  # не восстановлена документом — не входит в ожидание
-            amt = Decimal(str(override))
+            continue  # не восстановлена документом — не входит в ожидание
         want += abs(amt)
 
     if got != want:

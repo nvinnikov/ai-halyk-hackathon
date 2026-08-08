@@ -387,6 +387,10 @@ def _extracted_inputs(
                     if resolved is not None:
                         facts["doc_facts"][key] = resolved["value"]
                         facts["doc_fact_quotes"][key] = resolved["quote"]
+                    else:
+                        # Тихих отбросов нет (ревью PR #9, 8-я волна): причина
+                        # будущего фолбэка ячейки видна в момент отброса.
+                        print(f"ALARM doc_fact_unresolved {sc} {_cl}: {key}", flush=True)
             # Перепроверка с пополненными doc_facts: extract_specs гоняет
             # _check при каждом чтении (задача 23), повторного похода к
             # модели не требует.
