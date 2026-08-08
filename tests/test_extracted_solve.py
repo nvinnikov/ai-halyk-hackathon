@@ -357,3 +357,71 @@ def test_resolve_failure_keeps_spec_art(monkeypatch, tmp_path):
     _facts_by_sc, specs_by_sc = solve._extracted_inputs(tmp_path, tmp_path, index, ["S1"])
     assert "6.1" in specs_by_sc["S1"]["clauses"]  # спеки уцелели
     assert not any(a.get("kind") == "specs_failed" for a in specs_by_sc["S1"]["alarms"])
+
+
+def _loose_spec(title_key: str, metric: str) -> dict:
+    return {
+        "valid": True,
+        "title_key": title_key,
+        "metric": metric,
+        "template": None,
+        "direction": "max",
+        "limit": "1",
+        "trigger": None,
+        "quote": "цитата пункта",
+    }
+
+
+def test_loose_heading_yields_to_extracted_dsl_on_divergence():
+    """Нестрогий матч не получает кредит доверия точного.
+
+    Библиотека двуязычна: законный шаблон бывает недостижим по словам, а
+    сосед — достижим, и сходство с ним проходит и порог, и отрыв. Решение
+    «шаблон исполняется и при расхождении» измерено на ТОЧНЫХ матчах, где
+    заголовок гарантированно тот самый. Здесь посылка обратная, поэтому при
+    расхождении считается извлечённая формула: цена ошибки — отсутствие
+    матча, а не молча посчитанная чужая метрика.
+    """
+    from templates import TEMPLATES
+
+    # Заголовок про долю платежей связанным сторонам в ВЫРУЧКЕ: в библиотеке он
+    # зарегистрирован по-английски, поэтому по словам достижим только русский
+    # брат — та же метрика, но со знаменателем по операционным расходам.
+    sp = _loose_spec(
+        title_key="максимальная доля платежей связанным сторонам в выручке",
+        metric="ratio(agg(ALL, out, counterparty_in(related_parties)), agg(REVENUE, in))",
+    )
+    cellspec, _ = solve._extracted_cellspec(sp, "6.3", scenario="S1")
+    kinds = [a["kind"] for a in cellspec.get("match_alarms", [])]
+    assert "heading_matched_loosely" in kinds
+    assert "loose_heading_rejected_on_divergence" in kinds
+    assert cellspec["metric_text"] == sp["metric"], "расхождение обязано вернуть извлечённую формулу"
+    assert cellspec["metric_text"] != TEMPLATES["related_share_opex"]
+
+
+def test_loose_heading_keeps_template_when_formulas_agree():
+    """Без расхождения нестрогий матч работает как задумано — шаблон исполняется."""
+    from templates import TEMPLATES
+
+    sp = _loose_spec(
+        title_key="минимальный коэффициент покрытия",  # «процентов» выброшено
+        metric=TEMPLATES["icr"],
+    )
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1", scenario="S1")
+    kinds = [a["kind"] for a in cellspec.get("match_alarms", [])]
+    assert "heading_matched_loosely" in kinds
+    assert "loose_heading_rejected_on_divergence" not in kinds
+    assert cellspec["metric_text"] == TEMPLATES["icr"]
+
+
+def test_exact_heading_still_executes_template_on_divergence():
+    """Точный матч ведёт себя как раньше: шаблон исполняется, алярм остаётся."""
+    from templates import TEMPLATE_HEADINGS, TEMPLATES
+
+    key = next(k for k, name in TEMPLATE_HEADINGS.items() if name == "icr")
+    sp = _loose_spec(title_key=key, metric="agg(REVENUE, in)")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1", scenario="S1")
+    kinds = [a["kind"] for a in cellspec.get("match_alarms", [])]
+    assert "heading_matched_loosely" not in kinds
+    assert "loose_heading_rejected_on_divergence" not in kinds
+    assert cellspec["metric_text"] == TEMPLATES["icr"]

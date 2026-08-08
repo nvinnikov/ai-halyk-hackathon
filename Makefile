@@ -21,7 +21,8 @@ public-archive: install
 # Основной прогон через единственную точку входа: пишет out/submission.json и
 # печатает скор по публичному ground_truth. Архив переопределяется:
 # `make solve ARCHIVE=private.zip` — тогда public-archive не нужен.
-ARCHIVE ?= 6a741640c31eb032062683.zip
+DEFAULT_ARCHIVE := 6a741640c31eb032062683.zip
+ARCHIVE ?= $(DEFAULT_ARCHIVE)
 
 solve: public-archive
 	./run.sh $(ARCHIVE)
@@ -44,10 +45,23 @@ check: lint typecheck test
 
 # Однословный алиас ./run.sh: без public-archive-зависимости — 9 августа
 # ARCHIVE=приватный.zip уже лежит на диске, пересборка публичного не нужна.
-run: install
+#
+# ARCHIVE здесь ОБЯЗАТЕЛЕН, в отличие от solve: у переменной есть дефолт на
+# публичный зип, и забытое `ARCHIVE=...` в окне молча посчитало бы публичный
+# набор и перезаписало out/submission.json — ни одна проверка об этом не
+# скажет, потому что прогон формально успешен. Целям репетиции дефолт не нужен:
+# архив 9 августа называют явно.
+require-archive:
+	@test "$(ARCHIVE)" != "$(DEFAULT_ARCHIVE)" || { \
+	  echo "ARCHIVE не задан: цели run/sanity требуют явный архив."; \
+	  echo "  make run ARCHIVE=/путь/к/приватному.zip"; \
+	  echo "  публичный набор гоняется через 'make solve'"; \
+	  exit 1; }
+
+run: install require-archive
 	./run.sh $(ARCHIVE)
 
-sanity: install
+sanity: install require-archive
 	uv run python solution/sanity.py $(ARCHIVE)
 
 # Без сети: инварианты (expected-режим по умолчанию) + греп-гейт + юниты.

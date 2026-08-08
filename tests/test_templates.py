@@ -88,20 +88,32 @@ def test_heading_similarity_separates_own_from_foreign():
     def toks(text):
         return frozenset(w for w in title_key(text).split() if len(w) >= _MIN_HEADING_TOKEN)
 
-    names = sorted(_HEADING_TOKENS)
-    foreign_peak = max(
-        heading_similarity_pct(_HEADING_TOKENS[a], _HEADING_TOKENS[b])
-        for i, a in enumerate(names)
-        for b in names[i + 1 :]
-    )
-    own_floor = min(
-        heading_similarity_pct(toks(fn(h)), _HEADING_TOKENS[name])
-        for name, h in _TEMPLATE_HEADING_TEXT.items()
-        for fn in (lambda t: " ".join(t.split()[:-1]), lambda t: t + " Заёмщика")
-    )
-    assert foreign_peak == 40 and own_floor == 66, (foreign_peak, own_floor)
-    assert foreign_peak < _MIN_HEADING_SIMILARITY_PCT <= own_floor
-    assert _MIN_HEADING_MARGIN_PCT <= own_floor - foreign_peak
+    # Меряем ровно то, что сравнивает код: сходство с победителем и отрыв от
+    # СЛЕДУЮЩЕГО за ним — на пертурбированном ключе. Сходство между исходными
+    # заголовками тут не годится: выброшенное слово уменьшает объединение и
+    # поднимает сходство с чужими шаблонами тоже, поэтому runner_up бывает выше
+    # любой пары исходных заголовков.
+    worst_best = 100
+    worst_margin = 100
+    for name, heading in _TEMPLATE_HEADING_TEXT.items():
+        for variant in _perturb(heading).values():
+            want = toks(variant)
+            ranked = sorted(
+                ((heading_similarity_pct(want, t), n) for n, t in _HEADING_TOKENS.items()),
+                reverse=True,
+            )
+            if ranked[0][1] != name:
+                continue  # не свой победитель — случай для теста про чужие шаблоны
+            worst_best = min(worst_best, ranked[0][0])
+            worst_margin = min(worst_margin, ranked[0][0] - ranked[1][0])
+
+    # Запас по отрыву — ОДИН процентный пункт, и это не опечатка: у заголовка
+    # про выручку без последнего слова победитель даёт 66, а следующий за ним
+    # родственный шаблон — 50. Число закреплено здесь, чтобы новое родственное
+    # имя в библиотеке уронило этот тест, а не приватный прогон.
+    assert (worst_best, worst_margin) == (66, 16), (worst_best, worst_margin)
+    assert _MIN_HEADING_SIMILARITY_PCT <= worst_best
+    assert _MIN_HEADING_MARGIN_PCT <= worst_margin
 
 
 def test_match_heading_survives_reworded_title():

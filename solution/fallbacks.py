@@ -10,9 +10,10 @@
 """
 
 import json
+from decimal import Decimal
 
 from dsl import Ratio
-from util import ROOT
+from util import ROOT, q2
 
 # Через ROOT, а не cwd: запуск не из корня уронил бы skeleton() до первой
 # ячейки — submission не создался бы вообще, отменяя весь скелет-первым.
@@ -89,4 +90,8 @@ def fallback_cell(direction, family, limit, computed, clause=None) -> tuple[dict
     else:
         same_dir = [a for d, a in computed if d == direction]
         actual = _median(same_dir) if same_dir else 1.0
-    return {"status": status, "actual": actual, "evidence_txn_id": None}, alarms
+    # Квантование до двух знаков — требование формы ответа, и фолбэчная ячейка
+    # ему подчиняется наравне с посчитанной: порог из договора и медиана
+    # посчитанных приходят с произвольным числом знаков. На скор по
+    # относительной погрешности это не влияет, но контракт есть контракт.
+    return {"status": status, "actual": q2(Decimal(str(actual))), "evidence_txn_id": None}, alarms
