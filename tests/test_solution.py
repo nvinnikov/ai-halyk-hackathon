@@ -118,7 +118,11 @@ def test_unknown_scenario_facts_do_not_kill_run(monkeypatch):
     """Сценарий без фактов в эталоне (приватный набор): расчёт идёт по строкам
     без документальных решений, остальные сценарии не страдают."""
     victim = sorted(TEMPLATE["answers"])[0]
-    monkeypatch.delitem(solve.FACTS, victim)
+    # solve читает эталон лениво (импорт внутри _expected_facts), поэтому
+    # правится сам словарь модуля — это тот же объект, что вернёт solve.
+    from expected_extraction import FACTS
+
+    monkeypatch.delitem(FACTS, victim)
     answers = solve.main(PUBLIC_ZIP, facts_source="expected")
     for clause, cell in answers[victim].items():
         assert_cell_valid(cell, f"{victim} {clause}")

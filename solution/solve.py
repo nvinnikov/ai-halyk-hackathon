@@ -27,8 +27,6 @@ from pathlib import Path
 sys.path.insert(0, "solution")
 sys.path.insert(0, "eval")
 
-from expected_extraction import FACTS, SPECS
-
 import evidence
 import facts_extract
 import llm
@@ -60,6 +58,26 @@ _VERSIONED_MODULES = (
     "pdftext",
     "categorize_llm",
 )
+
+
+def _expected_facts() -> dict:
+    """Эталонные факты из `eval/` — только для facts_source="expected".
+
+    Импорт ленивый (ревью 8 августа): боевой extracted-путь не читает эталон
+    вообще, а на верхнем уровне отсутствующий `eval/` ронял бы solve ещё до
+    записи скелета — то есть в ноль ячеек вместо фолбэков. Заодно это та
+    связь solution → eval, которую греп-гейт запрещает по смыслу.
+    """
+    from expected_extraction import FACTS
+
+    return FACTS
+
+
+def _expected_specs() -> dict:
+    """Эталонные спеки из `eval/` — только для facts_source="expected", см. _expected_facts."""
+    from expected_extraction import SPECS
+
+    return SPECS
 
 
 def submission_meta() -> dict:
@@ -142,9 +160,10 @@ def _facts_of(scenario: str) -> dict:
     факты с алярмом, а не KeyError: расчёт по строкам без документальных
     решений лучше скелета.
     """
-    if scenario not in FACTS:
+    facts = _expected_facts()
+    if scenario not in facts:
         print(f"ALARM facts_missing {scenario}: расчёт без фактов досье", flush=True)
-    return _with_doc_facts(FACTS.get(scenario, {}))
+    return _with_doc_facts(facts.get(scenario, {}))
 
 
 def load_rows(
@@ -706,7 +725,7 @@ def _spec_only_fallback(
             assert isinstance(cs_or_error, dict)
             cs = cs_or_error
         else:
-            cs = legacy_spec_to_cellspec(SPECS[scenario][clause])
+            cs = legacy_spec_to_cellspec(_expected_specs()[scenario][clause])
         cell, alarms = fallback_cell(
             cs["direction"], family_of(cs["metric_ast"], cs["limit"]), cs["limit"], computed, clause=clause
         )
@@ -757,7 +776,7 @@ def _write_borrower_trace(
                     continue
                 cs = cs_or_error
             else:
-                cs = legacy_spec_to_cellspec(SPECS[scenario][clause])
+                cs = legacy_spec_to_cellspec(_expected_specs()[scenario][clause])
         except Exception:
             continue
         # Триггер наравне с метрикой: несработавший триггер даёт безусловный
@@ -1063,7 +1082,7 @@ def main(
                             fact_keys=frozenset(facts.get("doc_facts", {})),
                         )
                     else:
-                        cellspec_or_error = legacy_spec_to_cellspec(SPECS[scenario][clause])
+                        cellspec_or_error = legacy_spec_to_cellspec(_expected_specs()[scenario][clause])
                 except Exception as exc:
                     cellspec_or_error = exc
                 cell, trace = run_cell(scenario, clause, raw, facts, cellspec_or_error, computed, quote=quote)
@@ -1179,10 +1198,34 @@ def main(
     return answers
 
 
+def _is_public_dataset(archive: Path, public_dir: Path) -> bool:
+    """Прогон идёт по тому набору, к которому относится публичный ключ?
+
+    ground_truth.json лежит в репозитории всегда, поэтому на приватном архиве
+    скорер сравнил бы приватные ответы с публичной разметкой и напечатал бы
+    «ИТОГО: 0.xx / 36.00» с частоколом `<<<`. Под таймером 9 августа это
+    читается как катастрофа и провоцирует отладку на ровном месте. Сравнение —
+    побайтово по леджеру; имена файлов не зашиты, оба находятся тем же
+    find_inputs, что и основной поток. Любой сбой сопоставления — «не
+    публичный»: молчание безопаснее ложной тревоги.
+    """
+    try:
+        _, input_dir = extract_archive(archive)
+        run_csv = find_inputs(input_dir)["ledger_csv"]
+        public_csv = find_inputs(public_dir)["ledger_csv"]
+    except Exception:
+        return False
+    return run_csv.read_bytes() == public_csv.read_bytes()
+
+
 if __name__ == "__main__":
     from score import score as _score
 
-    answers = main(Path(sys.argv[1]))
-    gt_path = Path("dataset/agentic-bank-public/ground_truth.json")
-    if gt_path.exists():
+    _archive = Path(sys.argv[1])
+    answers = main(_archive)
+    public_dir = ROOT / "dataset" / "agentic-bank-public"
+    gt_path = public_dir / "ground_truth.json"
+    if gt_path.exists() and _is_public_dataset(_archive, public_dir):
         _score(answers, json.loads(gt_path.read_text())["scenarios"])
+    else:
+        print("скорер пропущен: публичный ground_truth не от этого набора", flush=True)

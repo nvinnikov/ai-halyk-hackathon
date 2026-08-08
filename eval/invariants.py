@@ -307,7 +307,7 @@ def _referenced_categories(scenario: str, facts_source: str = "expected", wd: Pa
         except Exception:
             pass  # артефактов нет (сбой конвейера) — пустой referenced, проверка мягче
         return refs
-    for _clause, spec in solve.SPECS.get(scenario, {}).items():
+    for _clause, spec in solve._expected_specs().get(scenario, {}).items():
         try:
             cs = solve.legacy_spec_to_cellspec(spec)
         except Exception:
