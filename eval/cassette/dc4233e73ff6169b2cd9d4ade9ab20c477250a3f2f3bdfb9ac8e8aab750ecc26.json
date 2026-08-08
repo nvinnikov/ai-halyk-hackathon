@@ -1,0 +1,26 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "related_party_threshold_percentage",
+    "quote": "Организации, в которых Группа владеет 25.0% и более голосующих прав, признаются связанными сторонами для целей Договора",
+    "value": "25.0"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [
+   {
+    "name": "Tien Shan Advisory Bureau",
+    "quote": "Организация Tien Shan Advisory Bureau ... Доля голосующих прав ... 23.4%"
+   },
+   {
+    "name": "Zhetysu Capital Partners LLP",
+    "quote": "Организация Zhetysu Capital Partners LLP ... Доля голосующих прав ... 31.2%"
+   }
+  ],
+  "unrestricted_subsidiaries": []
+ }
+}

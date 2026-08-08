@@ -1,0 +1,16 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [
+   {
+    "quote": "Операция TXN-P1-0045 (счёт-фактура от 2025-08-12) относится к услугам, оказанным в период с 2026-01-15 по 2026-03-20.",
+    "txn_id": "TXN-P1-0045"
+   }
+  ],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

@@ -1,0 +1,45 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "ertis_capital_voting_rights_pct",
+    "quote": "Ertis Capital, LLP 31.4%",
+    "value": "31.4"
+   },
+   {
+    "key": "irtysh_advisory_bureau_voting_rights_pct",
+    "quote": "Irtysh Advisory Bureau 18.6%",
+    "value": "18.6"
+   },
+   {
+    "key": "pavlodar_plant_services_voting_rights_pct",
+    "quote": "Pavlodar Plant Services LLP 12.5%",
+    "value": "12.5"
+   },
+   {
+    "key": "related_party_threshold_pct",
+    "quote": "Организации, в которых Группа владеет 20.0% и более голосующих прав, признаются связанными сторонами для целей Договора.",
+    "value": "20.0"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [
+   {
+    "name": "Ertis Capital, LLP",
+    "quote": "Ertis Capital, LLP 31.4%"
+   },
+   {
+    "name": "Irtysh Advisory Bureau",
+    "quote": "Irtysh Advisory Bureau 18.6%"
+   },
+   {
+    "name": "Pavlodar Plant Services LLP",
+    "quote": "Pavlodar Plant Services LLP 12.5%"
+   }
+  ],
+  "unrestricted_subsidiaries": []
+ }
+}

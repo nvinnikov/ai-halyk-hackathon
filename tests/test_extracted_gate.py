@@ -19,7 +19,7 @@ import solve
 from score import score
 
 PUBLIC_ZIP = Path("6a741640c31eb032062683.zip")
-EXTRACTED_BASELINE = 29.5
+EXTRACTED_BASELINE = 30.0
 
 
 @pytest.fixture(scope="module")

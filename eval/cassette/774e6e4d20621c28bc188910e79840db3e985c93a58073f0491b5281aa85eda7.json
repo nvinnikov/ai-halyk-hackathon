@@ -1,0 +1,18 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [
+   {
+    "counterparty": null,
+    "quote": "Операция TXN-B1-0023, первоначально учтённая как Операционные расходы ($6,166,592.66), переклассифицирована для целей соблюдения ковенантов как Коммунальные услуги",
+    "to_category": "UTILITIES",
+    "txn_id": "TXN-B1-0023"
+   }
+  ],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

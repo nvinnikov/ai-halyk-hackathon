@@ -1,0 +1,33 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [
+   {
+    "counterparty": "Tengiz Risk Engineering Bureau",
+    "quote": "Сумма в размере $142,118.64, выплаченная контрагенту Tengiz Risk Engineering Bureau, первоначально учтённая как Операционные расходы, переклассифицирована для целей соблюдения ковенантов как Страховые премии",
+    "to_category": "INSURANCE",
+    "txn_id": null
+   },
+   {
+    "counterparty": null,
+    "quote": "Операция TXN-P10-0012, первоначально учтённая как Операционные расходы ($118,447.52), рассматривалась на предмет возможной переклассификации как Страховые премии; по итогам разъяснений руководства первоначальная классификация (Операционные расходы) сохраняется",
+    "to_category": "OTHER_OPEX",
+    "txn_id": "TXN-P10-0012"
+   }
+  ],
+  "related_parties": [
+   {
+    "name": "Tengiz Risk Engineering Bureau",
+    "quote": "контрагенту Tengiz Risk Engineering Bureau"
+   },
+   {
+    "name": "Saryarka Terminal Properties LLP",
+    "quote": "Saryarka Terminal Properties LLP"
+   }
+  ],
+  "unrestricted_subsidiaries": []
+ }
+}
