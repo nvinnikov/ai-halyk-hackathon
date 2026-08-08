@@ -77,20 +77,21 @@ def _stage_alarms(wd: Path) -> dict[str, int] | None:
     if not any(d.is_dir() for d in dirs):
         return None
     counts: dict[str, int] = {}
+    # Глобальный дедуп точных дублей (как в solve._alarm_counts, ревью PR #9,
+    # 17-я волна): карантинные алярмы лежат И в route/*.json, И в каждом
+    # dossier/*.json — пер-каталожный дедуп задваивал счётчик (266 при 133
+    # реальных), а по нему принимают решения в окне.
+    seen_exact: set[str] = set()
     for d in dirs:
         if not d.is_dir():
             continue
-        seen_shared: set[str] = set()
         for p in sorted(d.glob("*.json")):
             for alarm in json.loads(p.read_text()).get("alarms", []):
                 kind = str(alarm.get("kind", "other")) if isinstance(alarm, dict) else "other"
-                # Все алярмы досье дублируются во всех пер-аккаунтных
-                # артефактах — считаем один раз (как в solve._alarm_counts).
-                if d.name == "dossier":
-                    key = json.dumps(alarm, sort_keys=True, ensure_ascii=False)
-                    if key in seen_shared:
-                        continue
-                    seen_shared.add(key)
+                key = json.dumps(alarm, sort_keys=True, ensure_ascii=False)
+                if key in seen_exact:
+                    continue
+                seen_exact.add(key)
                 counts[kind] = counts.get(kind, 0) + 1
     return counts
 
