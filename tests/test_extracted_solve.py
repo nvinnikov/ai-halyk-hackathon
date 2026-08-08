@@ -131,6 +131,42 @@ def test_extracted_cellspec_category_divergence_keeps_template_with_alarm():
     assert kinds == ["heading_category_divergence"]
 
 
+def test_with_doc_facts_keeps_model_total_when_no_addbacks():
+    # Добавок не извлечено, модель дала итог numeric_fact'ом: ноль поверх
+    # извлечённого числа — потеря данных, модельное значение остаётся
+    # (ревью PR #9, 25-я волна).
+    facts = {"ebitda_addbacks": [], "doc_facts": {"ebitda_addbacks_material_total": "500.00"}}
+    out = solve._with_doc_facts(facts)
+    assert out["doc_facts"]["ebitda_addbacks_material_total"] == "500.00"
+
+
+def test_with_doc_facts_arithmetic_wins_when_addbacks_present():
+    # Есть из чего считать — арифметика кода перебивает модельное значение.
+    facts = {
+        "ebitda_addbacks": ["100", "200"],
+        "addback_materiality": "150",
+        "doc_facts": {"ebitda_addbacks_material_total": "999"},
+    }
+    out = solve._with_doc_facts(facts)
+    assert out["doc_facts"]["ebitda_addbacks_material_total"] == "200"
+
+
+def test_run_cell_match_alarms_survive_dsl_fallback():
+    # Спека с match_alarms есть, вычисление падает (doc-ключа нет) —
+    # алярмы подмены не затираются fallback-путём (ревью PR #9, 25-я волна).
+    cellspec = {
+        "metric_ast": parse("doc(missing_key)"),
+        "metric_text": "doc(missing_key)",
+        "direction": "max",
+        "limit": Decimal("100"),
+        "trigger_ast": None,
+        "match_alarms": [{"kind": "heading_signature_divergence", "extracted": "x", "template": "y"}],
+    }
+    _cell, trace = solve.run_cell("SC-Y", "9.8", [], {"doc_facts": {}}, cellspec, [])
+    assert trace["tier"] == 2 and "dsl_error" in trace
+    assert any(a.get("kind") == "heading_signature_divergence" for a in trace["alarms"])
+
+
 def test_run_cell_match_alarms_reach_trace_alarms():
     # match_alarms обязаны доехать до общего trace["alarms"] — только его
     # читают _alarm_counts и invariants._collect_report_alarms; scenario и

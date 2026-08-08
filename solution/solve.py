@@ -105,13 +105,27 @@ def _with_doc_facts(facts: dict) -> dict:
     materiality = Decimal(str(out.get("addback_materiality", 0)))
     derived_total = str(sum((a for a in addbacks if a >= materiality), Decimal(0)))
     model_value = doc_facts.get("ebitda_addbacks_material_total")
-    if model_value is not None and str(model_value) != derived_total:
+    if addbacks or model_value is None:
+        # Арифметике есть из чего считаться (или модельного значения нет
+        # вовсе) — производный ключ перебивается кодом, как и раньше.
+        if model_value is not None and str(model_value) != derived_total:
+            print(
+                f"ALARM derived_doc_key_overridden: ebitda_addbacks_material_total "
+                f"модели ({model_value}) заменён арифметикой кода ({derived_total})",
+                flush=True,
+            )
+        doc_facts["ebitda_addbacks_material_total"] = derived_total
+    else:
+        # Добавок не извлечено, а модель значение дала: подстановка нуля
+        # поверх извлечённого числа — не «арифметика перебивает», а потеря
+        # данных (ревью PR #9, 25-я волна). Модельное значение остаётся,
+        # расхождение видно алярмом.
         print(
-            f"ALARM derived_doc_key_overridden: ebitda_addbacks_material_total "
-            f"модели ({model_value}) заменён арифметикой кода ({derived_total})",
+            f"ALARM derived_doc_key_model_kept: ebitda_addbacks_material_total "
+            f"модели ({model_value}) сохранён — ebitda_addbacks пуст, "
+            f"арифметике не из чего считаться",
             flush=True,
         )
-    doc_facts["ebitda_addbacks_material_total"] = derived_total
     if "severance_liability" in out:
         doc_facts.setdefault("severance_liability", str(out["severance_liability"]))
     out["doc_facts"] = doc_facts
@@ -249,7 +263,10 @@ def run_cell(
                 computed,
                 clause=clause,
             )
-            trace.update(path="prior", tier=2, alarms=alarms)
+            # Мерж, не присваивание: в trace["alarms"] уже могут лежать
+            # match_alarms подмены шаблоном (ревью PR #9, 25-я волна —
+            # update() затирал их на пути «спека есть, вычисление упало»).
+            trace.update(path="prior", tier=2, alarms=trace.get("alarms", []) + alarms)
             return cell, trace
     trace["spec_error"] = repr(cellspec_or_error)
     # 5.7: прочитанные направление и порог невалидной спеки не выбрасываются —
