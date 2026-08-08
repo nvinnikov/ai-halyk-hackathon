@@ -1096,6 +1096,24 @@ def main(
                         )
                         if oa is not None:
                             trace["other_unassigned"] = oa
+                            # И в общий alarms: сканеры run-report
+                            # (_alarm_counts) и invariants._collect_report_alarms
+                            # читают только alarms/fx_alarms, а строка ALARM в
+                            # stdout тонет между fx и fallback. В окне решают по
+                            # run-report — тот же приём, что для
+                            # metric_substituted. scenario/clause внутрь
+                            # словаря: иначе точный дедуп схлопнул бы
+                            # одинаковые срабатывания разных ячеек в одно.
+                            trace.setdefault("alarms", []).append(
+                                {
+                                    "kind": "other_unassigned",
+                                    "scenario": scenario,
+                                    "clause": clause,
+                                    "blind": oa["blind"],
+                                    "severity": oa["severity"],
+                                    "other_sum": oa["other_sum"],
+                                }
+                            )
                             # severity=None означает inputs_sum == 0: метрика не
                             # видит НИ ОДНОЙ своей строки, весь объём осел в
                             # OTHER. Это максимальная тяжесть, и печатать её

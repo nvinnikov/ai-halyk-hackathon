@@ -135,6 +135,39 @@ def _limit_forms(limit: str) -> set[str]:
 
 _THOUSANDS_SEP = re.compile(r"(?<=\d)[,\x20\xa0\u202f](?=\d{3}(?:\D|$))")
 
+# Суффикс кратности после числа: латинский x, кириллический х, знак ×.
+_MULT_SUFFIX = re.compile(r"(?<=\d)\s*[x\u0445\u00d7]$", re.IGNORECASE)
+# Снимается безусловно только $: суммы кейса нормализованы в USD (fx.py), и
+# знак чужой валюты в пороге — единственный сигнал, что порог не в базовой
+# валюте. Порог с €/£/₸ остаётся непарсибельным и громко падает в
+# invalid_spec, как до правки (ревью PR #11, раунд 2 — молча снятый знак
+# давал бы уверенно неверный вердикт с ошибкой в сотни раз).
+_CURRENCY_OR_SPACE = re.compile(r"[$\s\xa0\u202f]")
+# Только запятая-разряд (пробелы к этому моменту уже сняты _CURRENCY_OR_SPACE).
+_COMMA_GROUP = re.compile(r"(?<=\d),(?=\d{3}(?:\D|$))")
+
+
+def _normalize_limit(raw: str) -> str:
+    """Порог из вёрстки модели — в числовую строку: '$1,234,567.89' →
+    '1234567.89', '2.5x' → '2.5', '1,44' → '1.44' (живые прогоны Gemini,
+    task-28: Decimal падал на валютной форме, спека помечалась invalid и
+    ячейка уезжала на лестницу при здоровой цитате и метрике).
+
+    Разрядная запятая снимается только там, где форма однозначна: запятых
+    две и больше или в строке уже есть точка-десятичный разделитель.
+    Одиночная запятая с 1–2 цифрами после — десятичная ('1,44' → '1.44');
+    одиночная с ровно тремя ('0,075' / '7,500') неотличима от разрядной —
+    остаётся как есть и громко падает в invalid_spec, как до правки
+    (ревью PR #11: '0,075' → '0075' == 75 молча завышал бы порог в 1000
+    раз, и _limit_in_quote этого не ловит — цитату калечит тот же
+    _degroup_thousands). Непарсибельный порог обязан дойти до _check и
+    стать invalid_spec, а не молча исчезнуть."""
+    s = _MULT_SUFFIX.sub("", str(raw).strip())
+    s = _CURRENCY_OR_SPACE.sub("", s)
+    if "." in s or s.count(",") >= 2:
+        return _COMMA_GROUP.sub("", s)
+    return re.sub(r"(?<=\d),(?=\d{1,2}$)", ".", s)
+
 
 def _degroup_thousands(text: str) -> str:
     """Снимает разделители тысяч (запятая, неразрывный/узкий неразрывный
@@ -377,7 +410,12 @@ def extract_specs(wd: Path, dossier_art: dict, fact_keys: set[str]) -> dict:
         if clause_key in clauses:
             alarms.append({"kind": "duplicate_clause", "clause": clause_key})
             continue
-        checked, node = _check({**sp, "clause": clause_key}, fact_keys, agreement_text)
+        # Нормализация — при чтении, как и вся валидация: сырой артефакт не
+        # меняется, уже закэшированные ответы с валютной вёрсткой порога
+        # самоизлечиваются без пересбора и без LLM.
+        checked, node = _check(
+            {**sp, "clause": clause_key, "limit": _normalize_limit(sp["limit"])}, fact_keys, agreement_text
+        )
         if checked.pop("trigger_discarded", False):
             alarms.append({"kind": "trigger_discarded", "clause": clause_key})
         clauses[clause_key] = checked
