@@ -83,6 +83,23 @@ def test_zero_denominator_min_is_compliant():
     assert "zero_denominator" in alarms
 
 
+def test_zero_denominator_min_negative_numerator_is_breach():
+    # −EBITDA при нулевом знаменателе — это −∞, а не +∞: ложный COMPLIANT
+    # недопустим (ревью PR #9, 24-я волна). 0/0 не определён — тоже BREACH.
+    rows = [row("T-01", "OTHER_OPEX", "-100")]
+    res = evaluate(
+        parse("ratio(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), agg(INTEREST, out))"),
+        Ctx(rows, {}),
+    )
+    assert "zero_denominator" in res.flags and "zero_den_negative_num" in res.flags
+    assert verdict(res, "min", Decimal("1.50"))[0] == "BREACH"
+
+    from interp import EvalResult
+
+    zz = EvalResult(Decimal(0), frozenset({"zero_denominator", "zero_den_zero_num"}))
+    assert verdict(zz, "min", Decimal("1.50"))[0] == "BREACH"
+
+
 def test_negative_denominator_min_stays_breach():
     # negative_denominator при min не трогаем: значение действительно
     # отрицательное, вердикт совпадает с истинным.

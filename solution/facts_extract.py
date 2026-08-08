@@ -343,6 +343,13 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
 
     def build() -> dict:
         facts = _empty_facts()
+        if not dossier_art["docs"]:
+            # Досье без документов — деградация (обычно следствие сбоя выше
+            # по конвейеру), а не «фактов нет»: без алярма пустой артефакт
+            # ложился бы на диск как успех, невидимый сканерам, и переживал
+            # перезапуск (ревью PR #9, 24-я волна — единственная из пяти
+            # стадий, где этот случай не был закрыт).
+            facts["alarms"].append({"kind": "no_documents", "account": acc})
         for doc in dossier_art["docs"]:
             text = sanitize_document(doc["text"])
             prompt = (
@@ -379,15 +386,17 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
         facts["alarms"] = [{**a, "account": acc} for a in facts["alarms"]]
         return facts
 
-    # facts_extraction_failed не кэшируется (ревью PR #9, 22-я волна): иначе
-    # провал вызова (SchemaRejected) запекался бы под FACTS_VERSION и пережил
-    # перезапуск. Прочие алярмы (invalid_number, doc_fact_conflict) — свойства
-    # ответа модели, их кэшировать правильно.
+    # facts_extraction_failed и no_documents не кэшируются (ревью PR #9, 22-я
+    # и 24-я волны): иначе провал вызова или пустое досье запекались бы под
+    # FACTS_VERSION и переживали перезапуск. Пересбор no_documents бесплатен
+    # (LLM не вызывается). Прочие алярмы (invalid_number, doc_fact_conflict) —
+    # свойства ответа модели, их кэшировать правильно.
+    _degraded_kinds = {"facts_extraction_failed", "no_documents"}
     return artifact(
         wd / "facts" / f"{acc}.json",
         FACTS_VERSION,
         build,
-        cache_if=lambda d: not any(a.get("kind") == "facts_extraction_failed" for a in d["alarms"]),
+        cache_if=lambda d: not any(a.get("kind") in _degraded_kinds for a in d["alarms"]),
     )
 
 

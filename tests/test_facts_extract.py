@@ -248,3 +248,18 @@ def test_resolve_doc_fact_negative_value_matches_unsigned_quote(tmp_path, monkey
     monkeypatch.setattr(facts_extract.llm, "call", fake_call)
     got = facts_extract.resolve_doc_fact(tmp_path, DOSSIER, "group_capex3", "CapEx Группы")
     assert got == {"value": "-9450000.00", "quote": "консолидированный CapEx $9,450,000.00"}
+
+
+def test_empty_dossier_facts_alarmed_and_not_cached(tmp_path, monkeypatch):
+    """Досье без документов — деградация с алярмом no_documents, артефакт не
+    пишется: перезапуск после починки конвейера выше перепытается
+    (ревью PR #9, 24-я волна)."""
+
+    def no_llm(prompt, schema, schema_version, **kw):
+        raise AssertionError("LLM не должен вызываться для пустого досье")
+
+    monkeypatch.setattr(facts_extract.llm, "call", no_llm)
+    bare = {"account_id": "ACC-1", "scenario_id": "S1", "docs": []}
+    art = facts_extract.extract_facts(tmp_path, bare)
+    assert any(a["kind"] == "no_documents" and a["account"] == "ACC-1" for a in art["alarms"])
+    assert not (tmp_path / "facts" / "ACC-1.json").exists()
