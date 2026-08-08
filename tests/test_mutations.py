@@ -77,11 +77,16 @@ def public_hash():
     from ledger import extract_archive
 
     ds_hash, _ = extract_archive(PUBLIC_ZIP)
-    if not (Path("work") / ds_hash / "text").is_dir():
-        # Холодный CI: work/ пуст, text/-артефакты — продукт живого прогона
-        # документного конвейера. Все тесты этой фикстуры (включая shift/fx)
-        # честно пропускаются, а не падают на отсутствующем прогреве.
-        pytest.skip("публичный workdir не прогрет")
+    wd = Path("work") / ds_hash
+    # Признак прогрева — route/ и dossier/, а не text/. text/ строится
+    # постранично через pypdf и появляется без единого вызова LLM, поэтому
+    # на любом втором локальном прогоне фикстура «просыпалась» и тесты падали
+    # на отсутствующем досье («ожидался ровно один действующий договор ...,
+    # найдено 0»). В холодном CI text/ ещё нет, и дефект там не виден.
+    # Проверяем ровно то, что читают потребители: _treasury_accounts ходит в
+    # route/, поиск действующего договора — в dossier/.
+    if not (wd / "route").is_dir() or not (wd / "dossier").is_dir():
+        pytest.skip("публичный workdir не прогрет: нужны route/ и dossier/")
     return ds_hash
 
 

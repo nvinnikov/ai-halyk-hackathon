@@ -170,17 +170,24 @@ GT = json.loads(Path("dataset/agentic-bank-public/ground_truth.json").read_text(
 # означает систематический сдвиг всех коэффициентов. Остальные три —
 # None до шага фиксации (значения впечатываются по факту первого замера).
 #
-# ОТКРЫТЫЙ ПУНКТ (дедлайн — открытие приватного набора): CAPEX, CONSULTING,
-# FINANCING не утверждаются вообще, пока не измерены живым прогоном на API —
-#   ANTHROPIC_API_KEY=... uv run pytest tests/test_mutations_ledger.py -m llm -q -s
-# Значения берутся из строки «ХУДШЕЕ ПО ТРЁМ» в выводе теста
-# test_recovery_by_category_worst_of_three_orders, округлённые вниз до сотых.
+# Замер 2026-08-08, LLM_PROVIDER=gemini, gemini-3.6-flash: худшее по трём
+# перестановкам — 1.00 по всем пяти категориям. Команда замера:
+#   LLM_PROVIDER=gemini GEMINI_API_KEY=... uv run pytest \
+#       tests/test_mutations_ledger.py -m llm -q -s -k recovery
+#
+# ВАЖНО О ПРОИСХОЖДЕНИИ ПОРОГОВ. Дефолтный провайдер — anthropic
+# (llm.py: LLM_PROVIDER по умолчанию), боевая модель — claude-haiku-4-5. На
+# этом пути пороги НЕ снимались: приведённые значения измерены на Gemini.
+# Числа модельно-специфичны, поэтому падение теста на anthropic-прогоне
+# означает «на haiku восстановление хуже, чем на gemini», а не обязательно
+# дефект промпта — прежде чем править промпт, сверьтесь, каким провайдером
+# идёт прогон. Пересъём на боевой модели — одна команда с ANTHROPIC_API_KEY.
 FLOORS: dict[str, float | None] = {
     "REVENUE": 1.0,
     "OTHER_OPEX": 1.0,
-    "CAPEX": None,
-    "CONSULTING": None,
-    "FINANCING": None,
+    "CAPEX": 1.0,
+    "CONSULTING": 1.0,
+    "FINANCING": 1.0,
 }
 
 
