@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "Пункт 6.1",
+    "confidence": 0.95,
+    "direction": "min",
+    "limit": "0.2",
+    "metric": "ratio(agg(INSURANCE, out), add(agg(RENT, out), agg(UTILITIES, out)))",
+    "quote": "Пункт 6.1 Минимальное страховое покрытие расходов на содержание помещений. На протяжении периода с 2025-01-01 по 2025-12-31 Karaganda Logistics Terminal JSC обеспечивает, чтобы отношение Страховых премий к сумме Арендных и Коммунальных расходов составляло не менее 0.20x.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.2",
+    "confidence": 0.95,
+    "direction": "min",
+    "limit": "$5,000,000.00",
+    "metric": "sub(agg(REVENUE, in), max(agg(PAYROLL, out), agg(TAX, out)))",
+    "quote": "Пункт 6.2 Минимальная выручка за вычетом наибольшей статьи накладных расходов. На протяжении периода с 2025-01-01 по 2025-12-31 Karaganda Logistics Terminal JSC обеспечивает, чтобы Выручка за вычетом наибольшей из величин Расходов на оплату труда и Налогов составляла не менее $5,000,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.3",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "0.05",
+    "metric": "ratio(agg(ALL, out, counterparty_in(related_parties)), agg(REVENUE, in))",
+    "quote": "Пункт 6.3 Maximum Related-Party Payments as a Proportion of Revenue. Концентрация расчётов со связанными сторонами. За период с 2025-01-01 по 2025-12-31 Karaganda Logistics Terminal JSC не вправе допускать, чтобы совокупные Ограниченные платежи в пользу аффилированных лиц составили более 0.05x от выручки за тот же период.",
+    "trigger": null
+   }
+  ]
+ }
+}
