@@ -53,11 +53,26 @@ def pack_dataset(dataset_dir: Path, dst_zip: Path) -> Path:
     return dst_zip
 
 
+# Версия формата упаковки: 2 — ZipInfo с фиксированными эпохой и правами
+# вместо zf.write по mtime. Лежит рядом с архивом, потому что архив в git не
+# хранится: без маркера на машине, где zip собран прежним упаковщиком, ранний
+# выход по ARCHIVE.exists() оставил бы его как есть, и локальный dataset_hash
+# остался бы плавающим и расходящимся с CI — ровно та воспроизводимость,
+# ради которой формат и менялся. Инкремент версии пересобирает архив сам.
+PACK_FORMAT = 2
+FORMAT_MARKER = ARCHIVE.with_suffix(".packfmt")
+
+
 def build_public_archive(force: bool = False) -> Path:
-    """Собрать публичный архив, если его нет."""
-    if ARCHIVE.exists() and not force:
+    """Собрать публичный архив, если его нет или он собран прежним форматом."""
+    fresh = (
+        ARCHIVE.exists() and FORMAT_MARKER.exists() and FORMAT_MARKER.read_text().strip() == str(PACK_FORMAT)
+    )
+    if fresh and not force:
         return ARCHIVE
-    return pack_dataset(DATASET, ARCHIVE)
+    out = pack_dataset(DATASET, ARCHIVE)
+    FORMAT_MARKER.write_text(f"{PACK_FORMAT}\n")
+    return out
 
 
 if __name__ == "__main__":

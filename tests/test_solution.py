@@ -218,6 +218,12 @@ def test_other_unassigned_written_when_rows_lost(monkeypatch):
         assert all(a.get("scenario") and a.get("clause") for a in in_alarms), (
             "без scenario/clause точный дедуп схлопнет срабатывания разных ячеек в одно"
         )
+        # inputs_empty обязателен рядом с severity: severity=None означает
+        # максимальную тяжесть, и сортировка run-report по сырому null уронила
+        # бы такую ячейку вниз или упала бы с TypeError.
+        assert all("inputs_empty" in a for a in in_alarms), (
+            "нет признака inputs_empty — MAX-тяжесть в run-report неотличима от null"
+        )
     finally:
         # Трейсы на диске общие: испорченный прогон обязан быть переписан
         # чистым, иначе соседний тест увидит чужой алярм.

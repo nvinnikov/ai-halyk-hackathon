@@ -1118,6 +1118,13 @@ def main(
                                     "clause": clause,
                                     "blind": oa["blind"],
                                     "severity": oa["severity"],
+                                    # severity=None (inputs_sum == 0) — это MAX,
+                                    # а не отсутствие тяжести. В stdout это уже
+                                    # учтено, но решают по run-report, и там
+                                    # сортировка по null уронила бы такую ячейку
+                                    # вниз или упала бы с TypeError. Флаг даёт
+                                    # сортируемый ключ: (not inputs_empty, severity).
+                                    "inputs_empty": oa["severity"] is None,
                                     "other_sum": oa["other_sum"],
                                 }
                             )
