@@ -7,6 +7,7 @@
 import csv
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -98,9 +99,16 @@ def test_only_description_changes(tmp_path):
 
 def test_desc_contains_tokens_survive(tmp_path):
     """Токены фильтров desc_contains сохраняются: иначе ячейка упадёт из-за
-    фильтра, а не из-за категоризации, и замер покажет ложную деградацию."""
-    tokens = {"subsidiary"}
-    assert any("desc_contains" in t for t in TEMPLATES.values())
+    фильтра, а не из-за категоризации, и замер покажет ложную деградацию.
+
+    Список токенов вычитывается из TEMPLATES, а не зашивается константой:
+    задача 24 собирает cellspec из извлечённых спек, и новый desc_contains
+    появится там раньше, чем кто-нибудь вспомнит про этот тест. Токен под
+    существующую замену (`equipment`, `servicing`, `remediation` уже в
+    REPLACEMENTS) дал бы ровно ту ложную деградацию, ради которой тест и
+    заведён."""
+    tokens = set(re.findall(r"desc_contains\('([^']*)'\)", " ".join(TEMPLATES.values())))
+    assert tokens, "desc_contains исчез из шаблонов — тест потерял предмет"
     _, report = _mutated(tmp_path)
     for token in tokens:
         src = [d for d in _source_descriptions() if token in d.lower()]
@@ -167,8 +175,8 @@ GT = json.loads(Path("dataset/agentic-bank-public/ground_truth.json").read_text(
 # Восстановление, которого требуем от второго яруса, по худшей из трёх
 # перестановок. REVENUE и OTHER_OPEX — жёстко и априори: обе входят в EBITDA,
 # то есть в каждую коэффициентную ячейку, и частичное восстановление там
-# означает систематический сдвиг всех коэффициентов. Остальные три —
-# None до шага фиксации (значения впечатываются по факту первого замера).
+# означает систематический сдвиг всех коэффициентов. Остальные три измерены
+# (см. ниже); незафиксированный порог ловит test_all_floors_are_measured.
 #
 # Замер 2026-08-08, LLM_PROVIDER=gemini, gemini-3.6-flash: худшее по трём
 # перестановкам — 1.00 по всем пяти категориям. Команда замера:
