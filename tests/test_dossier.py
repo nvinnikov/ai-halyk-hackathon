@@ -295,3 +295,28 @@ def test_name_pass_skipped_when_name_pool_degraded(monkeypatch, tmp_path):
     d = dossier.build_dossiers(tmp_path, [Path("a.pdf"), Path("group.pdf")], INDEX)["ACC-1"]
     assert any(a["kind"] == "borrower_name_failed" for a in d["alarms"])
     assert not (tmp_path / "dossier" / "ACC-1.json").exists()  # деградация не кэшируется
+
+
+def test_name_pass_skipped_when_first_pass_degraded(monkeypatch, tmp_path):
+    """Второй проход целиком построен на результатах первого. При его
+    деградации и наименование, и пул неполны, а кэшируются как успех: ни набор
+    документов, ни пул в ключи артефактов не входят (ревью PR #23)."""
+    routes = {
+        "a.pdf": base("a.pdf"),
+        "broken.pdf": {
+            **base("broken.pdf", acc=None, reason="routing_failed"),
+            "alarms": [{"kind": "routing_failed", "file": "broken.pdf", "error": "boom"}],
+        },
+        "group.pdf": base("group.pdf", acc=None, reason="no_account_mentions"),
+    }
+    make_route(monkeypatch, routes, {})
+
+    def never(*a, **kw):
+        raise AssertionError("второй проход при деградации первого запрещён")
+
+    monkeypatch.setattr(dossier, "borrower_name", never)
+    monkeypatch.setattr(dossier, "route_group_doc", never)
+    pdfs = [Path("a.pdf"), Path("broken.pdf"), Path("group.pdf")]
+    d = dossier.build_dossiers(tmp_path, pdfs, INDEX)["ACC-1"]
+    assert any(a["kind"] == "name_pass_skipped_degraded_routing" for a in d["alarms"])
+    assert not (tmp_path / "dossier" / "ACC-1.json").exists()  # деградация не кэшируется

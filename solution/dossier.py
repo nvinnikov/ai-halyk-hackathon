@@ -27,7 +27,9 @@ from stages import artifact
 # v6 — активационный бамп (2026-08-08): досье собиралось из route-артефактов
 # v1; после ROUTE_VERSION=2 (META/WHOSE по тексту без футера) кэшированное
 # досье устарело по входу. v5: алярмы карантина в артефакте досье.
-DOSSIER_VERSION = 10
+DOSSIER_VERSION = 11
+# v11 — ревью PR #23: второй проход не запускается при деградации первого;
+# набор документов в досье от этого зависит.
 # v10 — документы группового уровня, привязанные по наименованию заёмщика
 # (route.route_group_doc), приходят в досье отдельной областью видимости
 # (scope="group"): набор документов на входе фактов изменился.
@@ -134,6 +136,7 @@ def _attach_by_name(
     routed: list[dict],
     quarantined: list[dict],
     by_hash: dict[str, Path],
+    first_pass_degraded: bool = False,
 ) -> tuple[list[dict], list[dict]]:
     """Документы группового уровня, привязанные по наименованию заёмщика.
 
@@ -142,6 +145,17 @@ def _attach_by_name(
     Счёт без единого привязанного документа наименования не даёт — и это
     правильно: брать его было бы неоткуда, кроме как из самого кандидата.
     """
+    if first_pass_degraded:
+        # Второй проход целиком построен на результатах первого: наименование
+        # считается по документам, которые первый проход привязал, а решение по
+        # кандидату — по пулу этих наименований. При деградации первого прохода
+        # и то и другое неполно, но кэшируется как успех: ни набор документов,
+        # ни пул в ключи артефактов borrower/route_group не входят, а
+        # stages.artifact инвалидируется только по версии. Пустое наименование
+        # и посчитанный при неполном пуле отказ пережили бы устранение причины
+        # (ревью PR #23, замечание 1). Прохода при деградации нет вовсе — досье
+        # и так помечено деградированным и на диск не ляжет.
+        return [], [{"kind": "name_pass_skipped_degraded_routing"}]
     unrouted = [
         q
         for q in sorted(quarantined, key=lambda x: x["file"])
@@ -213,11 +227,20 @@ def build_dossiers(
     quarantined = [r for r in results if r["quarantined"]]
     by_hash = {doc_hash(p): p for p in ordered}
 
+    # Деградация ПЕРВОГО прохода считается до второго: второй построен на его
+    # результатах целиком, и запускать его по неполному `routed` нельзя.
+    _ROUTING_DEGRADED = {"routing_failed", "meta_extraction_failed"}
+    routing_degraded = any(
+        a.get("kind") in _ROUTING_DEGRADED for q in quarantined for a in q.get("alarms", [])
+    )
+
     # Второй проход по наименованию заёмщика — только по документам, которые
     # первый проход не привязал НИ К ЧЕМУ (`no_account_mentions`). Фоновый
     # документ и документ нерелевантного типа уже решены и не переигрываются:
     # там счёт напечатан, и наименование его не отменяет.
-    attached, name_alarms = _attach_by_name(wd, targets, routed, quarantined, by_hash)
+    attached, name_alarms = _attach_by_name(
+        wd, targets, routed, quarantined, by_hash, first_pass_degraded=routing_degraded
+    )
     if attached:
         by_group_hash = {g["doc_hash"]: g for g in attached}
         quarantined = [q for q in quarantined if q["doc_hash"] not in by_group_hash]
@@ -238,12 +261,7 @@ def build_dossiers(
     # borrower_name_failed / group_routing_failed — та же природа: транзиентный
     # сбой второго прохода означает, что досье собрано без документов
     # группового уровня, и закреплять такое на диске нельзя.
-    _degraded_kinds = {
-        "routing_failed",
-        "meta_extraction_failed",
-        "borrower_name_failed",
-        "group_routing_failed",
-    }
+    _degraded_kinds = _ROUTING_DEGRADED | {"borrower_name_failed", "group_routing_failed"}
     degraded = any(
         a.get("kind") in _degraded_kinds
         for a in [*(a for q in quarantined for a in q.get("alarms", [])), *name_alarms]

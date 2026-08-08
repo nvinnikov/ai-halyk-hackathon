@@ -601,6 +601,8 @@ def ppe(**over):
         "additions_quote": "",
         "no_disposals": True,
         "no_disposals_quote": "There were no disposals of property, plant and equipment during the year",
+        "other_movements": False,
+        "other_movements_quote": "",
     }
     return {**base, **over}
 
@@ -683,3 +685,87 @@ def test_group_capex_negative_rejected(tmp_path, monkeypatch):
     facts = facts_extract.extract_facts(tmp_path, GROUP_DOSSIER)
     assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
     assert any(a["kind"] == "group_capex_negative" for a in facts["alarms"])
+
+
+def test_group_capex_other_movements_block_the_identity(tmp_path, monkeypatch):
+    """Тождество движения стоимости держится не только на выбытиях: обесценение
+    и курсовые разницы двигают результат так же молча (ревью PR #23)."""
+    raw = ppe(
+        other_movements=True,
+        other_movements_quote="Net book value at the end of the year $154,050,122.81",
+    )
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(raw))
+    facts = facts_extract.extract_facts(tmp_path, GROUP_DOSSIER)
+    assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
+    assert any(a["kind"] == "group_capex_other_movements" for a in facts["alarms"])
+
+
+def test_group_capex_other_movements_do_not_block_stated_additions(tmp_path, monkeypatch):
+    """Названные поступления читаются, а не выводятся: условия применимости
+    тождества к ним не относятся."""
+    text = GROUP_TEXT + " Additions during the year $21,847,362.55 Impairment loss $4,000.00"
+    raw = ppe(
+        additions="21847362.55",
+        additions_quote="Additions during the year $21,847,362.55",
+        other_movements=True,
+        other_movements_quote="Impairment loss $4,000.00",
+    )
+    dossier = {**GROUP_DOSSIER, "docs": [{**GROUP_DOSSIER["docs"][0], "text": text}]}
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(raw))
+    facts = facts_extract.extract_facts(tmp_path, dossier)
+    assert facts["doc_facts"][facts_extract.GROUP_CAPEX_KEY] == "21847362.55"
+
+
+def test_group_capex_stated_negative_rejected(tmp_path, monkeypatch):
+    """Проверка знака общая для обеих веток: отрицательный числитель на
+    max-ковенанте даёт уверенный COMPLIANT, то есть стоит статуса."""
+    text = GROUP_TEXT + " Additions during the year $-21,847,362.55"
+    raw = ppe(additions="-21847362.55", additions_quote="Additions during the year $-21,847,362.55")
+    dossier = {**GROUP_DOSSIER, "docs": [{**GROUP_DOSSIER["docs"][0], "text": text}]}
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(raw))
+    facts = facts_extract.extract_facts(tmp_path, dossier)
+    assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
+    assert any(a["kind"] == "group_capex_negative" for a in facts["alarms"])
+
+
+def test_group_capex_conflict_drops_the_key(tmp_path, monkeypatch):
+    """Конечная материнская компания у группы одна: два документа с разными
+    значениями — признак лишней привязки, а не повод взять последний."""
+    other_text = GROUP_TEXT.replace("154,050,122.81", "160,050,122.81")
+    dossier = {
+        **GROUP_DOSSIER,
+        "docs": [
+            GROUP_DOSSIER["docs"][0],
+            {**GROUP_DOSSIER["docs"][0], "file": "group2.pdf", "text": other_text},
+        ],
+    }
+
+    def fake_call(prompt, schema, schema_version, **kw):
+        if "160,050,122.81" in prompt:
+            return ppe(
+                closing_value="160050122.81",
+                closing_quote="Net book value at the end of the year $160,050,122.81",
+            )
+        return ppe()
+
+    monkeypatch.setattr(facts_extract.llm, "call", fake_call)
+    facts = facts_extract.extract_facts(tmp_path, dossier)
+    assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
+    alarm = next(a for a in facts["alarms"] if a["kind"] == "group_capex_conflict")
+    assert alarm["values"] == ["21847362.55", "27847362.55"]
+    assert alarm["files"] == ["group.pdf", "group2.pdf"]
+
+
+def test_group_capex_two_documents_agreeing_are_fine(tmp_path, monkeypatch):
+    """Совпавшие значения конфликтом не считаются — расхождения нет."""
+    dossier = {
+        **GROUP_DOSSIER,
+        "docs": [
+            GROUP_DOSSIER["docs"][0],
+            {**GROUP_DOSSIER["docs"][0], "file": "group2.pdf"},
+        ],
+    }
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(ppe()))
+    facts = facts_extract.extract_facts(tmp_path, dossier)
+    assert facts["doc_facts"][facts_extract.GROUP_CAPEX_KEY] == "21847362.55"
+    assert not any(a["kind"] == "group_capex_conflict" for a in facts["alarms"])

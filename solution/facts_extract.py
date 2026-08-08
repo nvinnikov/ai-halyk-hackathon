@@ -11,7 +11,12 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 7
+FACTS_VERSION = 8
+# v8 — ревью PR #23: тождество движения стоимости гейтится не только выбытиями,
+# но и иными изменениями (обесценение, курсовые разницы); проверка знака стала
+# общей для названных и посчитанных поступлений; расхождение двух документов
+# группового уровня снимает ключ вместо молчаливого выбора последнего.
+# Промпт GROUP_PPE изменён — его единственный ключ кассеты пересчитан.
 # v7 — DOSSIER_VERSION=10: в досье появились документы группового уровня
 # (scope="group"). Общий проход фактов их НЕ читает — решения материнской
 # компании не применяются к операциям заёмщика, — их читает отдельный проход
@@ -243,6 +248,8 @@ GROUP_PPE_SCHEMA = {
         "additions_quote": {"type": "string"},
         "no_disposals": {"type": "boolean"},
         "no_disposals_quote": {"type": "string"},
+        "other_movements": {"type": "boolean"},
+        "other_movements_quote": {"type": "string"},
     },
     "required": [
         "opening_value",
@@ -255,6 +262,8 @@ GROUP_PPE_SCHEMA = {
         "additions_quote",
         "no_disposals",
         "no_disposals_quote",
+        "other_movements",
+        "other_movements_quote",
     ],
     "additionalProperties": False,
 }
@@ -273,7 +282,14 @@ GROUP_PPE_PROMPT = """Ниже — консолидированная отчёт
   числа в тексте нет — обе строки пустые;
 - no_disposals: true, только если документ прямо утверждает, что выбытий
   основных средств за период не было; no_disposals_quote — дословная цитата
-  этого утверждения. Иначе false и пустая цитата.
+  этого утверждения. Иначе false и пустая цитата;
+- other_movements: true, если примечание называет ЛЮБЫЕ иные изменения
+  балансовой стоимости за период, кроме поступлений, выбытий и амортизации —
+  обесценение, восстановление обесценения, переоценку, курсовые разницы от
+  пересчёта в валюту отчётности, перевод в инвестиционную недвижимость или в
+  активы для продажи. Тогда other_movements_quote — дословная цитата строки,
+  где такое изменение названо. Если ничего подобного в примечании нет — false и
+  пустая цитата.
 
 Числа — строкой, без разделителей разрядов. Любое поле, которого в тексте нет,
 — пустая строка. Ничего не вычисляй.
@@ -472,12 +488,25 @@ def _group_capex(facts: dict, raw: dict, doc: dict, text: str) -> tuple[Decimal,
 
     Модель здесь только читает. Если документ называет поступления отдельным
     числом — берётся оно. Если нет, они восстанавливаются из движения
-    балансовой стоимости: конец − начало + амортизация. Это тождество верно
-    ровно тогда, когда за период не было выбытий, поэтому оговорка об их
-    отсутствии — не риторика, а условие применимости формулы: без неё
-    выражение даёт не поступления, а поступления за вычетом выбывшего. Оговорка
-    извлекается как отдельный признак с цитатой и проверяется здесь; нет её —
-    расчёта нет, и ячейка честно уходит на лестницу.
+    балансовой стоимости: конец − начало + амортизация.
+
+    У этого тождества ДВА условия применимости, и оба проверяются, а не
+    подразумеваются. Полное движение стоимости — «начало + поступления −
+    выбытия − амортизация − обесценение ± курсовые разницы = конец», и всё, что
+    в формулу не вошло, молча уезжает в числитель:
+
+    - выбытий за период не было — иначе выражение даёт поступления за вычетом
+      выбывшего;
+    - иных изменений стоимости (обесценение, переоценка, курсовые разницы) в
+      примечании нет. Консолидация с зарубежными дочками — типовой случай, и
+      курсовая разница там не экзотика (ревью PR #23, замечание 3): её знак
+      произволен, величина ничем не ограничена, и подмешанная в поступления она
+      неотличима от настоящих капитальных затрат.
+
+    Оба признака извлекаются с цитатами и проверяются здесь; не подтвердился
+    любой — расчёта нет, и ячейка честно уходит на лестницу. Названные в
+    документе поступления обоими условиями не связаны: там читать нечего, число
+    напечатано.
 
     Число обязано стоять в собственной верифицированной цитате — тот же
     инвариант, что у порогов спек и долей владения: цитата привязывает число к
@@ -504,12 +533,43 @@ def _group_capex(facts: dict, raw: dict, doc: dict, text: str) -> tuple[Decimal,
             return None
         return d
 
+    def signed_ok(value: Decimal) -> bool:
+        """Отрицательных поступлений не бывает — ни посчитанных, ни названных.
+
+        Проверка общая для обеих веток (ревью PR #23, замечание 2): у
+        вычисленной она ловит перепутанные начало и конец, у названной —
+        выбытия, прочитанные как поступления, и просто не то число под
+        подписью. Молча пропущенный отрицательный числитель даёт на
+        max-ковенанте уверенный COMPLIANT, то есть обнуляет ячейку по статусу,
+        а не портит `actual`.
+        """
+        if value >= 0:
+            return True
+        facts["alarms"].append({"kind": "group_capex_negative", "file": doc["file"], "value": str(value)})
+        return False
+
     stated = number(raw["additions"], raw["additions_quote"], "group_capex_additions")
     if stated is not None:
-        return stated, raw["additions_quote"]
+        return (stated, raw["additions_quote"]) if signed_ok(stated) else None
 
     if not raw["no_disposals"] or not verify_quote(raw["no_disposals_quote"], text):
         facts["alarms"].append({"kind": "group_capex_disposals_unconfirmed", "file": doc["file"]})
+        return None
+    if raw["other_movements"]:
+        # Асимметрия с выбытиями намеренная. «Выбытий не было» документ пишет
+        # прямо, и цитата этого утверждения проверяема. «Иных движений нет» —
+        # утверждение об ОТСУТСТВИИ строки в таблице, и процитировать его
+        # нечем: требование цитаты здесь означало бы пустую цитату и отказ
+        # считать там, где считать можно. Поэтому цитата обязательна для
+        # положительного ответа (модель назвала движение — пусть покажет
+        # строку), а гейт стоит на самом факте.
+        facts["alarms"].append(
+            {
+                "kind": "group_capex_other_movements",
+                "file": doc["file"],
+                "quote": raw["other_movements_quote"],
+            }
+        )
         return None
     opening = number(raw["opening_value"], raw["opening_quote"], "group_capex_opening")
     closing = number(raw["closing_value"], raw["closing_quote"], "group_capex_closing")
@@ -517,13 +577,50 @@ def _group_capex(facts: dict, raw: dict, doc: dict, text: str) -> tuple[Decimal,
     if opening is None or closing is None or depreciation is None:
         return None
     additions = closing - opening + abs(depreciation)
-    if additions < 0:
-        # Отрицательных поступлений не бывает: это либо перепутанные начало и
-        # конец, либо чужие числа под теми же подписями. Молча посчитанный
-        # отрицательный числитель дал бы уверенный COMPLIANT на max-ковенанте.
-        facts["alarms"].append({"kind": "group_capex_negative", "file": doc["file"], "value": str(additions)})
-        return None
-    return additions, raw["closing_quote"]
+    return (additions, raw["closing_quote"]) if signed_ok(additions) else None
+
+
+def _apply_group_capex(facts: dict, computed: list[tuple[Decimal, str, str]]) -> None:
+    """Посчитанные по документам группового уровня затраты — в doc_facts.
+
+    Два документа группового уровня с РАЗНЫМИ значениями — это не «взять
+    посвежее», а признак, что привязан лишний документ: конечная материнская
+    компания у группы одна. Молча взятое одно из двух даёт уверенно
+    посчитанную не ту величину, а она на max-ковенанте стоит статуса. Ключ
+    снимается, ячейка уходит на лестницу — тот же выбор, что и везде в этом
+    расчёте: отсутствие ответа честнее неверного.
+
+    Значение модели из numeric_facts договора код перебивает (дисциплина
+    _DERIVED_DOC_KEYS), и алярм об этом называет источники своими именами:
+    прежнее значение здесь всегда модельное — код пишет ключ только отсюда.
+    """
+    if not computed:
+        return
+    distinct = sorted({str(value) for value, _quote, _file in computed})
+    if len(distinct) > 1:
+        facts["alarms"].append(
+            {
+                "kind": "group_capex_conflict",
+                "values": distinct,
+                "files": sorted(file for _v, _q, file in computed),
+            }
+        )
+        facts["doc_facts"].pop(GROUP_CAPEX_KEY, None)
+        facts["doc_fact_quotes"].pop(GROUP_CAPEX_KEY, None)
+        return
+    value, quote, _file = sorted(computed, key=lambda item: item[2])[0]
+    from_model = facts["doc_facts"].get(GROUP_CAPEX_KEY)
+    if from_model is not None and from_model != str(value):
+        facts["alarms"].append(
+            {
+                "kind": "derived_doc_key_overridden",
+                "key": GROUP_CAPEX_KEY,
+                "model": from_model,
+                "code": str(value),
+            }
+        )
+    facts["doc_facts"][GROUP_CAPEX_KEY] = str(value)
+    facts["doc_fact_quotes"][GROUP_CAPEX_KEY] = quote
 
 
 def _merge_doc(facts: dict, raw: dict, doc: dict, text: str) -> None:
@@ -707,6 +804,10 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
         _apply_ownership(facts, all_above, all_below)
         # Капитальные затраты Группы — из отчётности группового уровня. Модель
         # выписывает числа примечания с цитатами, арифметику делает код.
+        # Посчитанное собирается по ВСЕМ групповым документам и применяется один
+        # раз, как строки владения: иначе порядок документов решал бы исход
+        # молча — побеждал бы последний по алфавиту (ревью PR #23, замечание 4).
+        computed: list[tuple[Decimal, str, str]] = []
         for doc in dossier_art["docs"]:
             if doc.get("scope") != "group":
                 continue
@@ -722,24 +823,9 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
                 )
                 continue
             found = _group_capex(facts, raw, doc, text)
-            if found is None:
-                continue
-            value, quote = found
-            previous = facts["doc_facts"].get(GROUP_CAPEX_KEY)
-            if previous is not None and previous != str(value):
-                # Ключ производный: его считает код, и значение, названное
-                # моделью в numeric_facts договора, не имеет права его затенить
-                # (та же дисциплина, что у _DERIVED_DOC_KEYS в solve).
-                facts["alarms"].append(
-                    {
-                        "kind": "derived_doc_key_overridden",
-                        "key": GROUP_CAPEX_KEY,
-                        "model": previous,
-                        "code": str(value),
-                    }
-                )
-            facts["doc_facts"][GROUP_CAPEX_KEY] = str(value)
-            facts["doc_fact_quotes"][GROUP_CAPEX_KEY] = quote
+            if found is not None:
+                computed.append((found[0], found[1], doc["file"]))
+        _apply_group_capex(facts, computed)
         for key in ("related_parties", "unrestricted_subsidiaries", "exclude"):
             facts[key] = sorted(facts[key])
         # Численная сортировка: лексикографическая ставит "1000000.00" перед
