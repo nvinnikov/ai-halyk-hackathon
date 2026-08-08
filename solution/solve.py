@@ -477,7 +477,16 @@ def run_cell(
             # по чужой статистике (ревью PR #21). На публичном наборе это
             # замаскировано — prior_status до неё не доходит, by_clause всегда
             # попадает; на приватном номер пункта может и не найтись. None —
-            # честный глобальный приор с алярмом fallback_coin_flip.
+            # честный глобальный приор.
+            #
+            # Осторожно при чтении отчёта: пометка fallback_coin_flip, которой
+            # приор себя при этом клеймит, приходит из fallback_cell СТРОКОЙ, а
+            # _alarm_kind считает видом только dict с "kind" — в run-report она
+            # неотличима от прочего мусора в "other" (ревью PR #21, круг 5).
+            # Видно её только в trace["alarms"] конкретной ячейки. Перевод пары
+            # fallback_used/fallback_coin_flip на словари — правка вне этого
+            # PR и не в окно: она сдвинет счётчик "other", на который ранбук
+            # ссылается ориентиром.
             family = None if mismatched else family_of(metric_ast, spec_limit)
             cell, alarms = fallback_cell(spec_direction, family, spec_limit, computed, clause=clause)
             if mismatched:
