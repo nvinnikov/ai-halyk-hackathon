@@ -203,4 +203,14 @@ def route_doc(
             "routing_quote": quote,
         }
 
-    return artifact(wd / "route" / f"{doc_hash(pdf_path)}.json", ROUTE_VERSION, build)
+    # Провал META-вызова (SchemaRejected → doc_type "other" → карантин
+    # non_client_doc_type) не кэшируется (ревью PR #9, 23-я волна): залипший
+    # так договор = no_agreement в спеках = три ячейки заёмщика на приоре на
+    # каждом последующем прогоне. quote_unverified/ambiguous_routing —
+    # свойства ответа модели, кэшируются как раньше.
+    return artifact(
+        wd / "route" / f"{doc_hash(pdf_path)}.json",
+        ROUTE_VERSION,
+        build,
+        cache_if=lambda d: not any(a.get("kind") == "meta_extraction_failed" for a in d["alarms"]),
+    )

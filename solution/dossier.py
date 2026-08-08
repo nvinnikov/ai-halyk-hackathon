@@ -167,8 +167,16 @@ def build_dossiers(
             }
 
         try:
-            out[acc] = (
-                build() if degraded else artifact(wd / "dossier" / f"{acc}.json", DOSSIER_VERSION, build)
+            # cache_if, а не обход artifact() целиком (ревью PR #9, 23-я
+            # волна): при деградированной маршрутизации уже закэшированное
+            # ХОРОШЕЕ досье с прошлого прогона читается как обычно —
+            # перезапуск после сбоя не хуже сохранённого состояния;
+            # блокируется только запись свежесобранного неполного результата.
+            out[acc] = artifact(
+                wd / "dossier" / f"{acc}.json",
+                DOSSIER_VERSION,
+                build,
+                cache_if=lambda _d: not degraded,
             )
         except Exception as exc:
             # Сбой чтения текста документа (например, vision на слепой

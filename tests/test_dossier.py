@@ -125,6 +125,22 @@ def test_routing_failed_dossier_not_cached(monkeypatch, tmp_path):
     assert (tmp_path / "dossier" / "ACC-1.json").exists()
 
 
+def test_degraded_run_reads_cached_good_dossier(monkeypatch, tmp_path):
+    """Перезапуск с транзиентным сбоем маршрутизации не хуже сохранённого
+    состояния: хорошее досье с прошлого прогона читается из кэша, а не
+    заменяется свежесобранным неполным (ревью PR #9, 23-я волна)."""
+    make_route(monkeypatch, {"a.pdf": base("a.pdf")}, {"a.pdf": "good text"})
+    d1 = dossier.build_dossiers(tmp_path, [Path("a.pdf")], INDEX)["ACC-1"]
+    assert [x["file"] for x in d1["docs"]] == ["a.pdf"]
+
+    def boom(wd, p, targets, all_accounts):
+        raise RuntimeError("rate limited")
+
+    monkeypatch.setattr(dossier, "route_doc", boom)
+    d2 = dossier.build_dossiers(tmp_path, [Path("a.pdf")], INDEX)["ACC-1"]
+    assert [x["file"] for x in d2["docs"]] == ["a.pdf"]  # кэш, не пустое досье
+
+
 def test_build_failed_dossier_not_cached(monkeypatch, tmp_path):
     """Пустое досье из ветки dossier_build_failed не пишется артефактом:
     сбой чтения текста не переживает перезапуск."""
