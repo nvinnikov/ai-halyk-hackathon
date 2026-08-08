@@ -3,7 +3,7 @@
 
 from pathlib import Path
 
-from pdftext import doc_hash, extract_pages, is_blind
+from pdftext import doc_hash, extract_pages, is_blind, is_borderline
 
 DOCS = Path("dataset/agentic-bank-public/documents")
 
@@ -21,6 +21,21 @@ def test_text_without_numbers_is_not_blind():
 
 def test_not_blind_normal_page():
     assert not is_blind("Договор займа на сумму 1,000,000.00 от 2025-01-01, ставка 12.5% " * 10)
+
+
+def test_borderline_is_exactly_one_criterion():
+    # Пограничная страница проходит ровно по одному критерию из двух —
+    # видима правилом «И», но ослепла бы при «ИЛИ». Рост счётчика на новом
+    # наборе — сигнал переключать правило (research §3, оговорка).
+    long_no_numbers = "длинный связный текст без единого числа " * 20
+    short_many_numbers = "12 34 56 78"
+    assert is_borderline(long_no_numbers) and not is_blind(long_no_numbers)
+    assert is_borderline(short_many_numbers) and not is_blind(short_many_numbers)
+
+
+def test_borderline_false_for_blind_and_normal_pages():
+    assert not is_borderline("")  # оба критерия — слепая, не пограничная
+    assert not is_borderline("Договор займа на сумму 1,000,000.00 от 2025-01-01, ставка 12.5% " * 10)
 
 
 def test_known_partially_blind_document(tmp_path):
