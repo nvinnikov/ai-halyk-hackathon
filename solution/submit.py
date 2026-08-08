@@ -45,6 +45,13 @@ def _refuse_if_public_run(out) -> None:
     report = out / "run-report.json"
     try:
         got = json.loads(report.read_text())["dataset_hash"]
+        # Отчёт старше submission — он от другого прогона, и судить по нему
+        # нельзя ни в какую сторону (ревью PR #18, круг 4). Корень чинится в
+        # solve.main, где отчёт снимается вместе с записью скелета; здесь —
+        # страховка на случай, когда submission.json пришёл не оттуда
+        # (восстановлен из снапшота, положен руками).
+        if report.stat().st_mtime < (out / "submission.json").stat().st_mtime:
+            got = None
     except Exception:
         got = None
     if got is None or public is None:

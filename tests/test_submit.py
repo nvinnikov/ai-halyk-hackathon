@@ -2,6 +2,7 @@
 диф изменившихся ячеек против предыдущего снапшота."""
 
 import json
+import os
 
 import pytest
 
@@ -121,6 +122,26 @@ def test_snapshot_allows_private_dataset_run(isolated_out):
     _write_submission(out, {"P1": {"6.1": {"status": "COMPLIANT"}}})
     (out / "run-report.json").write_text(json.dumps({"dataset_hash": "0123456789abcdef"}))
     assert submit.snapshot() == 1
+
+
+def test_snapshot_proceeds_when_run_report_older_than_submission(isolated_out, capsys):
+    """Отчёт старше submission — он от ПРОШЛОГО прогона (ревью PR #18, круг 4).
+
+    solve пишет отчёт последним, а скелет submission — первым, поэтому
+    прерванный прогон штатно оставляет пару «свежий submission + отчёт
+    прошлого прогона». Судить по такому отчёту нельзя ни в какую сторону:
+    публичный хеш от репетиции обернулся бы отказом снять снапшот с приватных
+    ответов упавшего боевого прогона, а ранбук в этом месте велит снимать
+    снапшот немедленно.
+    """
+    out, _work = isolated_out
+    (out / "run-report.json").write_text(json.dumps({"dataset_hash": PUBLIC_HASH}))
+    _write_submission(out, {"P1": {"6.1": {"status": "COMPLIANT"}}})
+    report, submission = out / "run-report.json", out / "submission.json"
+    os.utime(report, (1_000_000, 1_000_000))
+    os.utime(submission, (2_000_000, 2_000_000))
+    assert submit.snapshot() == 1
+    assert "происхождение прогона не установлено" in capsys.readouterr().out
 
 
 def test_snapshot_proceeds_when_run_report_unreadable(isolated_out, capsys):

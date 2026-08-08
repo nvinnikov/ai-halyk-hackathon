@@ -348,6 +348,30 @@ def test_run_report_failure_does_not_kill_run(monkeypatch):
             assert_cell_valid(cell, f"{sc} {clause}")
 
 
+def test_stale_run_report_removed_with_skeleton(isolated_out, monkeypatch):
+    """Отчёт прошлого прогона не переживает начало нового (ревью PR #18, круг 4).
+
+    Отчёт пишется последним, скелет submission — первым, поэтому прерванный
+    прогон оставлял на диске пару «свежий submission + отчёт прошлого
+    прогона». submit.py судит о происхождении прогона по этому отчёту, и
+    публичный хеш, оставшийся с репетиции, обернулся бы отказом снять снапшот
+    с приватных ответов упавшего боевого прогона — прямо против точки
+    принятия решений ранбука («прогон упал целиком → make submit немедленно»).
+    Снятый отчёт означает «происхождение не установлено», а это fail-open.
+    """
+    stale = isolated_out / "run-report.json"
+    stale.write_text(json.dumps({"dataset_hash": "отчёт-прошлого-прогона"}))
+
+    def boom(*a, **k):
+        raise RuntimeError("искусственный обрыв сразу после скелета")
+
+    monkeypatch.setattr(solve, "load_ledger", boom)
+    with pytest.raises(RuntimeError):
+        solve.main(PUBLIC_ZIP, facts_source="expected")
+    assert (isolated_out / "submission.json").exists(), "скелет не написан — тест проверяет не то"
+    assert not stale.exists(), "отчёт прошлого прогона пережил начало нового"
+
+
 def test_submission_meta_empty_requisites_alarm(monkeypatch, capsys):
     """Ревью PR #9 (12-я волна): забытые TEAM_NAME/CONTACT_EMAIL не молчат."""
     monkeypatch.delenv("TEAM_NAME", raising=False)

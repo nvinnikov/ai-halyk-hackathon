@@ -1011,6 +1011,15 @@ def main(
     answers: dict = skeleton(template["answers"])
     sub = {**submission_meta(), "answers": answers}  # answers — та же ссылка, правки видны в sub
     dump_submission(sub, template["answers"])
+    # Отчёт прошлого прогона снимается вместе с записью скелета (ревью PR #18,
+    # круг 4). Он пишется ПОСЛЕДНИМ, а скелет — первым, поэтому прерванный
+    # прогон иначе оставлял бы пару «свежий submission + отчёт прошлого
+    # прогона», и submit.py судил бы о происхождении по чужому прогону: хеш,
+    # оставшийся от репетиции на публичном архиве, обернулся бы отказом снять
+    # снапшот с приватных ответов упавшего боевого прогона. Отсутствие отчёта
+    # означает «происхождение не установлено», а это fail-open — ровно то, чего
+    # требует точка принятия решений ранбука про упавший прогон.
+    (OUT / "run-report.json").unlink(missing_ok=True)
 
     targets = sorted(template["answers"])
     ledger_art = load_ledger(wd, input_dir, target_scenarios=targets)
