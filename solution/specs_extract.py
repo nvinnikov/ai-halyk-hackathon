@@ -335,7 +335,18 @@ def extract_specs(wd: Path, dossier_art: dict, fact_keys: set[str]) -> dict:
             }
         return {"covenants": raw["covenants"], "alarms": []}
 
-    raw_art = artifact(wd / "specs" / f"{acc}.json", SPECS_STAGE_VERSION, build)
+    # Провал извлечения (и пустое досье без договора) не кэшируется: артефакт
+    # инвалидируется только по версии, и запечённая деградация пережила бы
+    # перезапуск в окне после устранения причины (ревью PR #9, 22-я волна —
+    # тот же механизм залипания, что degraded в dossier). Пересбор no_agreement
+    # бесплатен: build() возвращается до LLM-вызова.
+    _degraded_kinds = {"specs_extraction_failed", "no_agreement"}
+    raw_art = artifact(
+        wd / "specs" / f"{acc}.json",
+        SPECS_STAGE_VERSION,
+        build,
+        cache_if=lambda d: not any(a.get("kind") in _degraded_kinds for a in d["alarms"]),
+    )
     agreement_text = sanitize_document(agreements[0]["text"]) if agreements else ""
 
     alarms = list(raw_art["alarms"])

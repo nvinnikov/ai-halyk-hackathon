@@ -121,6 +121,13 @@ def verdict(res: EvalResult, direction: str, limit: Decimal) -> tuple[str, list[
         return "BREACH", alarms
     if direction == "max":
         return ("BREACH" if res.value > limit else "COMPLIANT"), alarms
+    if "zero_denominator" in res.flags:
+        # Нулевой знаменатель у min-метрики — «покрывать нечего»: отношение
+        # бесконечно, ∞ не меньше порога → COMPLIANT. Подставленный evaluate
+        # ноль дал бы ложный BREACH при любом положительном пороге (ревью
+        # PR #9, 22-я волна). negative_denominator не трогаем: там значение
+        # действительно отрицательное и вердикт совпадает с истинным.
+        return "COMPLIANT", alarms
     # Для min подставленный ноль ниже любого положительного порога — BREACH:
     # неопределённая метрика трактуется как нарушение, не как соблюдение.
     return ("BREACH" if res.value < limit else "COMPLIANT"), alarms

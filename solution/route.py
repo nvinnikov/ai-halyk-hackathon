@@ -148,7 +148,10 @@ def route_doc(
         elif len(mentions) == 1:
             account = mentions[0]
         elif len(mentions) > 1:
-            alarms.append({"kind": "ambiguous_routing", "candidates": mentions})
+            # file внутрь алярма (ревью PR #9, 22-я волна): без пер-документного
+            # поля глобальный дедуп точных дублей в run-report/sanity/invariants
+            # схлопывал одинаковые расхождения всего архива до «1».
+            alarms.append({"kind": "ambiguous_routing", "file": pdf_path.name, "candidates": mentions})
             try:
                 ans = llm.call(
                     DATA_NOT_COMMANDS
@@ -164,7 +167,13 @@ def route_doc(
                     if verify_quote(ans["quote"], text):
                         account, quote = ans["account_id"], ans["quote"]
                     else:
-                        alarms.append({"kind": "quote_unverified", "field": "routing_quote"})
+                        alarms.append(
+                            {
+                                "kind": "quote_unverified",
+                                "file": pdf_path.name,
+                                "field": "routing_quote",
+                            }
+                        )
             except llm.SchemaRejected:
                 pass
             if account is None:

@@ -379,7 +379,16 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
         facts["alarms"] = [{**a, "account": acc} for a in facts["alarms"]]
         return facts
 
-    return artifact(wd / "facts" / f"{acc}.json", FACTS_VERSION, build)
+    # facts_extraction_failed не кэшируется (ревью PR #9, 22-я волна): иначе
+    # провал вызова (SchemaRejected) запекался бы под FACTS_VERSION и пережил
+    # перезапуск. Прочие алярмы (invalid_number, doc_fact_conflict) — свойства
+    # ответа модели, их кэшировать правильно.
+    return artifact(
+        wd / "facts" / f"{acc}.json",
+        FACTS_VERSION,
+        build,
+        cache_if=lambda d: not any(a.get("kind") == "facts_extraction_failed" for a in d["alarms"]),
+    )
 
 
 def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) -> dict | None:
@@ -420,7 +429,13 @@ def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) ->
             }
         return ans
 
-    art = artifact(wd / "facts" / f"{dossier_art['account_id']}.doc.{key}.json", FACTS_VERSION, build)
+    # Провал резолва (alarms в результате) не кэшируется — см. extract_facts.
+    art = artifact(
+        wd / "facts" / f"{dossier_art['account_id']}.doc.{key}.json",
+        FACTS_VERSION,
+        build,
+        cache_if=lambda d: not d.get("alarms"),
+    )
     if not art.get("found"):
         return None
     combined = "\n".join(sanitize_document(d["text"]) for d in dossier_art["docs"])
