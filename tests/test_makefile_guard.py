@@ -104,6 +104,33 @@ def test_run_guard_blocks_public_archive_from_environment():
     assert r.returncode != 0, "гейт run пропустил публичный архив из окружения"
 
 
+def test_run_guard_blocks_public_archive_written_as_path():
+    """Форма из ранбука — `export ARCHIVE=/путь/к/…zip`, а не голое имя, так
+    что протёкший с репетиции export с большей вероятностью будет путём
+    (ревью PR #18, круг 2). Сравнение обязано смотреть на базовое имя."""
+    for spelling in (f"./{PUBLIC_ARCHIVE}", f"/tmp/rehearsal/{PUBLIC_ARCHIVE}"):
+        r = _make("require-private-archive", [f"ARCHIVE={spelling}"])
+        assert r.returncode != 0, f"гейт run пропустил публичный архив как {spelling}"
+        assert "публичный архив" in r.stdout + r.stderr
+
+
 def test_run_guard_allows_private_archive():
     r = _make("require-private-archive", ["ARCHIVE=/tmp/private.zip"])
     assert r.returncode == 0, f"гейт run заблокировал приватный архив: {r.stdout}{r.stderr}"
+
+
+# --- проводка гейтов к целям, которые пишут out/submission.json --------------
+
+
+def test_determinism_target_is_gated():
+    """`determinism` зовёт ./run.sh дважды и перезаписывает отправляемый файл,
+    так что забытое ARCHIVE= стоит ей того же, что и run (ревью PR #18,
+    круг 2). Гейт мягче — это репетиционная цель, публичный архив ей нужен.
+
+    Проверка через `make -n`: рецепты печатаются, но не исполняются, поэтому
+    отсутствие гейта не запустит настоящий прогон прямо в тестах. Прямой вызов
+    цели здесь недопустим ровно поэтому.
+    """
+    r = _make("determinism", ["--dry-run"])
+    out = r.stdout + r.stderr
+    assert "ARCHIVE не задан" in out, "цель determinism не проходит через require-archive"

@@ -79,8 +79,15 @@ require-archive:
 # out/submission.json оказался бы перезаписан результатом по публичному набору
 # — ровно тот молчаливый сбой, ради которого гейт и ставился. Стоп-проверка
 # sanity.py по dataset_hash сработала бы, но уже после перезаписи.
+#
+# Сравнение по БАЗОВОМУ имени, а не по строке целиком (ревью PR #18, круг 2):
+# форма из ранбука — `export ARCHIVE=/путь/к/…zip`, поэтому протёкший с
+# репетиции export скорее будет путём, чем голым именем, и точное сравнение
+# пропускало бы `./6a74…zip` и любой абсолютный путь. notdir заодно ловит
+# копию публичного архива, положенную в другой каталог, — а это и есть
+# публичный набор, как бы к нему ни лежал путь.
 require-private-archive: require-archive
-	@test "$(ARCHIVE)" != "$(DEFAULT_ARCHIVE)" || { \
+	@test "$(notdir $(ARCHIVE))" != "$(notdir $(DEFAULT_ARCHIVE))" || { \
 	  echo "ARCHIVE указывает на публичный архив: run перезапишет out/submission.json."; \
 	  echo "  публичный набор гоняется через 'make solve'"; \
 	  exit 1; }
@@ -124,7 +131,12 @@ cassette-freeze:
 	mkdir -p eval/cassette && cp work/llm_cache/*.json eval/cassette/
 
 # Прогон дважды, второй целиком из кэша — байт-диф submission.json.
-determinism: install
+# Гейт здесь require-archive, а не require-private-archive (ревью PR #18,
+# круг 2): цель зовёт ./run.sh и точно так же перезаписывает отправляемый
+# out/submission.json, поэтому забытое ARCHIVE= ей запрещено — но публичный
+# архив ей как раз разрешён, это репетиционная цель, и мерить детерминизм
+# больше не на чем. Опасен здесь молчаливый дефолт, а не публичный набор.
+determinism: install require-archive
 	./run.sh $(ARCHIVE) && cp out/submission.json out/.det-a.json
 	./run.sh $(ARCHIVE) && diff out/.det-a.json out/submission.json
 
