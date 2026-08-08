@@ -605,6 +605,9 @@ def ppe(**over):
         "no_disposals_quote": "There were no disposals of property, plant and equipment during the year",
         "other_movements": False,
         "other_movements_quote": "",
+        "currency": "USD",
+        "amount_scale": "1",
+        "units_quote": "",
     }
     return {**base, **over}
 
@@ -867,3 +870,63 @@ def test_degraded_kinds_have_single_source():
 
     assert "issuer_extraction_failed" in dossier.DEGRADED_KINDS
     assert dossier.ROUTING_DEGRADED <= dossier.DEGRADED_KINDS
+
+
+def test_group_capex_scale_applied(tmp_path, monkeypatch):
+    """Суммы «в тысячах» без дробной части умножаются кодом: числитель приезжает
+    из чужой отчётности, знаменатель нормализован построчно (ревью PR #23)."""
+    text = (
+        "Note 7. There were no disposals of property, plant and equipment during the year. "
+        "All amounts in thousands of United States dollars. "
+        "Net book value at the beginning of the year 148,029 "
+        "Depreciation charge for the year 15,826 "
+        "Net book value at the end of the year 154,050"
+    )
+    raw = ppe(
+        opening_value="148029",
+        opening_quote="Net book value at the beginning of the year 148,029",
+        closing_value="154050",
+        closing_quote="Net book value at the end of the year 154,050",
+        depreciation="15826",
+        depreciation_quote="Depreciation charge for the year 15,826",
+        amount_scale="1000",
+        units_quote="All amounts in thousands of United States dollars",
+    )
+    dossier = {**GROUP_DOSSIER, "docs": [{**GROUP_DOSSIER["docs"][0], "text": text}]}
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(raw))
+    facts = facts_extract.extract_facts(tmp_path, dossier)
+    assert facts["doc_facts"][facts_extract.GROUP_CAPEX_KEY] == "21847000"
+
+
+def test_group_capex_scale_ignored_for_cent_precision(tmp_path, monkeypatch):
+    """Шапка «in thousands» относится к таблицам отчётности, а примечание рядом
+    печатает полные суммы — ровно так устроен документ публичного набора. Сумма
+    с точностью до цента не бывает «в тысячах»."""
+    text = GROUP_TEXT + " All amounts in thousands of United States dollars"
+    raw = ppe(amount_scale="1000", units_quote="All amounts in thousands of United States dollars")
+    dossier = {**GROUP_DOSSIER, "docs": [{**GROUP_DOSSIER["docs"][0], "text": text}]}
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(raw))
+    facts = facts_extract.extract_facts(tmp_path, dossier)
+    assert facts["doc_facts"][facts_extract.GROUP_CAPEX_KEY] == "21847362.55"
+    assert any(a["kind"] == "group_capex_scale_ignored" for a in facts["alarms"])
+
+
+def test_group_capex_foreign_currency_refused(tmp_path, monkeypatch):
+    """Пересчитать нечем: курс материнской компании к строкам заёмщика
+    отношения не имеет, а молча принять чужую валюту хуже отсутствия ответа."""
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(ppe(currency="EUR")))
+    facts = facts_extract.extract_facts(tmp_path, GROUP_DOSSIER)
+    assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
+    assert any(a["kind"] == "group_capex_foreign_currency" for a in facts["alarms"])
+
+
+def test_resolve_doc_fact_not_cached_when_dossier_degraded(tmp_path, monkeypatch):
+    """«Числа нет» по неполному досье приходит БЕЗ алярма (found=false — законный
+    ответ) и пережило бы устранение причины (ревью PR #23, пятая волна)."""
+    degraded = {
+        **DOSSIER,
+        "alarms": [{"kind": "routing_failed", "file": "x.pdf", "error": "boom"}],
+    }
+    monkeypatch.setattr(facts_extract.llm, "call", lambda *a, **k: {"found": False, "value": "", "quote": ""})
+    facts_extract.resolve_doc_fact(tmp_path, degraded, "severance_liability", "обязательство")
+    assert not (tmp_path / "facts" / "ACC-1.doc.severance_liability.json").exists()

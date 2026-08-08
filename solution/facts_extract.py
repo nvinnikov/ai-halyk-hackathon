@@ -11,7 +11,9 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 9
+FACTS_VERSION = 10
+# v10 — ревью PR #23, пятая волна: читаются единицы сумм примечания (валюта и
+# масштаб), гейт деградации досье распространён на адресный резолв.
 # v9 — ревью PR #23, вторая волна: group_capex от модели не попадает в
 # doc_facts вовсе, а resolve_doc_fact больше не видит документы группового
 # уровня ни в промпте, ни в корпусе проверки цитат.
@@ -253,6 +255,9 @@ GROUP_PPE_SCHEMA = {
         "no_disposals_quote": {"type": "string"},
         "other_movements": {"type": "boolean"},
         "other_movements_quote": {"type": "string"},
+        "currency": {"type": "string"},
+        "amount_scale": {"type": "string"},
+        "units_quote": {"type": "string"},
     },
     "required": [
         "opening_value",
@@ -267,6 +272,9 @@ GROUP_PPE_SCHEMA = {
         "no_disposals_quote",
         "other_movements",
         "other_movements_quote",
+        "currency",
+        "amount_scale",
+        "units_quote",
     ],
     "additionalProperties": False,
 }
@@ -294,8 +302,16 @@ GROUP_PPE_PROMPT = """Ниже — консолидированная отчёт
   где такое изменение названо. Если ничего подобного в примечании нет — false и
   пустая цитата.
 
+Отдельно — в каких единицах напечатаны ИМЕННО ЭТИ числа:
+- currency: код валюты этих сумм (например USD), как он назван в документе;
+- amount_scale: множитель, если суммы приведены в кратных единицах — «1000»
+  для «в тысячах», «1000000» для «в миллионах». Если суммы напечатаны
+  полностью — «1»;
+- units_quote: дословная цитата, где единицы названы (шапка примечания или
+  строка таблицы). Не нашли — все три строки пустые.
+
 Числа — строкой, без разделителей разрядов. Любое поле, которого в тексте нет,
-— пустая строка. Ничего не вычисляй.
+— пустая строка. Ничего не вычисляй и не пересчитывай сам.
 
 <document type="{doc_type}">
 {text}
@@ -486,6 +502,69 @@ def _apply_ownership(facts: dict, above: list[dict], below: list[dict]) -> None:
             )
 
 
+def _amount_scale(facts: dict, raw: dict, doc: dict, text: str) -> Decimal | None:
+    """Множитель сумм примечания; None — считать нельзя.
+
+    Числитель ковенанта приезжает из ЧУЖОЙ отчётности как есть, а знаменатель
+    нормализован в валюту расчёта построчно (fx.to_usd). Консолидированная
+    отчётность материнской компании — ровно тот документ, где «в тысячах» в
+    шапке и функциональная валюта, отличная от валюты расчёта, штатны. Промах
+    масштабом в 10³ на max-ковенанте даёт уверенный COMPLIANT, то есть стоит
+    статуса ячейки целиком, и проверка числа в цитате его не ловит: число
+    напечатано именно так (ревью PR #23, пятая волна).
+
+    Валюта: названа и не совпадает с валютой расчёта — расчёта нет. Пересчитать
+    её здесь нечем, курс материнской компании к строкам заёмщика отношения не
+    имеет, а молча принять чужую валюту хуже отсутствия ответа.
+
+    Масштаб применяется, только если суммы напечатаны БЕЗ дробной части. Сумма
+    с точностью до цента не бывает «в тысячах»: шапка «in thousands» относится
+    к таблицам отчётности, а примечание рядом печатает полные суммы — ровно
+    так устроен документ публичного набора. Иначе множитель, взятый из шапки
+    буквально, завысил бы числитель в 10³ на пустом месте.
+    """
+    from fx import BASE_CURRENCY
+
+    currency = raw["currency"].strip().upper()
+    if currency and currency != BASE_CURRENCY:
+        facts["alarms"].append(
+            {"kind": "group_capex_foreign_currency", "file": doc["file"], "currency": currency}
+        )
+        return None
+    raw_scale = raw["amount_scale"].strip()
+    if not raw_scale:
+        return Decimal(1)
+    try:
+        scale = Decimal(raw_scale.replace(",", "").replace(" ", ""))
+    except InvalidOperation:
+        facts["alarms"].append({"kind": "invalid_number", "field": "group_capex_scale", "value": raw_scale})
+        return None
+    if not scale.is_finite() or scale <= 0:
+        facts["alarms"].append({"kind": "invalid_number", "field": "group_capex_scale", "value": raw_scale})
+        return None
+    if scale == 1:
+        return scale
+    if not verify_quote(raw["units_quote"], text):
+        facts["alarms"].append(
+            {"kind": "quote_unverified", "field": "group_capex_scale", "file": doc["file"]}
+        )
+        return None
+    amounts = [raw["opening_value"], raw["closing_value"], raw["depreciation"], raw["additions"]]
+    if any(_has_fraction(v) for v in amounts):
+        facts["alarms"].append({"kind": "group_capex_scale_ignored", "file": doc["file"], "scale": raw_scale})
+        return Decimal(1)
+    return scale
+
+
+def _has_fraction(value: str) -> bool:
+    """Напечатана ли сумма с дробной частью (то есть до цента)."""
+    try:
+        d = Decimal(str(value).strip())
+    except (InvalidOperation, AttributeError):
+        return False
+    return d.is_finite() and d != d.to_integral_value()
+
+
 def _group_capex(facts: dict, raw: dict, doc: dict, text: str) -> tuple[Decimal, str] | None:
     """Поступления основных средств Группы за период: (значение, цитата).
 
@@ -551,8 +630,13 @@ def _group_capex(facts: dict, raw: dict, doc: dict, text: str) -> tuple[Decimal,
         facts["alarms"].append({"kind": "group_capex_negative", "file": doc["file"], "value": str(value)})
         return False
 
+    scale = _amount_scale(facts, raw, doc, text)
+    if scale is None:
+        return None
+
     stated = number(raw["additions"], raw["additions_quote"], "group_capex_additions")
     if stated is not None:
+        stated *= scale
         return (stated, raw["additions_quote"]) if signed_ok(stated) else None
 
     if not raw["no_disposals"] or not verify_quote(raw["no_disposals_quote"], text):
@@ -579,7 +663,7 @@ def _group_capex(facts: dict, raw: dict, doc: dict, text: str) -> tuple[Decimal,
     depreciation = number(raw["depreciation"], raw["depreciation_quote"], "group_capex_depreciation")
     if opening is None or closing is None or depreciation is None:
         return None
-    additions = closing - opening + abs(depreciation)
+    additions = (closing - opening + abs(depreciation)) * scale
     return (additions, raw["closing_quote"]) if signed_ok(additions) else None
 
 
@@ -947,11 +1031,20 @@ def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) ->
         return ans
 
     # Провал резолва (alarms в результате) не кэшируется — см. extract_facts.
+    # Деградация досье блокирует кэш здесь по той же причине и тем же набором
+    # (ревью PR #23, пятая волна): вход у резолва тот же самый — docs досье, —
+    # каталог и версия стадии те же, а «числа нет» по неполному набору
+    # документов приходит БЕЗ единого алярма (found=false — законный ответ) и
+    # переживает устранение причины. Следующий прогон вернул бы found=false с
+    # диска: doc_fact_unresolved, ячейка на лестнице до конца окна.
+    from dossier import DEGRADED_KINDS
+
+    dossier_degraded = any(a.get("kind") in DEGRADED_KINDS for a in dossier_art.get("alarms", []))
     art = artifact(
         wd / "facts" / f"{dossier_art['account_id']}.doc.{key}.json",
         FACTS_VERSION,
         build,
-        cache_if=lambda d: not d.get("alarms"),
+        cache_if=lambda d: not dossier_degraded and not d.get("alarms"),
     )
     if not art.get("found"):
         return None
