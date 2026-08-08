@@ -199,6 +199,26 @@ FLOORS: dict[str, float | None] = {
 }
 
 
+def test_all_floors_are_measured():
+    """Незафиксированный порог обязан быть виден без API.
+
+    Проверка внутри llm-теста ловит забытый шаг только у того, кто запускает
+    живой прогон, а он помечен `llm` и в `make check` с CI не попадает — там
+    на второй ярус не смотрело бы ничего, и «не измерено» выглядело бы как
+    «прошло». Тип сохраняет `| None` намеренно: состояние «порог ещё не
+    снят» законно между заменой модели и пересъёмом, но обязано падать
+    здесь, а не тихо выпадать из проверки в test_recovery_by_category_
+    worst_of_three_orders (там условие `if floor is not None`)."""
+    unmeasured = sorted(c for c, floor in FLOORS.items() if floor is None)
+    assert unmeasured == [], (
+        f"пороги не измерены: {unmeasured}. Снимаются живым прогоном — "
+        "LLM_PROVIDER=<провайдер> ...API_KEY=... uv run pytest "
+        "tests/test_mutations_ledger.py -m llm -q -s -k recovery, "
+        "значения из строки «ХУДШЕЕ ПО ТРЁМ», округлённые вниз до сотых. "
+        "До фиксации эти категории не проверяет ни один гейт."
+    )
+
+
 @pytest.mark.llm
 def test_second_tier_regression_on_sewer_levy():
     """Единственное описание набора, где второй ярус вызывается без мутации.
