@@ -69,8 +69,73 @@ _TEMPLATE_HEADING_TEXT: dict[str, str] = {
 TEMPLATE_HEADINGS: dict[str, str] = {title_key(h): name for name, h in _TEMPLATE_HEADING_TEXT.items()}
 
 
+# Значимые слова заголовка: короткие — предлоги и союзы, они одинаковы у всех
+# заголовков и только раздували бы сходство.
+_MIN_HEADING_TOKEN = 3
+_HEADING_TOKENS: dict[str, frozenset[str]] = {
+    name: frozenset(w for w in title_key(h).split() if len(w) >= _MIN_HEADING_TOKEN)
+    for name, h in _TEMPLATE_HEADING_TEXT.items()
+}
+
+# Сходство меряется в целых процентах пересечения к объединению токенов.
+# Порог и требуемый отрыв закреплены тестом
+# (test_heading_similarity_separates_own_from_foreign), который меряет ровно
+# то, что сравнивает код: на пертурбированном заголовке — сходство с
+# победителем и отрыв от следующего за ним.
+#
+# Запас неодинаков: по сходству он комфортный, по отрыву — ОДИН процентный
+# пункт. Выброшенное слово уменьшает объединение и поднимает сходство с чужими
+# шаблонами тоже, поэтому родственные заголовки подходят близко. Любое новое
+# родственное имя в библиотеке этот запас съест — и тогда упадёт тест, а не
+# приватный прогон.
+_MIN_HEADING_SIMILARITY_PCT = 60
+_MIN_HEADING_MARGIN_PCT = 15
+
+
+def heading_similarity_pct(a: frozenset[str], b: frozenset[str]) -> int:
+    """Пересечение к объединению в целых процентах; пустые наборы — ноль."""
+    union = a | b
+    return 100 * len(a & b) // len(union) if union else 0
+
+
 def match_heading(heading_key: str) -> str | None:
-    return TEMPLATE_HEADINGS.get(heading_key)
+    """Шаблон по заголовку пункта: точное совпадение, иначе близкое по словам.
+
+    Точный поиск по словарю обрывался на любой переформулировке: одно слово
+    иначе — и ни один из 19 заголовков не срабатывал. Замер LOBO показывает
+    цену обрыва: 34.50 против 29.50, то есть библиотека несёт 5.00 балла, а
+    формулировки приватных договоров нам неизвестны.
+
+    Неверный шаблон, однако, хуже отсутствия матча: формула подменится молча и
+    ячейка посчитается не тем. Поэтому близкий матч принимается, только когда
+    победитель один и отрыв от второго решительный; при сомнении — None и
+    сырой DSL спеки, как раньше. Нестрогое срабатывание не молчит: solve пишет
+    алярм heading_matched_loosely с ключом и выбранным шаблоном.
+
+    Известная граница. Если заголовок теряет ровно те слова, которыми он
+    отличается от более общего собрата, разделить их нечем: у законного матча в
+    худшем случае ровно такой же отрыв, как у вырожденного (заголовок про
+    квартальную выручку без двух последних слов — это буквально заголовок про
+    выручку). Порог здесь не помогает, помогает алярм: в трейсе видно, на какой
+    шаблон увело.
+    """
+    exact = TEMPLATE_HEADINGS.get(heading_key)
+    if exact is not None:
+        return exact
+    want = frozenset(w for w in heading_key.split() if len(w) >= _MIN_HEADING_TOKEN)
+    if not want:
+        return None
+    # Сортировка по (сходство, имя): имена уникальны, порядок полный и
+    # воспроизводимый — при равном сходстве победителя всё равно не будет.
+    ranked = sorted(
+        ((heading_similarity_pct(want, toks), name) for name, toks in _HEADING_TOKENS.items()),
+        reverse=True,
+    )
+    best, name = ranked[0]
+    runner_up = ranked[1][0] if len(ranked) > 1 else 0
+    if best < _MIN_HEADING_SIMILARITY_PCT or best - runner_up < _MIN_HEADING_MARGIN_PCT:
+        return None
+    return name
 
 
 _EBITDA = "sub(agg(REVENUE, in), agg(OTHER_OPEX, out))"

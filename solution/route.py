@@ -17,7 +17,7 @@ from pdftext import doc_hash, extract_pages
 from stages import artifact
 from vision import read_blind_page
 
-ROUTE_VERSION = 2
+ROUTE_VERSION = 3
 # v2 — активационный бамп (2026-08-08, docs/ops/activation-step.md): версия
 # удерживалась на 1 после смены входа (TEXT_VERSION=2, снят футер-номер
 # страницы), чтобы не жечь исчерпанный баланс Anthropic повторной
@@ -137,7 +137,18 @@ def route_doc(
 
         if mentions and meta["doc_type"] == "other":
             # Не документ клиента — ожидаемый шум, карантин без алярма-паники.
+            # Но документ НАЗЫВАЕТ целевой счёт и всё равно выбрасывается, а
+            # перечень типов закрыт теми пятью, что встретились на публичном
+            # наборе: допсоглашение, сертификат соблюдения ковенантов, решение
+            # совета, полис на приватном наборе лягут сюда же и исчезнут. Тип
+            # определяется по первой странице — маркер на второй документ тоже
+            # не спасёт. Поведение не меняем (карантин остаётся), но молчать
+            # нельзя: в окне это единственный способ увидеть, что документный
+            # слой ослеп на целый класс документов.
             reason = "non_client_doc_type"
+            alarms.append(
+                {"kind": "target_doc_dropped_as_other", "file": pdf_path.name, "accounts": mentions}
+            )
         elif len(mentions) == 1:
             account = mentions[0]
         elif len(mentions) > 1:

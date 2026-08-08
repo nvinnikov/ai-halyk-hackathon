@@ -41,7 +41,7 @@ from scindex import INDEX_VERSION, build_index
 from specs_extract import extract_specs
 from stages import artifact
 from taxonomy import cell_other_alarm, coverage_report
-from templates import TEMPLATES, match_heading
+from templates import TEMPLATE_HEADINGS, TEMPLATES, match_heading
 from util import OUT, ROOT, q2, stable_json, workdir
 
 # Модули, чьи *_VERSION-константы run-report собирает целиком (раздел 3):
@@ -617,7 +617,11 @@ def _extracted_cellspec(
             pass
         return err, quote
     try:
-        template = match_heading(sp["title_key"]) or sp["template"]
+        matched = match_heading(sp["title_key"])
+        # Нестрогий матч — заголовок опознан ПРИБЛИЗИТЕЛЬНО, и доверие к нему
+        # другое, чем к точному (см. ниже откат при расхождении).
+        loosely_matched = matched is not None and sp["title_key"] not in TEMPLATE_HEADINGS
+        template = matched or sp["template"]
         metric_text = _metric_text_for({**sp, "template": template}, scenario, hide_templates)
         # Подмена шаблоном не имеет права вводить doc()-ключи, которых нет в
         # фактах (ревью PR #9, 13-я волна): _check валидировал ключи
@@ -638,9 +642,11 @@ def _extracted_cellspec(
         # волна): не только другой набор категорий, но и разница по
         # quarter()/знаку/форме агрегации — сигнатурное сравнение.
         match_alarms: list[dict] = []
+        diverged = False
         if metric_text != sp["metric"]:
             div = _category_divergence(sp["metric"], metric_text)
             if div:
+                diverged = True
                 match_alarms.append(
                     {"kind": "heading_category_divergence", "extracted": div[0], "template": div[1]}
                 )
@@ -655,6 +661,7 @@ def _extracted_cellspec(
             else:
                 try:
                     if signature(parse(sp["metric"])) != signature(parse(metric_text)):
+                        diverged = True
                         match_alarms.append(
                             {
                                 "kind": "heading_signature_divergence",
@@ -664,6 +671,33 @@ def _extracted_cellspec(
                         )
                 except DslError:
                     pass  # сырой DSL не парсится — подмена и так единственный путь
+        if loosely_matched:
+            match_alarms.append(
+                {
+                    "kind": "heading_matched_loosely",
+                    "title_key": sp["title_key"],
+                    "template": matched,
+                }
+            )
+            # Решение «шаблон исполняется и при расхождении» измерено на ТОЧНЫХ
+            # матчах, где заголовок гарантированно тот самый, а расхождение —
+            # ошибка извлечения категорий. У нестрогого матча посылка обратная:
+            # заголовок мы как раз не узнали, и расхождение может означать, что
+            # увело на соседний шаблон. Библиотека двуязычна (часть заголовков
+            # английские), поэтому законный шаблон бывает недостижим по словам,
+            # а русский брат — достижим: сходство с ним проходит и порог, и
+            # отрыв. Тогда откат на извлечённый DSL стоит нам отсутствия матча,
+            # то есть ровно того, что было до нестрогого матча, — а исполнение
+            # соседнего шаблона стоило бы неверной формулы, посчитанной молча.
+            if diverged:
+                match_alarms.append(
+                    {
+                        "kind": "loose_heading_rejected_on_divergence",
+                        "title_key": sp["title_key"],
+                        "template": matched,
+                    }
+                )
+                metric_text = sp["metric"]
         cellspec = {
             "metric_ast": parse(metric_text),
             "metric_text": metric_text,

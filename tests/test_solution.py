@@ -254,6 +254,11 @@ def test_submission_meta_reads_env(monkeypatch):
 
 
 def test_submission_meta_defaults_model_to_llm_model(monkeypatch):
+    # LLM_PROVIDER снимается явно: 9 августа он приходит из .env, и без этого
+    # тест краснел бы от переменной окружения, а не от кода. Красный make check
+    # в окне ранбук трактует как «откатиться на зелёный коммит» — ложный сигнал
+    # здесь дороже самого теста.
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
     monkeypatch.delenv("TEAM_NAME", raising=False)
     monkeypatch.delenv("CONTACT_EMAIL", raising=False)
     monkeypatch.delenv("MODEL_NAME", raising=False)

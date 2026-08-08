@@ -73,6 +73,11 @@ def test_zero_budget_run_still_submittable(isolated_workdir, monkeypatch):
 
 
 def test_dead_network_mid_run(isolated_workdir, monkeypatch):
+    # Тест про транспорт anthropic: монкепатчится llm._create, которого на
+    # gemini-пути нет вовсе. Провайдер пинится явно — иначе тест краснеет от
+    # переменной окружения (.env экспортирует LLM_PROVIDER=gemini), а красный
+    # make check в окне ранбук трактует как «откатиться на зелёный коммит».
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     calls = {"n": 0}
 
     def dying(**kw):
@@ -93,6 +98,7 @@ def test_429_storm_backs_off_and_caps(monkeypatch):
     # (`make eval-offline`) иначе перехватывает вызов раньше, на проверке
     # кассеты/кэша, и тест ловит CassetteMiss вместо RateLimitError.
     monkeypatch.delenv("LLM_OFFLINE", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")  # см. test_dead_network_mid_run
     sleeps = []
     attempts = {"n": 0}
 

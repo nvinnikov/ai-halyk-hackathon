@@ -55,6 +55,108 @@ def test_match_heading_unknown_returns_none():
     assert match_heading(title_key("совершенно другой заголовок пункта")) is None
 
 
+def _perturb(text: str) -> dict[str, str]:
+    """Как приватный набор мог бы сформулировать тот же заголовок иначе."""
+    words = text.split()
+    return {
+        "выброшено последнее слово": " ".join(words[:-1]),
+        "добавлено слово": text + " Заёмщика",
+        "переставлены два последних слова": " ".join(words[:-2] + words[-1:] + words[-2:-1])
+        if len(words) > 2
+        else text,
+    }
+
+
+def test_heading_similarity_separates_own_from_foreign():
+    """Зазор, на котором стоят пороги нестрогого матча — здесь он и меряется.
+
+    Числа в `solution/templates.py` (порог сходства и требуемый отрыв) держатся
+    ровно на этом факте: переформулированный заголовок похож на СВОЙ шаблон
+    заметно сильнее, чем любые два РАЗНЫХ шаблона похожи друг на друга. Если
+    зазор схлопнется — тест упадёт раньше, чем нестрогий матч начнёт подбирать
+    чужие формулы.
+    """
+    from templates import (
+        _HEADING_TOKENS,
+        _MIN_HEADING_MARGIN_PCT,
+        _MIN_HEADING_SIMILARITY_PCT,
+        _MIN_HEADING_TOKEN,
+        _TEMPLATE_HEADING_TEXT,
+        heading_similarity_pct,
+    )
+
+    def toks(text):
+        return frozenset(w for w in title_key(text).split() if len(w) >= _MIN_HEADING_TOKEN)
+
+    # Меряем ровно то, что сравнивает код: сходство с победителем и отрыв от
+    # СЛЕДУЮЩЕГО за ним — на пертурбированном ключе. Сходство между исходными
+    # заголовками тут не годится: выброшенное слово уменьшает объединение и
+    # поднимает сходство с чужими шаблонами тоже, поэтому runner_up бывает выше
+    # любой пары исходных заголовков.
+    worst_best = 100
+    worst_margin = 100
+    for name, heading in _TEMPLATE_HEADING_TEXT.items():
+        for variant in _perturb(heading).values():
+            want = toks(variant)
+            ranked = sorted(
+                ((heading_similarity_pct(want, t), n) for n, t in _HEADING_TOKENS.items()),
+                reverse=True,
+            )
+            if ranked[0][1] != name:
+                continue  # не свой победитель — случай для теста про чужие шаблоны
+            worst_best = min(worst_best, ranked[0][0])
+            worst_margin = min(worst_margin, ranked[0][0] - ranked[1][0])
+
+    # Запас по отрыву — ОДИН процентный пункт, и это не опечатка: у заголовка
+    # про выручку без последнего слова победитель даёт 66, а следующий за ним
+    # родственный шаблон — 50. Число закреплено здесь, чтобы новое родственное
+    # имя в библиотеке уронило этот тест, а не приватный прогон.
+    assert (worst_best, worst_margin) == (66, 16), (worst_best, worst_margin)
+    assert _MIN_HEADING_SIMILARITY_PCT <= worst_best
+    assert _MIN_HEADING_MARGIN_PCT <= worst_margin
+
+
+def test_match_heading_survives_reworded_title():
+    """Матч заголовка деградирует, а не обрывается.
+
+    До этого матч был точным поиском по словарю: одно слово иначе — и ни один
+    из 19 заголовков не срабатывал, а вместе с ними уходило 5.00 балла
+    (замер LOBO: 34.50 → 29.50). Формулировки приватных договоров нам
+    неизвестны, поэтому близкий по словам заголовок обязан находить свой
+    шаблон.
+    """
+    from templates import _TEMPLATE_HEADING_TEXT
+
+    for name, heading in _TEMPLATE_HEADING_TEXT.items():
+        for label, variant in _perturb(heading).items():
+            assert match_heading(title_key(variant)) == name, f"{name}: {label}"
+
+
+def test_match_heading_never_picks_a_foreign_template():
+    """Неверный шаблон хуже отсутствия матча: формула подменится молча.
+
+    Проверяем обе стороны: пертурбированный заголовок находит СВОЙ шаблон и
+    ничей больше, а заголовок, собранный из слов двух разных шаблонов,
+    отвергается как неоднозначный.
+    """
+    from templates import _TEMPLATE_HEADING_TEXT
+
+    for name, heading in _TEMPLATE_HEADING_TEXT.items():
+        for variant in _perturb(heading).values():
+            got = match_heading(title_key(variant))
+            assert got in (name, None), f"{name} сматчился на чужой шаблон {got}"
+
+    names = sorted(_TEMPLATE_HEADING_TEXT)
+    mixed = _TEMPLATE_HEADING_TEXT[names[0]] + " " + _TEMPLATE_HEADING_TEXT[names[1]]
+    assert match_heading(title_key(mixed)) is None
+
+
+def test_match_heading_unrelated_title_still_none():
+    """Порог не должен превращать библиотеку в «что-нибудь подберём»."""
+    assert match_heading(title_key("Порядок уведомления сторон о смене реквизитов")) is None
+    assert match_heading(title_key("Ответственность за нарушение сроков поставки")) is None
+
+
 def test_title_key_is_language_independent():
     # Английский заголовок при русском окружении матчится тем же ключом:
     # регистр, пунктуация и цифры значения не имеют.

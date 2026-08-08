@@ -14,12 +14,12 @@
  "currencies_target": {
   "EUR": 15
  },
- "dataset_hash": "f2c65d2cfc8d8527",
+ "dataset_hash": "03b886a4f357722e",
  "dirty_rows": 2,
  "fallback_rate": 0.05555555555555555,
  "index_alarms": [],
  "pdf_count": 200,
- "public_score": 30.0,
+ "public_score": 34.5,
  "stage_alarms": {
   "quote_unverified": 1,
   "routing_quarantine": 133
