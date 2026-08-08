@@ -29,14 +29,22 @@ if path.exists():
 
 ### Кто ловит ошибку и потому подвержен, кто — нет
 
-Четыре стадии кэшируются через `stages.artifact`. Три из них (`route`,
-`facts_extract`, `specs_extract`) ловят **только `llm.SchemaRejected`**
-внутри своего `build()` — именно в этот класс заворачивается ответ
-"insufficient credit balance"/400 (`_request` в `llm.py`: `except
-anthropic.BadRequestError → raise SchemaRejected`). Ловится → деградировавший
-результат ВОЗВРАЩАЕТСЯ из `build()` → кэшируется. `dossier.py` ловит
-`except Exception` целиком (шире: сюда же попадёт и `vision.py`, если слепая
-страница за собой потянула LLM-сбой) — тоже кэшируется.
+> **АКТУАЛИЗАЦИЯ (волны 18–28 ревью PR #9).** Описанный ниже механизм
+> залипания ЗАКРЫТ: (а) `anthropic.BadRequestError` (400, включая
+> "insufficient credit balance") больше НЕ заворачивается в `SchemaRejected`
+> — пробрасывается наружу и артефакт не пишется; (б) все пять стадий
+> (`ledger`, `route`, `dossier`, `facts`, `specs`) передают в
+> `stages.artifact` предикат `cache_if` — результат с алярмом деградации
+> (`categorize_failed`, `meta_extraction_failed`, `routing_failed`,
+> `facts_extraction_failed`, `no_documents`, `specs_extraction_failed`,
+> `no_agreement`, `doc_fact_resolve_failed`) возвращается вызывающему, но на
+> диск не ложится — перезапуск честно перепытается. Раздел сохранён как
+> описание класса проблемы для диагностики незнакомых артефактов.
+
+Исторически: три стадии (`route`, `facts_extract`, `specs_extract`) ловили
+**только `llm.SchemaRejected`** внутри своего `build()`; ловится →
+деградировавший результат ВОЗВРАЩАЛСЯ из `build()` → кэшировался.
+`dossier.py` ловил `except Exception` целиком — тоже кэшировался.
 
 | Стадия | Артефакт | Версия | Что ловится и превращается в кэш | Alarm kind внутри артефакта |
 |---|---|---|---|---|

@@ -116,7 +116,12 @@ def build_dossiers(
     # не падает, но следующий запуск собирает досье заново (ревью PR #9, 20-я
     # волна; тот же механизм залипания уже жёг прогон через
     # facts_extraction_failed).
-    degraded = any(a.get("kind") == "routing_failed" for q in quarantined for a in q.get("alarms", []))
+    # meta_extraction_failed — тоже деградация маршрутизации (SchemaRejected
+    # на META → карантин non_client_doc_type): route-артефакт при нём не
+    # кэшируется (cache_if, 23-я волна), а досье без этого пункта кэшировалось
+    # бы и не самовосстанавливалось (ревью PR #9, 28-я волна).
+    _degraded_kinds = {"routing_failed", "meta_extraction_failed"}
+    degraded = any(a.get("kind") in _degraded_kinds for q in quarantined for a in q.get("alarms", []))
 
     out: dict[str, dict] = {}
     for acc in targets:
