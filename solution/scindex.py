@@ -7,7 +7,7 @@
 import re
 from collections import defaultdict
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2  # v2: background.account_ids — фоновые счета для route (13-я волна ревью)
 
 
 def _target_hits(txn_id: str, target_set: set[str]) -> list[str]:
@@ -84,6 +84,7 @@ def build_index(rows: list[dict], targets: list[str]) -> dict:
         "account_to_scenario": a2s,
         "background": {
             "accounts": len(background_accounts),
+            "account_ids": sorted(background_accounts),
             "rows": background_rows,
             "row_share": round(background_rows / total, 4) if total else 0.0,
         },

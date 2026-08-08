@@ -252,6 +252,14 @@ def _build_filter(name, args):
             return CounterpartyIn(setname=setname)
         if _is_lit(args[0], "list"):
             return CounterpartyIn(setname=args[0][1])
+        if _is_lit(args[0], "str"):
+            # Модель иногда путает две формы аргумента и кавычит то, что
+            # грамматика ждёт голым идентификатором: counterparty_in
+            # ('related_parties') вместо counterparty_in(related_parties).
+            # Строка, совпадающая с именем известного множества, — то же
+            # множество; любая другая строка — список из одного контрагента.
+            value = args[0][1]
+            return CounterpartyIn(setname=value if value in _SETS else (value,))
     if name == "txn_in" and len(args) == 1 and _is_lit(args[0], "list"):
         return TxnIn(ids=args[0][1])
     if name == "min_amount" and len(args) == 1:

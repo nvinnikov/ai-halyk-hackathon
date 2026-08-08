@@ -2,7 +2,8 @@
 
 Деление на ноль — помеченное значение и алярм, а не пропуск вычисления (5.7).
 Отрицательный знаменатель (EBITDA ≤ 0) — алярм и BREACH при direction=max:
-знаковое сравнение −9.44 ≤ 9.00 дало бы ложный COMPLIANT.
+знаковое сравнение отрицательного числителя с пороговым значением требует
+осторожности с интерпретацией знака.
 """
 
 from dataclasses import dataclass, field
@@ -85,7 +86,15 @@ def evaluate(node, ctx: Ctx) -> EvalResult:
         num, den = evaluate(node.num, ctx), evaluate(node.den, ctx)
         flags = set(num.flags | den.flags)
         if den.value == 0:
-            return EvalResult(Decimal(0), frozenset(flags | {"zero_denominator"}))
+            flags.add("zero_denominator")
+            # Знак числителя — в флаг: подстановка нуля его стирает, а вердикт
+            # min-метрики от него зависит (∞ только при положительном
+            # числителе; −EBITDA/0 — это −∞, ревью PR #9, 24-я волна).
+            if num.value < 0:
+                flags.add("zero_den_negative_num")
+            elif num.value == 0:
+                flags.add("zero_den_zero_num")
+            return EvalResult(Decimal(0), frozenset(flags))
         if den.value < 0:
             flags.add("negative_denominator")
         return EvalResult(num.value / den.value, frozenset(flags))
@@ -120,6 +129,18 @@ def verdict(res: EvalResult, direction: str, limit: Decimal) -> tuple[str, list[
         return "BREACH", alarms
     if direction == "max":
         return ("BREACH" if res.value > limit else "COMPLIANT"), alarms
+    if "zero_denominator" in res.flags and not res.flags & {
+        "zero_den_negative_num",
+        "zero_den_zero_num",
+    }:
+        # Нулевой знаменатель у min-метрики — «покрывать нечего»: отношение
+        # бесконечно, ∞ не меньше порога → COMPLIANT. Подставленный evaluate
+        # ноль дал бы ложный BREACH при любом положительном пороге (ревью
+        # PR #9, 22-я волна). Только при положительном числителе: −EBITDA/0 —
+        # это −∞, а 0/0 не определён — оба падают в общий BREACH ниже (24-я
+        # волна). negative_denominator не трогаем: там значение действительно
+        # отрицательное и вердикт совпадает с истинным.
+        return "COMPLIANT", alarms
     # Для min подставленный ноль ниже любого положительного порога — BREACH:
     # неопределённая метрика трактуется как нарушение, не как соблюдение.
     return ("BREACH" if res.value < limit else "COMPLIANT"), alarms

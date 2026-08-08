@@ -121,3 +121,30 @@ def test_non_client_doc_type_not_bound(fake, monkeypatch):
     assert art["account_id"] is None and art["quarantined"] is True
     assert art["quarantine_reason"] == "non_client_doc_type"
     assert not any(a["kind"] == "routing_quarantine" for a in art["alarms"])
+
+
+def test_meta_failure_not_cached(fake, monkeypatch):
+    """Провал META (SchemaRejected → карантин non_client_doc_type) не
+    оставляет route-артефакта: перезапуск после устранения причины
+    перемаршрутизирует (ревью PR #9, 23-я волна)."""
+    import llm as llm_mod
+
+    state, wd = fake
+
+    def meta_fails(prompt, schema, schema_version, **kw):
+        raise llm_mod.SchemaRejected("schema mismatch")
+
+    monkeypatch.setattr(route.llm, "call", meta_fails)
+    state["text"] = "Договор займа, счёт заёмщика ACC-1111"
+    art = route.route_doc(wd, Path("x.pdf"), TARGETS, ALL_ACCOUNTS)
+    assert any(a["kind"] == "meta_extraction_failed" for a in art["alarms"])
+    assert not (wd / "route" / "cafe00000000.json").exists()
+
+    # Причина устранена — маршрутизация проходит и кэшируется.
+    def meta_ok(prompt, schema, schema_version, **kw):
+        return {"doc_type": "agreement", "date": "2025-03-01", "edition": "final"}
+
+    monkeypatch.setattr(route.llm, "call", meta_ok)
+    art2 = route.route_doc(wd, Path("x.pdf"), TARGETS, ALL_ACCOUNTS)
+    assert art2["account_id"] == "ACC-1111"
+    assert (wd / "route" / "cafe00000000.json").exists()

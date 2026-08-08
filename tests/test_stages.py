@@ -26,6 +26,26 @@ def test_version_bump_rebuilds(tmp_path):
     assert json.loads(p.read_text())["_meta"]["stage_version"] == 2
 
 
+def test_cache_if_false_returns_but_does_not_write(tmp_path):
+    # Деградированный fail-open результат возвращается, но не переживает
+    # перезапуск (ревью PR #9, 22-я волна): следующий вызов пересобирает.
+    p = tmp_path / "stage.json"
+    bad = lambda: {"alarms": [{"kind": "extraction_failed"}]}  # noqa: E731
+    ok = lambda: {"alarms": []}  # noqa: E731
+    not_degraded = lambda d: not d["alarms"]  # noqa: E731
+
+    art = artifact(p, 1, bad, cache_if=not_degraded)
+    assert art["alarms"] and not p.exists()
+
+    art2 = artifact(p, 1, ok, cache_if=not_degraded)
+    assert art2["alarms"] == [] and p.exists()
+
+    def boom():
+        raise AssertionError("build не должен вызываться при попадании в кэш")
+
+    assert artifact(p, 1, boom, cache_if=not_degraded)["alarms"] == []
+
+
 def test_write_is_atomic(tmp_path, monkeypatch):
     # незавершённая запись не должна оставить битый артефакт
     p = tmp_path / "a.json"

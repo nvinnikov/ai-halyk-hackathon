@@ -72,6 +72,45 @@ def test_zero_denominator_max_is_breach():
     assert "zero_denominator" in alarms
 
 
+def test_zero_denominator_min_is_compliant():
+    # Нулевой знаменатель у min-метрики (ICR без процентных платежей) —
+    # покрытие бесконечно: ∞ не меньше порога, подставленный ноль дал бы
+    # ложный BREACH (ревью PR #9, 22-я волна).
+    from interp import EvalResult
+
+    status, alarms = verdict(EvalResult(Decimal(0), frozenset({"zero_denominator"})), "min", Decimal("1.50"))
+    assert status == "COMPLIANT"
+    assert "zero_denominator" in alarms
+
+
+def test_zero_denominator_min_negative_numerator_is_breach():
+    # −EBITDA при нулевом знаменателе — это −∞, а не +∞: ложный COMPLIANT
+    # недопустим (ревью PR #9, 24-я волна). 0/0 не определён — тоже BREACH.
+    rows = [row("T-01", "OTHER_OPEX", "-100")]
+    res = evaluate(
+        parse("ratio(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), agg(INTEREST, out))"),
+        Ctx(rows, {}),
+    )
+    assert "zero_denominator" in res.flags and "zero_den_negative_num" in res.flags
+    assert verdict(res, "min", Decimal("1.50"))[0] == "BREACH"
+
+    from interp import EvalResult
+
+    zz = EvalResult(Decimal(0), frozenset({"zero_denominator", "zero_den_zero_num"}))
+    assert verdict(zz, "min", Decimal("1.50"))[0] == "BREACH"
+
+
+def test_negative_denominator_min_stays_breach():
+    # negative_denominator при min не трогаем: значение действительно
+    # отрицательное, вердикт совпадает с истинным.
+    from interp import EvalResult
+
+    status, _ = verdict(
+        EvalResult(Decimal("-2"), frozenset({"negative_denominator"})), "min", Decimal("1.50")
+    )
+    assert status == "BREACH"
+
+
 def test_negative_denominator_max_is_breach():
     rows = [
         row("T-01", "REVENUE", "100"),
