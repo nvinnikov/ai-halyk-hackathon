@@ -107,67 +107,81 @@ def build_dossiers(
     quarantined = [r for r in results if r["quarantined"]]
     by_hash = {doc_hash(p): p for p in ordered}
 
+    # routing_failed — транзиентный сбой (бюджет, сеть, CassetteMiss), а не
+    # свойство архива: досье, собранное при таком сбое, заведомо неполно.
+    # stages.artifact инвалидируется только по версии, поэтому записанный
+    # деградированный артефакт пережил бы перезапуск после устранения причины
+    # (route/*.json при исключении не пишется — маршрутизация повторится, а
+    # досье осталось бы старым). Деградированный результат не кэшируем: прогон
+    # не падает, но следующий запуск собирает досье заново (ревью PR #9, 20-я
+    # волна; тот же механизм залипания уже жёг прогон через
+    # facts_extraction_failed).
+    degraded = any(a.get("kind") == "routing_failed" for q in quarantined for a in q.get("alarms", []))
+
     out: dict[str, dict] = {}
     for acc in targets:
 
         def build(acc=acc) -> dict:
-            try:
-                mine = [r for r in routed if r["account_id"] == acc]
-                docs, docs_rejected = [], []
-                by_type: dict[str, list[dict]] = {}
-                for r in mine:
-                    by_type.setdefault(r["doc_type"], []).append(r)
-                for dtype in sorted(by_type):
-                    rej: list[dict] = []
-                    if dtype in CUMULATIVE_TYPES:
-                        # Кумулятивные типы: в досье попадают все документы, их
-                        # факты сливает facts_extract.
-                        actives = sorted(by_type[dtype], key=lambda d: (d["date"], d["file"]))
-                    else:
-                        active, rej = _pick_active(by_type[dtype])
-                        actives = [active] if active is not None else []
-                    for active in actives:
-                        docs.append(
-                            {
-                                "file": active["file"],
-                                "doc_type": dtype,
-                                "date": active["date"],
-                                "text": full_text(wd, by_hash[active["doc_hash"]]),
-                            }
-                        )
-                    docs_rejected.extend(rej)
-                return {
-                    "account_id": acc,
-                    "scenario_id": index["account_to_scenario"][acc],
-                    "docs": docs,
-                    # Причины отказов и карантина потребляет borrower-трейс (задача 17).
-                    "docs_rejected": docs_rejected,
-                    "quarantined": [
-                        {"file": q["file"], "reason": q.get("quarantine_reason")}
-                        for q in sorted(quarantined, key=lambda x: x["file"])
-                    ],
-                    # Алярмы карантина (routing_failed и т.п.) — в артефакт
-                    # досье: их читают сканеры run-report/sanity/invariants
-                    # (ревью PR #9, 9-я волна — раньше алярм создавался и
-                    # нигде не потреблялся).
-                    "alarms": sorted(
-                        (a for q in quarantined for a in q.get("alarms", [])),
-                        key=lambda a: (a.get("file", ""), a.get("kind", "")),
-                    ),
-                }
-            except Exception as exc:
-                # Сбой чтения текста документа (например, vision на слепой
-                # странице) для этого заёмщика не должен рушить досье
-                # остальных: заёмщик остаётся без документов, но с алярмом,
-                # а не обрывает build_dossiers целиком.
-                return {
-                    "account_id": acc,
-                    "scenario_id": index["account_to_scenario"][acc],
-                    "docs": [],
-                    "docs_rejected": [],
-                    "quarantined": [],
-                    "alarms": [{"kind": "dossier_build_failed", "account": acc, "error": repr(exc)}],
-                }
+            mine = [r for r in routed if r["account_id"] == acc]
+            docs, docs_rejected = [], []
+            by_type: dict[str, list[dict]] = {}
+            for r in mine:
+                by_type.setdefault(r["doc_type"], []).append(r)
+            for dtype in sorted(by_type):
+                rej: list[dict] = []
+                if dtype in CUMULATIVE_TYPES:
+                    # Кумулятивные типы: в досье попадают все документы, их
+                    # факты сливает facts_extract.
+                    actives = sorted(by_type[dtype], key=lambda d: (d["date"], d["file"]))
+                else:
+                    active, rej = _pick_active(by_type[dtype])
+                    actives = [active] if active is not None else []
+                for active in actives:
+                    docs.append(
+                        {
+                            "file": active["file"],
+                            "doc_type": dtype,
+                            "date": active["date"],
+                            "text": full_text(wd, by_hash[active["doc_hash"]]),
+                        }
+                    )
+                docs_rejected.extend(rej)
+            return {
+                "account_id": acc,
+                "scenario_id": index["account_to_scenario"][acc],
+                "docs": docs,
+                # Причины отказов и карантина потребляет borrower-трейс (задача 17).
+                "docs_rejected": docs_rejected,
+                "quarantined": [
+                    {"file": q["file"], "reason": q.get("quarantine_reason")}
+                    for q in sorted(quarantined, key=lambda x: x["file"])
+                ],
+                # Алярмы карантина (routing_failed и т.п.) — в артефакт
+                # досье: их читают сканеры run-report/sanity/invariants
+                # (ревью PR #9, 9-я волна — раньше алярм создавался и
+                # нигде не потреблялся).
+                "alarms": sorted(
+                    (a for q in quarantined for a in q.get("alarms", [])),
+                    key=lambda a: (a.get("file", ""), a.get("kind", "")),
+                ),
+            }
 
-        out[acc] = artifact(wd / "dossier" / f"{acc}.json", DOSSIER_VERSION, build)
+        try:
+            out[acc] = (
+                build() if degraded else artifact(wd / "dossier" / f"{acc}.json", DOSSIER_VERSION, build)
+            )
+        except Exception as exc:
+            # Сбой чтения текста документа (например, vision на слепой
+            # странице) для этого заёмщика не должен рушить досье остальных:
+            # заёмщик остаётся без документов, но с алярмом. Пустое досье —
+            # мимо artifact(): исключение из build() внутри artifact не даёт
+            # записи, а этот dict не должен закрепить деградацию на диске.
+            out[acc] = {
+                "account_id": acc,
+                "scenario_id": index["account_to_scenario"][acc],
+                "docs": [],
+                "docs_rejected": [],
+                "quarantined": [],
+                "alarms": [{"kind": "dossier_build_failed", "account": acc, "error": repr(exc)}],
+            }
     return out

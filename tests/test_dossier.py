@@ -101,3 +101,45 @@ def test_single_superseded_is_never_active(monkeypatch, tmp_path):
     d = dossier.build_dossiers(tmp_path, [Path("a.pdf")], INDEX)["ACC-1"]
     assert d["docs"] == []
     assert d["docs_rejected"][0]["reason"] == "superseded_edition"
+
+
+def test_routing_failed_dossier_not_cached(monkeypatch, tmp_path):
+    """Транзиентный сбой маршрутизации не закрепляется в кэше стадии:
+    перезапуск после устранения причины собирает досье заново."""
+
+    def boom(wd, p, targets, all_accounts):
+        raise RuntimeError("budget exhausted")
+
+    monkeypatch.setattr(dossier, "route_doc", boom)
+    monkeypatch.setattr(dossier, "full_text", lambda wd, p: "text")
+    monkeypatch.setattr(dossier, "doc_hash", lambda p: f"hash-{p.name}")
+    d = dossier.build_dossiers(tmp_path, [Path("a.pdf")], INDEX)["ACC-1"]
+    assert d["docs"] == []
+    assert any(a["kind"] == "routing_failed" for a in d["alarms"])
+    assert not (tmp_path / "dossier" / "ACC-1.json").exists()
+
+    # «Причина устранена»: маршрутизация снова работает — досье пересобралось.
+    make_route(monkeypatch, {"a.pdf": base("a.pdf")}, {"a.pdf": "text"})
+    d2 = dossier.build_dossiers(tmp_path, [Path("a.pdf")], INDEX)["ACC-1"]
+    assert [x["file"] for x in d2["docs"]] == ["a.pdf"]
+    assert (tmp_path / "dossier" / "ACC-1.json").exists()
+
+
+def test_build_failed_dossier_not_cached(monkeypatch, tmp_path):
+    """Пустое досье из ветки dossier_build_failed не пишется артефактом:
+    сбой чтения текста не переживает перезапуск."""
+    routes = {"a.pdf": base("a.pdf")}
+    make_route(monkeypatch, routes, {})
+
+    def broken_text(wd, p):
+        raise OSError("vision failed")
+
+    monkeypatch.setattr(dossier, "full_text", broken_text)
+    d = dossier.build_dossiers(tmp_path, [Path("a.pdf")], INDEX)["ACC-1"]
+    assert d["docs"] == []
+    assert d["alarms"][0]["kind"] == "dossier_build_failed"
+    assert not (tmp_path / "dossier" / "ACC-1.json").exists()
+
+    monkeypatch.setattr(dossier, "full_text", lambda wd, p: "text")
+    d2 = dossier.build_dossiers(tmp_path, [Path("a.pdf")], INDEX)["ACC-1"]
+    assert [x["file"] for x in d2["docs"]] == ["a.pdf"]
