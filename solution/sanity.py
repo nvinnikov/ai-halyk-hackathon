@@ -26,7 +26,9 @@ BASELINE = Path("eval/public_baseline.json")
 # прогона на этом work/<hash>, а не свойство архива — сравнивать с
 # публичным baseline бессмысленно (и на приватном наборе прогона может ещё
 # не быть, sanity вызывается первой).
-_DIFF_SKIP = {"dataset_hash", "fallback_rate", "stage_alarms"}
+# public_score — ручной якорь скоринга публичного набора (не поле, которое
+# считает collect()); диф с ним печатал бы вечный DIFF public_score: N -> None.
+_DIFF_SKIP = {"dataset_hash", "fallback_rate", "stage_alarms", "public_score"}
 
 
 def _fallback_rate(wd: Path) -> float | None:
@@ -172,6 +174,16 @@ def _resolve_fallback_rate(new_rate: float | None, base: dict | None) -> tuple[f
     return new_rate, None
 
 
+def _resolve_public_score(base: dict | None) -> float | None:
+    """Что писать в public_score при --write-baseline.
+
+    collect() его не считает (public_score — внешний скоринг результата
+    прогона, не sanity-метрика), поэтому в отличие от fallback_rate тут нет
+    «нового» значения вообще — только перенос старого, чтобы якорь не пропадал
+    молча при каждой перегенерации baseline."""
+    return base.get("public_score") if base else None
+
+
 def diff_baselines(got: dict, base: dict) -> list[str]:
     out = []
     for key in sorted((set(got) | set(base)) - _DIFF_SKIP):
@@ -198,7 +210,7 @@ def main() -> int:
         rate, warning = _resolve_fallback_rate(s["fallback_rate"], base)
         if warning:
             print(warning)
-        s = {**s, "fallback_rate": rate}
+        s = {**s, "fallback_rate": rate, "public_score": _resolve_public_score(base)}
         BASELINE.write_text(json.dumps(s, ensure_ascii=False, indent=1, sort_keys=True) + "\n")
         print(f"baseline записан в {BASELINE}")
         return 0
