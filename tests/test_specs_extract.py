@@ -253,7 +253,27 @@ def test_limit_multiplier_suffix_normalized(tmp_path, monkeypatch):
     assert sp["limit"] == "2.5"
 
 
-def test_non_numeric_limit_invalid_in_check(tmp_path, monkeypatch):
+def test_limit_ambiguous_single_comma_three_digits_stays_loud(tmp_path, monkeypatch):
+    # Ревью PR #11: '0,075' (доля с десятичной запятой) и '1,125' (кратность)
+    # неотличимы от разрядной запятой '7,500' — снимать её молча нельзя:
+    # '0,075' → '0075' == 75 завышал бы порог в 1000 раз, а _limit_in_quote
+    # это не ловит (цитата калечится тем же _degroup_thousands). Неоднозначная
+    # форма остаётся как есть и громко падает в invalid_spec, как до правки.
+    for ambiguous in ("0,075", "1,125", "7,500"):
+        cov = covenant(limit=ambiguous, quote=f"Пункт 6.1 не более {ambiguous} от выручки")
+        monkeypatch.setattr(specs_extract.llm, "call", lambda *a, _cov=cov, **k: {"covenants": [_cov]})
+        art = specs_extract.extract_specs(tmp_path / ambiguous, make_dossier(cov["quote"]), set())
+        sp = art["clauses"]["6.1"]
+        assert sp["valid"] is False, ambiguous
+        assert any("limit" in e for e in sp["errors"]), (ambiguous, sp["errors"])
+
+
+def test_limit_unambiguous_groupings_normalized(tmp_path, monkeypatch):
+    # Две и более запятых или запятая при точке-десятичной — однозначно
+    # разрядные, снимаются; десятичная запятая с 1–2 знаками — в точку.
+    cases = {"7,500,000": "7500000", "$1,234,567.89": "1234567.89", "1,44": "1.44"}
+    for raw, expected in cases.items():
+        assert specs_extract._normalize_limit(raw) == expected, raw
     """«5%» вместо числа — спека невалидна уже в _check с внятной ошибкой,
     а не молча на лестнице после Decimal() в solve."""
     quote = "Пункт 6.1: доля не выше 5% от выручки"
