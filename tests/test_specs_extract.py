@@ -229,6 +229,30 @@ def test_limit_percent_word_form_in_quote():
     assert not specs_extract._limit_in_quote("0.07", "не более 17 процентов")
 
 
+def test_limit_currency_form_normalized_to_number(tmp_path, monkeypatch):
+    # Живой паттерн Gemini (task-28, третий паттерн): limit приходит как
+    # '$7,500,000.00' — Decimal падал («limit: не число»), спека invalid,
+    # ячейка уезжала на лестницу при полностью здоровой цитате и метрике.
+    # Валютный знак, пробелы и разделители тысяч снимаются до проверки.
+    cov = covenant(limit="$7,500,000.00", quote="Пункт 6.1 не более $7,500,000.00 в год")
+    monkeypatch.setattr(specs_extract.llm, "call", lambda *a, **k: {"covenants": [cov]})
+    art = specs_extract.extract_specs(tmp_path, make_dossier(cov["quote"]), set())
+    sp = art["clauses"]["6.1"]
+    assert sp["valid"] is True, sp["errors"]
+    assert sp["limit"] == "7500000.00"
+
+
+def test_limit_multiplier_suffix_normalized(tmp_path, monkeypatch):
+    # «2.5x» из инструкции промпта модель иногда возвращает буквально,
+    # с суффиксом кратности (латинским или кириллическим «х»).
+    cov = covenant(limit="2.5x", quote="Пункт 6.1 не более 2.5x показателя")
+    monkeypatch.setattr(specs_extract.llm, "call", lambda *a, **k: {"covenants": [cov]})
+    art = specs_extract.extract_specs(tmp_path, make_dossier(cov["quote"]), set())
+    sp = art["clauses"]["6.1"]
+    assert sp["valid"] is True, sp["errors"]
+    assert sp["limit"] == "2.5"
+
+
 def test_non_numeric_limit_invalid_in_check(tmp_path, monkeypatch):
     """«5%» вместо числа — спека невалидна уже в _check с внятной ошибкой,
     а не молча на лестнице после Decimal() в solve."""

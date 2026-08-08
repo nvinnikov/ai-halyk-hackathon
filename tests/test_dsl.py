@@ -35,6 +35,49 @@ def test_parse_counterparty_in_quoted_set_name_equals_bare_keyword():
     assert quoted == bare
 
 
+def test_parse_period_with_quoted_dates_equals_bare():
+    # Тот же класс путаницы форм, что у counterparty_in: Gemini на живом
+    # прогоне (task-28, третий паттерн) кавычит даты периода —
+    # period('2025-01-01', '2025-12-31') вместо голых date-литералов.
+    # Содержимое строки в форме даты — та же дата; ловилось как
+    # «ожидался литерал ('date',)» и стоило tier=1 у половины сценариев.
+    quoted = parse("agg(REVENUE, in, period('2025-01-01', '2025-12-31'))")
+    bare = parse("agg(REVENUE, in, period(2025-01-01, 2025-12-31))")
+    assert quoted == bare
+
+
+def test_parse_doc_with_quoted_key_equals_bare():
+    # doc('max_related_party_payments') вместо doc(max_related_party_payments)
+    # — тоже живой паттерн Gemini (P9 в task-28). Строка в форме
+    # идентификатора — тот же ключ.
+    assert parse("doc('severance_liability')") == parse("doc(severance_liability)")
+
+
+def test_parse_quoted_garbage_is_still_error():
+    # Прощение только когда содержимое строки соответствует форме ожидаемого
+    # литерала: дата не в ISO-форме и ключ с пробелом остаются ошибкой.
+    with pytest.raises(DslError):
+        parse("agg(REVENUE, in, period('вчера', '2025-12-31'))")
+    with pytest.raises(DslError):
+        parse("doc('not an identifier')")
+
+
+def test_parse_agg_kwargs_filters_list_equals_bare_tail():
+    # Третья форма той же путаницы (P6 в task-28): модель печатает имя поля
+    # AST — agg(..., filters=[period(...), counterparty_in(...)]) — вместо
+    # голого хвоста фильтров. Список после filters= — тот же хвост.
+    kw = parse("agg(ALL,out,filters=[period(2025-01-01,2025-12-31),counterparty_in(related_parties)])")
+    bare = parse("agg(ALL, out, period(2025-01-01, 2025-12-31), counterparty_in(related_parties))")
+    assert kw == bare
+
+
+def test_parse_filters_kwarg_outside_agg_tail_is_error():
+    with pytest.raises(DslError):
+        parse("ratio(filters=[period(2025-01-01,2025-12-31)], agg(REVENUE, in))")
+    with pytest.raises(DslError):
+        parse("agg(REVENUE, filters=[quarter(1)], in)")
+
+
 def test_parse_counterparty_in_quoted_single_name_is_singleton_list():
     # Кавычка вокруг обычного имени — не опечатка формы множества, а список
     # из одного контрагента.
