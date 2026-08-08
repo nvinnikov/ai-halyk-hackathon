@@ -93,3 +93,42 @@ def test_diff_silent_when_answers_unchanged(isolated_out, capsys):
     submit.snapshot()  # тот же submission.json второй раз
     captured = capsys.readouterr().out
     assert "0 изменённых ячеек" in captured
+
+
+# --- отказ снимать снапшот с публичного прогона (ревью PR #18, круг 3) -------
+#
+# Гейты Makefile закрывают вход, но публичный прогон — штатный путь: `make
+# solve` и `make determinism` его прямо предполагают. Оба оставляют в
+# out/submission.json результат по публичному набору, и следующий `make submit`
+# снял бы его снапшотом как кандидата на отправку. Проверка на выходе — одна
+# точка на все пути перезаписи разом.
+
+PUBLIC_HASH = json.loads((util.ROOT / "eval" / "public_baseline.json").read_text())["dataset_hash"]
+
+
+def test_snapshot_refuses_public_dataset_run(isolated_out, capsys):
+    out, _work = isolated_out
+    _write_submission(out, {"P1": {"6.1": {"status": "COMPLIANT"}}})
+    (out / "run-report.json").write_text(json.dumps({"dataset_hash": PUBLIC_HASH}))
+    with pytest.raises(SystemExit):
+        submit.snapshot()
+    assert not (out / "submission-1.json").exists(), "снапшот публичного прогона всё-таки создан"
+    assert "ПУБЛИЧНОМУ НАБОРУ" in capsys.readouterr().out
+
+
+def test_snapshot_allows_private_dataset_run(isolated_out):
+    out, _work = isolated_out
+    _write_submission(out, {"P1": {"6.1": {"status": "COMPLIANT"}}})
+    (out / "run-report.json").write_text(json.dumps({"dataset_hash": "0123456789abcdef"}))
+    assert submit.snapshot() == 1
+
+
+def test_snapshot_proceeds_when_run_report_unreadable(isolated_out, capsys):
+    """Fail-open: происхождение прогона не установлено — это не повод не дать
+    снять снапшот. Отправленная работа лучше неотправленной, а неизвестность
+    громко печатается."""
+    out, _work = isolated_out
+    _write_submission(out, {"P1": {"6.1": {"status": "COMPLIANT"}}})
+    (out / "run-report.json").write_text("{битый json")
+    assert submit.snapshot() == 1
+    assert "происхождение прогона не установлено" in capsys.readouterr().out

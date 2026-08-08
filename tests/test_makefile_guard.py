@@ -73,11 +73,20 @@ def test_guard_allows_archive_from_environment():
     assert r.returncode == 0, f"гейт заблокировал ARCHIVE из окружения: {r.stdout}{r.stderr}"
 
 
-def test_guard_ignores_archive_leaked_from_environment():
+def test_guard_ignores_archive_leaked_from_environment(monkeypatch):
     """Гейт судит по происхождению, но тест обязан судить по Makefile: с
-    ARCHIVE в окружении оболочки проверка «не задали» осталась бы без
-    предмета. Здесь окружение вычищено — блокировка обязана сработать."""
-    r = _make("require-archive", [], env={})
+    ARCHIVE в окружении оболочки проверка «не задали» осталась бы без предмета.
+
+    Протечка моделируется ЯВНО (ревью PR #18, круг 3): без setenv тест
+    побайтово повторял бы соседний и остался бы зелёным на чистой машине даже
+    с пустым _STRIPPED — покраснел бы только у того, у кого `export ARCHIVE=`
+    в оболочке, то есть ровно тем ложным красным `make check` в окне, от
+    которого и защищались. MAKEFLAGS — второй канал: GNU make возвращает через
+    него переменные командной строки вложенному make уже как `command line`.
+    """
+    monkeypatch.setenv("ARCHIVE", "/tmp/leaked.zip")
+    monkeypatch.setenv("MAKEFLAGS", "ARCHIVE=/tmp/leaked.zip")
+    r = _make("require-archive", [])
     assert r.returncode != 0, "унаследованный ARCHIVE протёк в дочерний make"
 
 

@@ -12,6 +12,56 @@ import shutil
 
 import util
 
+# Отпечаток публичного набора — из того же снимка, что читает стоп-проверка
+# sanity.py. Общий источник осознан: живость обоих держится на одной
+# предполётной строке ранбука («стоп-проверка жива»), и baseline с хешем от
+# старой упаковки убил бы сразу обе — а проверять одну строку в окне дешевле,
+# чем две.
+_BASELINE = util.ROOT / "eval" / "public_baseline.json"
+
+
+def _public_dataset_hash() -> str | None:
+    try:
+        return json.loads(_BASELINE.read_text())["dataset_hash"]
+    except Exception:
+        return None
+
+
+def _refuse_if_public_run(out) -> None:
+    """Снапшот публичного прогона не снимается (ревью PR #18, круг 3).
+
+    Гейты Makefile закрывают вход, но публичный прогон — штатный путь: `make
+    solve` и `make determinism` его прямо предполагают, и оба оставляют в
+    out/submission.json результат по публичному набору. Следующий `make submit`
+    снял бы его снапшотом как кандидата на отправку. Проверка на выходе — одна
+    точка на все пути перезаписи разом, вместо гейта на каждую цель.
+
+    Fail-open, если происхождение прогона не установлено: нет run-report, битый
+    JSON, нет baseline. Отправленная работа лучше неотправленной, поэтому
+    неизвестность печатается, но не блокирует, — блокирует только доказанный
+    публичный отпечаток.
+    """
+    public = _public_dataset_hash()
+    report = out / "run-report.json"
+    try:
+        got = json.loads(report.read_text())["dataset_hash"]
+    except Exception:
+        got = None
+    if got is None or public is None:
+        print(
+            "происхождение прогона не установлено (нет run-report или baseline) — снапшот снимается как есть",
+            flush=True,
+        )
+        return
+    if got == public:
+        print(
+            f"!!! ОТКАЗ: прогон принадлежит ПУБЛИЧНОМУ НАБОРУ (dataset_hash {got}) !!!\n"
+            "  out/submission.json — ответы по публичному набору, снапшот кандидатом на отправку не будет.\n"
+            "  Перезапустите боевой прогон: make run ARCHIVE=<приватный>.zip",
+            flush=True,
+        )
+        raise SystemExit(1)
+
 
 def _next_n(out) -> int:
     nums = []
@@ -36,6 +86,7 @@ def _diff_answers(old: dict, new: dict) -> list[str]:
 
 def snapshot() -> int:
     out = util.OUT
+    _refuse_if_public_run(out)  # до любого копирования: отказ не оставляет половины снапшота
     n = _next_n(out)
     sub_dst = out / f"submission-{n}.json"
     shutil.copy2(out / "submission.json", sub_dst)
