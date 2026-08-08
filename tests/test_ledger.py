@@ -153,3 +153,44 @@ def test_dirty_rows_get_second_tier(monkeypatch, tmp_path):
     art = ledger_mod.load_ledger(tmp_path, root, target_scenarios=["S1"])
     assert art["dirty"][0]["cat"] == "CONSULTING"
     assert art["dirty"][0]["cat_tier"] == 2
+
+
+def test_categorize_failure_not_cached(monkeypatch, tmp_path):
+    """categorize_failed не запекается в ledger.json: расход целевого
+    заёмщика не должен залипнуть в OTHER навсегда — перезапуск после
+    устранения причины перекатегоризирует (ревью PR #9, 23-я волна)."""
+    import csv as _csv
+
+    import ledger as ledger_mod
+
+    root = tmp_path / "input"
+    root.mkdir()
+    (root / "submission_template.json").write_text('{"answers": {}}')
+    with open(root / "ledger.csv", "w", newline="") as fh:
+        w = _csv.DictWriter(
+            fh,
+            fieldnames=["txn_id", "date", "account_id", "counterparty", "description", "currency", "amount"],
+        )
+        w.writeheader()
+        w.writerow(
+            {
+                "txn_id": "TXN-S1-0001",
+                "date": "2025-01-01",
+                "account_id": "A-1",
+                "counterparty": "X",
+                "description": "Mystery payment",
+                "currency": "USD",
+                "amount": "-10.00",
+            }
+        )
+    wd = tmp_path / "wd"
+    failing = lambda descs: ({}, [{"kind": "categorize_failed", "batch_start": descs[0], "error": "x"}])  # noqa: E731
+    monkeypatch.setattr(ledger_mod, "categorize_batch", failing)
+    art = ledger_mod.load_ledger(wd, root, target_scenarios=["S1"])
+    assert any(a["kind"] == "categorize_failed" for a in art["alarms"])
+    assert not (wd / "ledger.json").exists()
+
+    monkeypatch.setattr(ledger_mod, "categorize_batch", lambda descs: ({d: "CONSULTING" for d in descs}, []))
+    art2 = ledger_mod.load_ledger(wd, root, target_scenarios=["S1"])
+    assert art2["rows"][0]["cat"] == "CONSULTING"
+    assert (wd / "ledger.json").exists()

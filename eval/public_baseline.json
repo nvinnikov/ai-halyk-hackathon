@@ -1,0 +1,25 @@
+{
+ "background": {
+  "accounts": 549,
+  "row_share": 0.5438,
+  "rows": 800
+ },
+ "blind_pages": 8,
+ "clauses": [
+  "6.1",
+  "6.2",
+  "6.3"
+ ],
+ "currencies_target": {
+  "EUR": 15
+ },
+ "dataset_hash": "f2c65d2cfc8d8527",
+ "dirty_rows": 2,
+ "fallback_rate": 0.08333333333333333,
+ "index_alarms": [],
+ "pdf_count": 200,
+ "stage_alarms": {
+  "routing_quarantine": 133
+ },
+ "targets": 12
+}

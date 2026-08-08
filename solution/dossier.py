@@ -5,6 +5,15 @@
 каталогах приватного архива могут коллидировать. Маршрутизация независима по
 файлам и идёт пулом потоков (SOLVE_WORKERS, дефолт 4) — ограничитель здесь
 rate limit LLM; результаты собираются в детерминированном порядке.
+
+Fail-open на двух уровнях (задача 24, ревью раунда 1): сбой чтения/
+маршрутизации одного документа (LLM, vision на слепой странице, битый PDF) не
+роняет весь пул — документ уходит в карантин с алярмом routing_failed;
+сбой сборки досье одного заёмщика (например, vision внутри full_text при
+подстановке активных документов) не роняет остальных заёмщиков — его досье
+приходит пустым с алярмом dossier_build_failed. Раньше оба сбоя всплывали как
+исключение из build_dossiers() целиком и убивали solve.main() до записи
+скелета.
 """
 
 import os
@@ -15,7 +24,7 @@ from pdftext import doc_hash
 from route import full_text, route_doc
 from stages import artifact
 
-DOSSIER_VERSION = 2
+DOSSIER_VERSION = 5  # v5: алярмы карантина (routing_failed) пишутся в артефакт досье
 _EDITION_RANK = {"final": 0, "unmarked": 1, "draft": 2, "superseded": 3}
 # Редакционная фильтрация — только для перевыпускаемых целиком типов. Отчёты
 # и записки кумулятивны: каждый несёт своё документальное решение, и отброс
@@ -50,6 +59,40 @@ def _pick_active(docs: list[dict]) -> tuple[dict | None, list[dict]]:
     return active, rejected
 
 
+def _route_or_quarantine(wd: Path, p: Path, targets: list[str], all_accounts: list[str] | None) -> dict:
+    """route_doc ловит SchemaRejected вокруг своих LLM-вызовов, но не бюджет
+    (llm.BudgetExhausted), не сетевые/авторизационные сбои и не vision внутри
+    full_text() при чтении слепой страницы. Сбой одного документа не должен
+    ронять список результатов для всех остальных — документ уходит в карантин
+    с алярмом routing_failed вместо исключения из pool.map()."""
+    try:
+        return route_doc(wd, p, targets, all_accounts)
+    except Exception as exc:
+        # Видимость сразу (ревью PR #9, 9-я волна): route-артефакт при
+        # исключении не пишется, и без print сбой маршрутизации (в первую
+        # очередь BudgetExhausted) не оставлял следов ни в stdout, ни в
+        # run-report.
+        print(f"ALARM routing_failed {p.name}: {exc!r}", flush=True)
+        try:
+            h = doc_hash(p)
+        except Exception:
+            h = ""
+        return {
+            "file": p.name,
+            "doc_hash": h,
+            "account_id": None,
+            "doc_type": "unrouted",
+            "date": "",
+            "edition": "unmarked",
+            "mentions": [],
+            "mentions_nontarget": [],
+            "quarantined": True,
+            "quarantine_reason": "routing_failed",
+            "alarms": [{"kind": "routing_failed", "file": p.name, "error": repr(exc)}],
+            "routing_quote": "",
+        }
+
+
 def build_dossiers(
     wd: Path, pdfs: list[Path], index: dict, all_accounts: list[str] | None = None
 ) -> dict[str, dict]:
@@ -59,10 +102,26 @@ def build_dossiers(
     ordered = sorted(pdfs, key=lambda x: (x.name, str(x)))
     workers = int(os.environ.get("SOLVE_WORKERS", "4"))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        results = list(pool.map(lambda p: route_doc(wd, p, targets, all_accounts), ordered))
+        results = list(pool.map(lambda p: _route_or_quarantine(wd, p, targets, all_accounts), ordered))
     routed = [r for r in results if not r["quarantined"]]
     quarantined = [r for r in results if r["quarantined"]]
     by_hash = {doc_hash(p): p for p in ordered}
+
+    # routing_failed — транзиентный сбой (бюджет, сеть, CassetteMiss), а не
+    # свойство архива: досье, собранное при таком сбое, заведомо неполно.
+    # stages.artifact инвалидируется только по версии, поэтому записанный
+    # деградированный артефакт пережил бы перезапуск после устранения причины
+    # (route/*.json при исключении не пишется — маршрутизация повторится, а
+    # досье осталось бы старым). Деградированный результат не кэшируем: прогон
+    # не падает, но следующий запуск собирает досье заново (ревью PR #9, 20-я
+    # волна; тот же механизм залипания уже жёг прогон через
+    # facts_extraction_failed).
+    # meta_extraction_failed — тоже деградация маршрутизации (SchemaRejected
+    # на META → карантин non_client_doc_type): route-артефакт при нём не
+    # кэшируется (cache_if, 23-я волна), а досье без этого пункта кэшировалось
+    # бы и не самовосстанавливалось (ревью PR #9, 28-я волна).
+    _degraded_kinds = {"routing_failed", "meta_extraction_failed"}
+    degraded = any(a.get("kind") in _degraded_kinds for q in quarantined for a in q.get("alarms", []))
 
     out: dict[str, dict] = {}
     for acc in targets:
@@ -102,7 +161,40 @@ def build_dossiers(
                     {"file": q["file"], "reason": q.get("quarantine_reason")}
                     for q in sorted(quarantined, key=lambda x: x["file"])
                 ],
+                # Алярмы карантина (routing_failed и т.п.) — в артефакт
+                # досье: их читают сканеры run-report/sanity/invariants
+                # (ревью PR #9, 9-я волна — раньше алярм создавался и
+                # нигде не потреблялся).
+                "alarms": sorted(
+                    (a for q in quarantined for a in q.get("alarms", [])),
+                    key=lambda a: (a.get("file", ""), a.get("kind", "")),
+                ),
             }
 
-        out[acc] = artifact(wd / "dossier" / f"{acc}.json", DOSSIER_VERSION, build)
+        try:
+            # cache_if, а не обход artifact() целиком (ревью PR #9, 23-я
+            # волна): при деградированной маршрутизации уже закэшированное
+            # ХОРОШЕЕ досье с прошлого прогона читается как обычно —
+            # перезапуск после сбоя не хуже сохранённого состояния;
+            # блокируется только запись свежесобранного неполного результата.
+            out[acc] = artifact(
+                wd / "dossier" / f"{acc}.json",
+                DOSSIER_VERSION,
+                build,
+                cache_if=lambda _d: not degraded,
+            )
+        except Exception as exc:
+            # Сбой чтения текста документа (например, vision на слепой
+            # странице) для этого заёмщика не должен рушить досье остальных:
+            # заёмщик остаётся без документов, но с алярмом. Пустое досье —
+            # мимо artifact(): исключение из build() внутри artifact не даёт
+            # записи, а этот dict не должен закрепить деградацию на диске.
+            out[acc] = {
+                "account_id": acc,
+                "scenario_id": index["account_to_scenario"][acc],
+                "docs": [],
+                "docs_rejected": [],
+                "quarantined": [],
+                "alarms": [{"kind": "dossier_build_failed", "account": acc, "error": repr(exc)}],
+            }
     return out

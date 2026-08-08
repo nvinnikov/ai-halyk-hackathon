@@ -157,7 +157,16 @@ def load_ledger(wd: Path, input_dir: Path, target_scenarios: list[str] | None = 
         dirty.sort(key=lambda x: x["txn_id"])
         return {"rows": rows, "dirty": dirty, "alarms": alarms}
 
-    return artifact(wd / "ledger.json", LEDGER_VERSION, build)
+    # Провал LLM-категоризации (categorize_failed) не кэшируется (ревью PR #9,
+    # 23-я волна): иначе расход целевого заёмщика залипал бы в OTHER навсегда,
+    # а OTHER участвует в роллапах EBITDA — перезапуск после устранения причины
+    # обязан перекатегоризировать.
+    return artifact(
+        wd / "ledger.json",
+        LEDGER_VERSION,
+        build,
+        cache_if=lambda d: not any(a.get("kind") == "categorize_failed" for a in d["alarms"]),
+    )
 
 
 def rows_of(art: dict) -> list[dict]:
@@ -167,8 +176,8 @@ def rows_of(art: dict) -> list[dict]:
 def dirty_rows_of(art: dict) -> list[dict]:
     """Строки с неразобранной суммой, amt=None.
 
-    Считать их нельзя, но и потерять нельзя: TXN-P7-0033 и TXN-P8-0031 —
-    именно такие, сумму им возвращает amount_override из документов. Отсев
+    Считать их нельзя, но и потерять нельзя: некоторые такие строки
+    восстанавливаются через amount_override из дополнительных документов. Отсев
     невосстановленных — в engine.prepare_rows, после применения фактов.
     """
     return [{**r, "amt": None} for r in art["dirty"]]

@@ -1,7 +1,7 @@
 """Факты досье (5.2/5.3): LLM извлекает с цитатами, код сливает детерминированно."""
 
 import hashlib
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import llm
@@ -10,6 +10,27 @@ from stages import artifact
 from taxonomy import LEAVES
 
 FACTS_VERSION = 1
+# ВНИМАНИЕ: код _merge_doc ниже уже содержит фикс paired_payment (см. коммит
+# "курс из пары зеркальных платежей не должен сужаться до одного дня"), но
+# версия артефакта НЕ поднята намеренно. FACTS_VERSION оборачивает весь
+# build(), включая сам llm.call(): поднятие версии форсирует полное
+# повторное извлечение фактов по ВСЕМ документам (текст изменился из-за
+# фикса футера страницы в pdftext.py — значит меняется промпт и промахивается
+# кэш llm.call). На боевом прогоне это вызвало массовый всплеск новых платных
+# вызовов и упёрлось в исчерпанный бюджет API (facts_extraction_failed на
+# всех 12 заёмщиках) — измерение получилось недостоверным. Поднимать версию
+# нужно отдельным, осознанным шагом с прогретым бюджетом, а лучше — после
+# рефакторинга facts_extract по образцу specs_extract: вынести верификацию/
+# производные поправки (как эта) из-под кэша build(), чтобы правки текста
+# сшивки не требовали повторных вызовов модели вовсе.
+#
+# На СВЕЖЕМ workdir (нет строки stage_version=1 на диске — например,
+# приватный датасет 9 августа) откат версии ничего не защищает и не мешает:
+# build() выполняется безусловно при первом обращении к артефакту, фикс
+# paired_payment сработает автоматически, без отдельной активации. Откат
+# FACTS_VERSION защищает ТОЛЬКО от платной ре-экстракции на уже
+# ЗАКЭШИРОВАННОМ workdir текущего (публичного) прогона — то есть именно от
+# того, что произошло на боевом прогоне этой сессии.
 SCHEMA_VERSION = "facts-1"
 RESOLVE_SCHEMA_VERSION = "docfact-1"
 
@@ -200,8 +221,11 @@ def _empty_facts() -> dict:
 
 def _number_ok(value: str) -> bool:
     try:
-        Decimal(value)
-        return True
+        # is_finite: NaN/Infinity парсятся Decimal'ом без ошибки, но дальше
+        # любое сравнение с NaN сигналит InvalidOperation в неожиданном месте
+        # (ревью PR #9, 27-я волна — NaN с прогретого артефакта ронял
+        # _with_doc_facts на всех заёмщиках).
+        return Decimal(value).is_finite()
     except Exception:
         return False
 
@@ -270,9 +294,21 @@ def _merge_doc(facts: dict, raw: dict, doc: dict, text: str) -> None:
             continue
         if not number_ok(fx["usd_per_unit"], "fx_rates"):
             continue
+        bounds = {}
+        if fx["derivation"] == "paired_payment":
+            # Курс из пары зеркальных платежей — точечное наблюдение, а не
+            # строка таблицы с заявленным периодом действия: в договоре нет
+            # интервала, который можно было бы процитировать. Модель иногда
+            # всё равно проставляет дату платежа в effective_from/to — тогда
+            # fx.pick_rate покрывает курсом только этот один день и теряет
+            # его как донора для остальных дат (fx_uncovered там, где должен
+            # быть донорский курс). Снимаем границы независимо от того, что
+            # вернула модель — это следствие типа вывода, а не цитаты.
+            bounds = {"effective_from": "", "effective_to": ""}
         facts["fx_rates"].append(
             {
                 **fx,
+                **bounds,
                 "doc_date": doc["date"],
                 "doc_hash": hashlib.sha256(doc["file"].encode()).hexdigest()[:12],
             }
@@ -310,6 +346,13 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
 
     def build() -> dict:
         facts = _empty_facts()
+        if not dossier_art["docs"]:
+            # Досье без документов — деградация (обычно следствие сбоя выше
+            # по конвейеру), а не «фактов нет»: без алярма пустой артефакт
+            # ложился бы на диск как успех, невидимый сканерам, и переживал
+            # перезапуск (ревью PR #9, 24-я волна — единственная из пяти
+            # стадий, где этот случай не был закрыт).
+            facts["alarms"].append({"kind": "no_documents", "account": acc})
         for doc in dossier_art["docs"]:
             text = sanitize_document(doc["text"])
             prompt = (
@@ -336,9 +379,28 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
         # "251338.94" и в трейсе выглядит ошибкой.
         facts["ebitda_addbacks"].sort(key=Decimal)
         facts["reclass"].sort(key=lambda rc: (str(rc["txn"]), str(rc["counterparty"])))
+        # account в каждом алярме — внутри build(), чтобы он лёг НА ДИСК
+        # (ревью PR #9, 19-я волна): _alarm_counts, _collect_report_alarms и
+        # sanity._stage_alarms читают facts/*.json с диска, обогащение при
+        # чтении они не видели — invalid_number у 12 заёмщиков схлопывался
+        # глобальным дедупом точных дублей до «1». Артефакты, собранные до
+        # этой правки, остаются без account до пересбора (FACTS_VERSION
+        # бампает активационная волна).
+        facts["alarms"] = [{**a, "account": acc} for a in facts["alarms"]]
         return facts
 
-    return artifact(wd / "facts" / f"{acc}.json", FACTS_VERSION, build)
+    # facts_extraction_failed и no_documents не кэшируются (ревью PR #9, 22-я
+    # и 24-я волны): иначе провал вызова или пустое досье запекались бы под
+    # FACTS_VERSION и переживали перезапуск. Пересбор no_documents бесплатен
+    # (LLM не вызывается). Прочие алярмы (invalid_number, doc_fact_conflict) —
+    # свойства ответа модели, их кэшировать правильно.
+    _degraded_kinds = {"facts_extraction_failed", "no_documents"}
+    return artifact(
+        wd / "facts" / f"{acc}.json",
+        FACTS_VERSION,
+        build,
+        cache_if=lambda d: not any(a.get("kind") in _degraded_kinds for a in d["alarms"]),
+    )
 
 
 def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) -> dict | None:
@@ -359,13 +421,52 @@ def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) ->
                 max_tokens=16000,
             )
         except llm.SchemaRejected as exc:
-            return {"found": False, "value": "", "quote": "", "error": str(exc)}
+            # alarms — чтобы провал был ВИДЕН сканерам run-report/sanity
+            # (артефакт .doc.<key>.json лежит в facts/ и сканируется наравне
+            # с основными; ревью PR #9, 6-я волна): без поля деградация
+            # кэшировалась бы молча под версией стадии.
+            return {
+                "found": False,
+                "value": "",
+                "quote": "",
+                "error": str(exc),
+                "alarms": [
+                    {
+                        "kind": "doc_fact_resolve_failed",
+                        "account": dossier_art["account_id"],
+                        "key": key,
+                        "error": str(exc),
+                    }
+                ],
+            }
         return ans
 
-    art = artifact(wd / "facts" / f"{dossier_art['account_id']}.doc.{key}.json", FACTS_VERSION, build)
+    # Провал резолва (alarms в результате) не кэшируется — см. extract_facts.
+    art = artifact(
+        wd / "facts" / f"{dossier_art['account_id']}.doc.{key}.json",
+        FACTS_VERSION,
+        build,
+        cache_if=lambda d: not d.get("alarms"),
+    )
     if not art.get("found"):
         return None
     combined = "\n".join(sanitize_document(d["text"]) for d in dossier_art["docs"])
     if not verify_quote(art["quote"], combined) or not _number_ok(art["value"]):
         return None  # непроверяемая цитата или мусорное число — факта нет
+    # Число обязано присутствовать в верифицированной цитате (ревью PR #9,
+    # 3-я волна): для порогов спек такая проверка есть (_limit_in_quote), а
+    # doc()-факт точно так же способен тихо перевернуть вердикт. Плоский
+    # импорт по месту: модули solution не пакет, цикла нет.
+    from specs_extract import _limit_in_quote
+
+    # Знак — не часть вёрстки: «-1 200 000» в цитате обычно печатается как
+    # «минус 1 200 000» или суммой в скобках; сверяем модуль (ревью PR #9,
+    # 8-я волна — иначе отрицательные doc-факты, которые RESOLVE_PROMPT сам
+    # просит, отбрасывались бы всегда).
+    try:
+        unsigned = str(abs(Decimal(str(art["value"]))))
+    except InvalidOperation:
+        unsigned = str(art["value"]).lstrip("-")
+    if not _limit_in_quote(unsigned, art["quote"]):
+        return None  # число не из цитаты — факта нет
     return {"value": art["value"], "quote": art["quote"]}

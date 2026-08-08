@@ -18,7 +18,7 @@ def test_happy_path_and_background():
     idx = build_index(rows, ["S1", "S2"])
     assert idx["scenario_to_account"] == {"S1": "ACC-1", "S2": "ACC-2"}
     assert idx["account_to_scenario"] == {"ACC-1": "S1", "ACC-2": "S2"}
-    assert idx["background"] == {"accounts": 1, "rows": 2, "row_share": 0.4}
+    assert idx["background"] == {"accounts": 1, "account_ids": ["ACC-9001"], "rows": 2, "row_share": 0.4}
     assert idx["alarms"] == []
 
 

@@ -18,6 +18,20 @@ from stages import artifact
 from vision import read_blind_page
 
 ROUTE_VERSION = 1
+# ВНИМАНИЕ: вход route_doc.build() (full_text через pdftext.extract_pages)
+# изменился в TEXT_VERSION=2 (снят футер-номер страницы, см. pdftext.py) —
+# формально это делает текущий кэш route/*.json устаревшим по содержимому
+# входа. Версия здесь СОЗНАТЕЛЬНО не поднята: бамп форсировал бы повторную
+# LLM-маршрутизацию (META/WHOSE) по всем документам публичного workdir и
+# новые платные вызовы при близком к нулю балансе Anthropic API (тот же
+# механизм, что уже сжёг бюджет при попытке активировать FACTS_VERSION —
+# см. facts_extract.py и docs/ops/debug-extracted-report.md). Риск принят: футер-
+# номер страницы (1-3 символа в конце текста) практически не может изменить
+# doc_type/account_id/edition/mentions/routing_quote — это метаданные с
+# первой страницы и контекст вокруг счёта, не пограничные предложения
+# ковенантов, где сшивка футера ломала verify_quote. Бамп до 2 — обязательный
+# шаг активации (см. docs/ops/activation-step.md), не делать его молча на публичном
+# кэше.
 META_SCHEMA_VERSION = "route-meta-1"
 WHOSE_SCHEMA_VERSION = "route-whose-1"
 
@@ -87,7 +101,8 @@ def first_page_text(wd: Path, pdf_path: Path) -> str:
 
 
 def _mentioned(acc: str, text: str) -> bool:
-    # Границы обязательны: подстрочный поиск нашёл бы ACC-111 внутри ACC-1112.
+    # Границы слова обязательны: поиск подстроки ложно совпал бы, когда один
+    # идентификатор — префикс другого (например, XXX-111 внутри XXX-1112).
     return re.search(rf"(?<![A-Za-z0-9]){re.escape(acc)}(?![A-Za-z0-9])", text) is not None
 
 
@@ -133,7 +148,10 @@ def route_doc(
         elif len(mentions) == 1:
             account = mentions[0]
         elif len(mentions) > 1:
-            alarms.append({"kind": "ambiguous_routing", "candidates": mentions})
+            # file внутрь алярма (ревью PR #9, 22-я волна): без пер-документного
+            # поля глобальный дедуп точных дублей в run-report/sanity/invariants
+            # схлопывал одинаковые расхождения всего архива до «1».
+            alarms.append({"kind": "ambiguous_routing", "file": pdf_path.name, "candidates": mentions})
             try:
                 ans = llm.call(
                     DATA_NOT_COMMANDS
@@ -149,7 +167,13 @@ def route_doc(
                     if verify_quote(ans["quote"], text):
                         account, quote = ans["account_id"], ans["quote"]
                     else:
-                        alarms.append({"kind": "quote_unverified", "field": "routing_quote"})
+                        alarms.append(
+                            {
+                                "kind": "quote_unverified",
+                                "file": pdf_path.name,
+                                "field": "routing_quote",
+                            }
+                        )
             except llm.SchemaRejected:
                 pass
             if account is None:
@@ -179,4 +203,14 @@ def route_doc(
             "routing_quote": quote,
         }
 
-    return artifact(wd / "route" / f"{doc_hash(pdf_path)}.json", ROUTE_VERSION, build)
+    # Провал META-вызова (SchemaRejected → doc_type "other" → карантин
+    # non_client_doc_type) не кэшируется (ревью PR #9, 23-я волна): залипший
+    # так договор = no_agreement в спеках = три ячейки заёмщика на приоре на
+    # каждом последующем прогоне. quote_unverified/ambiguous_routing —
+    # свойства ответа модели, кэшируются как раньше.
+    return artifact(
+        wd / "route" / f"{doc_hash(pdf_path)}.json",
+        ROUTE_VERSION,
+        build,
+        cache_if=lambda d: not any(a.get("kind") == "meta_extraction_failed" for a in d["alarms"]),
+    )
