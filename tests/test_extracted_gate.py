@@ -22,7 +22,11 @@ from score import score
 
 PUBLIC_ZIP = Path("6a741640c31eb032062683.zip")
 CASSETTE_DIR = Path("eval/cassette")
-EXTRACTED_BASELINE = 30.0
+# 34.50 — было 30.00. Отброс недействующих редакций кумулятивных типов дал
+# +4.00, порог владения, применённый кодом, — ещё +0.50. Этот гейт, в отличие от
+# floor-теста в test_extracted_run.py, не помечен маркером llm и идёт в make
+# check и CI — то есть именно он и стережёт боевой путь от отката.
+EXTRACTED_BASELINE = 34.50
 
 
 @pytest.fixture(scope="module")
