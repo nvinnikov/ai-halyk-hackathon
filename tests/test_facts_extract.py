@@ -932,11 +932,10 @@ def test_resolve_doc_fact_not_cached_when_dossier_degraded(tmp_path, monkeypatch
     assert not (tmp_path / "facts" / "ACC-1.doc.severance_liability.json").exists()
 
 
-def test_group_capex_scale_conflict_refuses_instead_of_guessing(tmp_path, monkeypatch):
-    """У «in millions» одна цифра после запятой — обычная вёрстка, и 154.1 там
-    означает 154 100 000. Выбрасывать множитель по дробной части здесь нельзя:
-    числитель приехал бы в 10⁶ меньше, а это уверенный COMPLIANT (ревью PR #23,
-    шестая волна). Неясность — отказ, как везде в этом расчёте."""
+def test_group_capex_scale_applied_for_millions(tmp_path, monkeypatch):
+    """Отчётность «в миллионах» с одной цифрой после запятой — типовая форма, а
+    не спор с шапкой: масштаб применяется как названо. Отказ здесь снимал бы
+    ключ при полностью подтверждённых данных (ревью PR #23, седьмая волна)."""
     text = (
         "Note 7. There were no disposals of property, plant and equipment during the year. "
         "All amounts in millions of United States dollars. "
@@ -957,8 +956,7 @@ def test_group_capex_scale_conflict_refuses_instead_of_guessing(tmp_path, monkey
     dossier = {**GROUP_DOSSIER, "docs": [{**GROUP_DOSSIER["docs"][0], "text": text}]}
     monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(raw))
     facts = facts_extract.extract_facts(tmp_path, dossier)
-    assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
-    assert any(a["kind"] == "group_capex_scale_conflict" for a in facts["alarms"])
+    assert facts["doc_facts"][facts_extract.GROUP_CAPEX_KEY] == "21900000"
 
 
 def test_scale_decision_survives_thousand_separators():
@@ -980,3 +978,49 @@ def test_group_capex_zero_refused(tmp_path, monkeypatch):
     facts = facts_extract.extract_facts(tmp_path, dossier)
     assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
     assert any(a["kind"] == "group_capex_non_positive" for a in facts["alarms"])
+
+
+def test_group_capex_conflict_compares_values_not_spellings(tmp_path, monkeypatch):
+    """Умножение на масштаб сдвигает экспоненту, и одно и то же число получает
+    две записи. Сравнение по строке дало бы ложный конфликт и сняло бы ключ
+    (ревью PR #23, седьмая волна)."""
+    scaled_text = (
+        "Note 7. There were no disposals of property, plant and equipment during the year. "
+        "All amounts in thousands of United States dollars. "
+        "Net book value at the beginning of the year 148,029 "
+        "Depreciation charge for the year 15,826 "
+        "Net book value at the end of the year 154,050"
+    )
+    dossier = {
+        **GROUP_DOSSIER,
+        "docs": [
+            {**GROUP_DOSSIER["docs"][0], "file": "a-scaled.pdf", "text": scaled_text},
+            {**GROUP_DOSSIER["docs"][0], "file": "b-plain.pdf", "text": GROUP_TEXT},
+        ],
+    }
+
+    def fake_call(prompt, schema, schema_version, **kw):
+        if "in thousands" in prompt:
+            return ppe(
+                opening_value="148029",
+                opening_quote="Net book value at the beginning of the year 148,029",
+                closing_value="154050",
+                closing_quote="Net book value at the end of the year 154,050",
+                depreciation="15826",
+                depreciation_quote="Depreciation charge for the year 15,826",
+                amount_scale="1000",
+                units_quote="All amounts in thousands of United States dollars",
+            )
+        return ppe(
+            opening_value="148029000",
+            opening_quote="Net book value at the beginning of the year $148,028,989.69",
+            closing_value="154050000",
+            closing_quote="Net book value at the end of the year $154,050,122.81",
+            depreciation="15826000",
+            depreciation_quote="Depreciation charge for the year $15,826,229.43",
+        )
+
+    monkeypatch.setattr(facts_extract.llm, "call", fake_call)
+    facts = facts_extract.extract_facts(tmp_path, dossier)
+    assert not any(a["kind"] == "group_capex_conflict" for a in facts["alarms"])
+    assert facts["doc_facts"][facts_extract.GROUP_CAPEX_KEY] == "21847000"

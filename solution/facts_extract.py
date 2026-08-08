@@ -11,7 +11,10 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 11
+FACTS_VERSION = 12
+# v12 — ревью PR #23, седьмая волна: масштаб применяется при любом множителе,
+# кроме противоречивой пары «тысячи против центов»; расхождение двух групповых
+# документов сверяется по значению, а не по записи.
 # v11 — ревью PR #23, шестая волна: эвристика масштаба сужена до 10³ с
 # центами (иначе отказ), нулевой числитель отсекается наравне с отрицательным.
 # v10 — ревью PR #23, пятая волна: читаются единицы сумм примечания (валюта и
@@ -579,18 +582,20 @@ def _amount_scale(facts: dict, raw: dict, doc: dict, text: str) -> Decimal | Non
             return None
         digits.append(d)
     fractional = [d for d in digits if d > 0]
-    if not fractional:
-        return scale
-    if scale == _CENTS_SCALE and all(d >= 2 for d in fractional):
+    if scale == _CENTS_SCALE and fractional and all(d >= 2 for d in fractional):
+        # Единственная противоречивая пара: «в тысячах» в шапке против центов в
+        # самих суммах — множитель к этим числам не относится. Прочие сочетания
+        # масштаба и дробной части — согласие, а не спор, и отказ там снимал бы
+        # ключ при полностью подтверждённых данных (ревью PR #23, седьмая волна).
         facts["alarms"].append({"kind": "group_capex_scale_ignored", "file": doc["file"], "scale": raw_scale})
         return Decimal(1)
-    facts["alarms"].append({"kind": "group_capex_scale_conflict", "file": doc["file"], "scale": raw_scale})
-    return None
+    return scale
 
 
 # Единственный множитель, при котором дробная часть в сумме доказывает, что
 # масштаб к ней не относится: тысячи против центов. Для 10⁶ и выше дробная
-# часть — обычная вёрстка, а не противоречие.
+# часть — обычная вёрстка, а не противоречие, и такие суммы масштабируются как
+# названо.
 _CENTS_SCALE = Decimal(1000)
 
 
@@ -719,6 +724,18 @@ def _group_capex(facts: dict, raw: dict, doc: dict, text: str) -> tuple[Decimal,
     return (additions, raw["closing_quote"]) if signed_ok(additions) else None
 
 
+def _plain(value: Decimal) -> str:
+    """Значение строкой без экспоненты и без хвостовых нулей.
+
+    Сравнение двух документов группового уровня идёт по ЗНАЧЕНИЮ, а не по
+    записи: str(Decimal) сохраняет экспоненту, а умножение на масштаб её
+    сдвигает, поэтому «21847000.000» и «21847000» — одно число в двух записях.
+    Без нормализации они дали бы ложный group_capex_conflict и сняли бы ключ, а
+    в трейсе окна читались бы как разные суммы (ревью PR #23, седьмая волна).
+    """
+    return format(value.normalize(), "f")
+
+
 def _apply_group_capex(facts: dict, computed: list[tuple[Decimal, str, str]]) -> None:
     """Посчитанные по документам группового уровня затраты — в doc_facts.
 
@@ -743,7 +760,7 @@ def _apply_group_capex(facts: dict, computed: list[tuple[Decimal, str, str]]) ->
             facts["doc_fact_quotes"].pop(GROUP_CAPEX_KEY, None)
             facts["alarms"].append({"kind": "group_capex_stale_key_dropped"})
         return
-    distinct = sorted({str(value) for value, _quote, _file in computed})
+    distinct = sorted({_plain(value) for value, _quote, _file in computed})
     if len(distinct) > 1:
         facts["alarms"].append(
             {
@@ -756,7 +773,7 @@ def _apply_group_capex(facts: dict, computed: list[tuple[Decimal, str, str]]) ->
         facts["doc_fact_quotes"].pop(GROUP_CAPEX_KEY, None)
         return
     value, quote, _file = sorted(computed, key=lambda item: item[2])[0]
-    facts["doc_facts"][GROUP_CAPEX_KEY] = str(value)
+    facts["doc_facts"][GROUP_CAPEX_KEY] = _plain(value)
     facts["doc_fact_quotes"][GROUP_CAPEX_KEY] = quote
 
 
