@@ -31,7 +31,9 @@ from pdftext import doc_hash, extract_pages
 from stages import artifact
 from vision import read_blind_page
 
-ROUTE_VERSION = 6
+ROUTE_VERSION = 7
+# v7 — ревью PR #23, шестая волна: различающие слова наименования считаются
+# после снятия юрформ, у издателя появилась та же проверка.
 # v6 — ревью PR #23, третья волна: сравнение издателя с заёмщиком снимает
 # многословные юрформы и считает вложенность совпадением; отказ издателя не
 # кэшируется. Набор привязанных документов от этого зависит.
@@ -271,7 +273,10 @@ _MIN_NAME_CHARS = 8
 
 
 def _name_specific_enough(name: str) -> bool:
-    return len(name) >= _MIN_NAME_CHARS and len([w for w in name.split() if len(w) > 1]) >= _MIN_NAME_WORDS
+    """Различающие слова считаются ПОСЛЕ снятия юрформ (ревью PR #23, шестая
+    волна): иначе «АО Группа» проходит по двум словам, хотя различает в нём
+    ровно одно, и оно общее — а комментарий выше обещает такие имена отсекать."""
+    return len(name) >= _MIN_NAME_CHARS and len(_entity_key(name)) >= _MIN_NAME_WORDS
 
 
 # Многословные юрформы. engine.tokens снимает только односложные (llp/jsc/тоо),
@@ -355,6 +360,11 @@ def _issued_by_parent(wd: Path, pdf_path: Path, text: str, own_name: str) -> tup
     issuer = ans["reporting_entity"].strip()
     if not issuer or not verify_quote(ans["quote"], text) or not verify_quote(issuer, text):
         return False, [{"kind": "quote_unverified", "file": pdf_path.name, "field": "reporting_entity"}]
+    if not _name_specific_enough(issuer):
+        # Издателя сверяют с заёмщиком, и наименование из одной юрформы даёт
+        # пустой ключ — _same_entity трактует его как «своя» и молча отвергает
+        # документ. Отказ тот же, но причина названа (ревью PR #23, шестая волна).
+        return False, [{"kind": "issuer_name_too_generic", "file": pdf_path.name, "entity": issuer}]
     if _same_entity(issuer, own_name):
         return False, [{"kind": "own_reporting_rejected", "file": pdf_path.name, "entity": issuer}]
     return True, []

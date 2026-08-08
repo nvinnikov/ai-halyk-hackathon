@@ -692,7 +692,7 @@ def test_group_capex_negative_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(raw))
     facts = facts_extract.extract_facts(tmp_path, dossier)
     assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
-    assert any(a["kind"] == "group_capex_negative" for a in facts["alarms"])
+    assert any(a["kind"] == "group_capex_non_positive" for a in facts["alarms"])
 
 
 def test_group_capex_other_movements_block_the_identity(tmp_path, monkeypatch):
@@ -733,7 +733,7 @@ def test_group_capex_stated_negative_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(raw))
     facts = facts_extract.extract_facts(tmp_path, dossier)
     assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
-    assert any(a["kind"] == "group_capex_negative" for a in facts["alarms"])
+    assert any(a["kind"] == "group_capex_non_positive" for a in facts["alarms"])
 
 
 def test_group_capex_conflict_drops_the_key(tmp_path, monkeypatch):
@@ -930,3 +930,53 @@ def test_resolve_doc_fact_not_cached_when_dossier_degraded(tmp_path, monkeypatch
     monkeypatch.setattr(facts_extract.llm, "call", lambda *a, **k: {"found": False, "value": "", "quote": ""})
     facts_extract.resolve_doc_fact(tmp_path, degraded, "severance_liability", "обязательство")
     assert not (tmp_path / "facts" / "ACC-1.doc.severance_liability.json").exists()
+
+
+def test_group_capex_scale_conflict_refuses_instead_of_guessing(tmp_path, monkeypatch):
+    """У «in millions» одна цифра после запятой — обычная вёрстка, и 154.1 там
+    означает 154 100 000. Выбрасывать множитель по дробной части здесь нельзя:
+    числитель приехал бы в 10⁶ меньше, а это уверенный COMPLIANT (ревью PR #23,
+    шестая волна). Неясность — отказ, как везде в этом расчёте."""
+    text = (
+        "Note 7. There were no disposals of property, plant and equipment during the year. "
+        "All amounts in millions of United States dollars. "
+        "Net book value at the beginning of the year 148.0 "
+        "Depreciation charge for the year 15.8 "
+        "Net book value at the end of the year 154.1"
+    )
+    raw = ppe(
+        opening_value="148.0",
+        opening_quote="Net book value at the beginning of the year 148.0",
+        closing_value="154.1",
+        closing_quote="Net book value at the end of the year 154.1",
+        depreciation="15.8",
+        depreciation_quote="Depreciation charge for the year 15.8",
+        amount_scale="1000000",
+        units_quote="All amounts in millions of United States dollars",
+    )
+    dossier = {**GROUP_DOSSIER, "docs": [{**GROUP_DOSSIER["docs"][0], "text": text}]}
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(raw))
+    facts = facts_extract.extract_facts(tmp_path, dossier)
+    assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
+    assert any(a["kind"] == "group_capex_scale_conflict" for a in facts["alarms"])
+
+
+def test_scale_decision_survives_thousand_separators():
+    """Дробность меряется тем же нормализатором, что и сами суммы: иначе исход
+    зависел бы от того, поставила ли модель разделители вопреки промпту."""
+    assert facts_extract._fraction_digits("154,050.10") == 2
+    assert facts_extract._fraction_digits("154050.10") == 2
+    assert facts_extract._fraction_digits("154050") == 0
+    assert facts_extract._fraction_digits("не число") is None
+
+
+def test_group_capex_zero_refused(tmp_path, monkeypatch):
+    """Ноль — типовой дефолт непонятого поля, и названным числом он минует оба
+    условия применимости. На max-ковенанте это гарантированный COMPLIANT."""
+    text = GROUP_TEXT + " Additions during the year 0"
+    raw = ppe(additions="0", additions_quote="Additions during the year 0", no_disposals=False)
+    dossier = {**GROUP_DOSSIER, "docs": [{**GROUP_DOSSIER["docs"][0], "text": text}]}
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(raw))
+    facts = facts_extract.extract_facts(tmp_path, dossier)
+    assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
+    assert any(a["kind"] == "group_capex_non_positive" for a in facts["alarms"])

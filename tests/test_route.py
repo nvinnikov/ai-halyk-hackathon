@@ -302,3 +302,22 @@ def test_issuer_failure_not_cached(fake, monkeypatch):
     art2 = route.route_group_doc(wd, Path("x.pdf"), NAMES)
     assert art2["account_id"] == "ACC-1111"
     assert (wd / "route_group" / "cafe00000000.json").exists()
+
+
+def test_legal_form_is_not_a_distinguishing_word():
+    """Различающие слова считаются после снятия юрформ: «АО Группа» различает
+    ровно одним словом, и оно общее (ревью PR #23, шестая волна)."""
+    assert not route._name_specific_enough("АО Группа")
+    assert not route._name_specific_enough("Joint Stock Company")
+    assert route._name_specific_enough("Alpha Terminal JSC")
+
+
+def test_generic_issuer_name_rejected_with_own_alarm(fake, monkeypatch):
+    """Наименование издателя из одной юрформы даёт пустой ключ, и _same_entity
+    трактует его как «своя» — документ отвергается молча. Причина названа."""
+    state, wd = fake
+    state["text"] = "Joint Stock Company consolidated statements. Сегмент ведёт Alpha Terminal JSC."
+    monkeypatch.setattr(route.llm, "call", _group_meta_and_issuer("Joint Stock Company"))
+    art = route.route_group_doc(wd, Path("x.pdf"), NAMES)
+    assert art["account_id"] is None
+    assert any(a["kind"] == "issuer_name_too_generic" for a in art["alarms"])

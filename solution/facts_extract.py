@@ -11,7 +11,9 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 10
+FACTS_VERSION = 11
+# v11 — ревью PR #23, шестая волна: эвристика масштаба сужена до 10³ с
+# центами (иначе отказ), нулевой числитель отсекается наравне с отрицательным.
 # v10 — ревью PR #23, пятая волна: читаются единицы сумм примечания (валюта и
 # масштаб), гейт деградации досье распространён на адресный резолв.
 # v9 — ревью PR #23, вторая волна: group_capex от модели не попадает в
@@ -517,11 +519,26 @@ def _amount_scale(facts: dict, raw: dict, doc: dict, text: str) -> Decimal | Non
     её здесь нечем, курс материнской компании к строкам заёмщика отношения не
     имеет, а молча принять чужую валюту хуже отсутствия ответа.
 
-    Масштаб применяется, только если суммы напечатаны БЕЗ дробной части. Сумма
-    с точностью до цента не бывает «в тысячах»: шапка «in thousands» относится
-    к таблицам отчётности, а примечание рядом печатает полные суммы — ровно
-    так устроен документ публичного набора. Иначе множитель, взятый из шапки
-    буквально, завысил бы числитель в 10³ на пустом месте.
+    Масштаб против дробной части. Шапка «in thousands» относится к таблицам
+    отчётности, а примечание рядом печатает полные суммы с центами — ровно так
+    устроен документ публичного набора, и множитель из шапки, взятый буквально,
+    завысил бы числитель в 10³ на пустом месте. Но обратное рассуждение «есть
+    дробная часть — значит масштаб не тот» держится ТОЛЬКО на 10³ с центами: у
+    отчётности «в миллионах» одна цифра после запятой — стандартная вёрстка, и
+    сумма там значит в миллион раз больше напечатанного (ревью PR #23, шестая
+    волна).
+
+    Поэтому исключение сужено до того случая, который оно чинит: множитель
+    ровно 10³ и все дробные суммы с двумя знаками. Любое другое расхождение
+    названного множителя с вёрсткой сумм — отказ считать, как и всё прочее
+    неподтверждённое в этом расчёте. Выбор «считать» на неясности здесь был
+    единственным на весь модуль, и это была ошибка: ложно выброшенный масштаб
+    10⁶ даёт числитель в миллион раз меньше и уверенный COMPLIANT.
+
+    Дробность меряется тем же _normalize_limit, что и сами суммы: иначе исход
+    зависел бы от того, поставила ли модель разделители разрядов вопреки
+    промпту: с разделителем строка не парсилась Decimal напрямую и считалась
+    целой, без него — дробной.
     """
     from fx import BASE_CURRENCY
 
@@ -550,19 +567,47 @@ def _amount_scale(facts: dict, raw: dict, doc: dict, text: str) -> Decimal | Non
         )
         return None
     amounts = [raw["opening_value"], raw["closing_value"], raw["depreciation"], raw["additions"]]
-    if any(_has_fraction(v) for v in amounts):
+    digits = []
+    for value in amounts:
+        if not str(value).strip():
+            continue
+        d = _fraction_digits(value)
+        if d is None:
+            facts["alarms"].append(
+                {"kind": "invalid_number", "field": "group_capex_scale_decision", "value": value}
+            )
+            return None
+        digits.append(d)
+    fractional = [d for d in digits if d > 0]
+    if not fractional:
+        return scale
+    if scale == _CENTS_SCALE and all(d >= 2 for d in fractional):
         facts["alarms"].append({"kind": "group_capex_scale_ignored", "file": doc["file"], "scale": raw_scale})
         return Decimal(1)
-    return scale
+    facts["alarms"].append({"kind": "group_capex_scale_conflict", "file": doc["file"], "scale": raw_scale})
+    return None
 
 
-def _has_fraction(value: str) -> bool:
-    """Напечатана ли сумма с дробной частью (то есть до цента)."""
+# Единственный множитель, при котором дробная часть в сумме доказывает, что
+# масштаб к ней не относится: тысячи против центов. Для 10⁶ и выше дробная
+# часть — обычная вёрстка, а не противоречие.
+_CENTS_SCALE = Decimal(1000)
+
+
+def _fraction_digits(value: str) -> int | None:
+    """Сколько знаков после запятой напечатано; None — число не разобрано."""
+    from specs_extract import _normalize_limit
+
     try:
-        d = Decimal(str(value).strip())
+        d = Decimal(_normalize_limit(str(value)))
     except (InvalidOperation, AttributeError):
-        return False
-    return d.is_finite() and d != d.to_integral_value()
+        return None
+    if not d.is_finite():
+        return None
+    exponent = d.as_tuple().exponent
+    if not isinstance(exponent, int):  # NaN/Infinity уже отсеяны is_finite
+        return None
+    return max(0, -exponent)
 
 
 def _group_capex(facts: dict, raw: dict, doc: dict, text: str) -> tuple[Decimal, str] | None:
@@ -625,9 +670,16 @@ def _group_capex(facts: dict, raw: dict, doc: dict, text: str) -> tuple[Decimal,
         max-ковенанте уверенный COMPLIANT, то есть обнуляет ячейку по статусу,
         а не портит `actual`.
         """
-        if value >= 0:
+        if value > 0:
             return True
-        facts["alarms"].append({"kind": "group_capex_negative", "file": doc["file"], "value": str(value)})
+        # Ноль отсекается вместе с отрицательным (ревью PR #23, шестая волна).
+        # Нулевые капитальные затраты Группы за год — не тот ответ, который
+        # бывает правдой в консолидированной отчётности; зато это типовой
+        # дефолт непонятого поля, и он проходит все прочие гейты насквозь,
+        # включая оба условия применимости, если пришёл названным числом.
+        # На max-ковенанте нулевой числитель — гарантированный COMPLIANT, то
+        # есть ячейка в ноль по статусу.
+        facts["alarms"].append({"kind": "group_capex_non_positive", "file": doc["file"], "value": str(value)})
         return False
 
     scale = _amount_scale(facts, raw, doc, text)
