@@ -185,14 +185,19 @@ def _resolve_fallback_rate(new_rate: float | None, base: dict | None) -> tuple[f
     return new_rate, None
 
 
-def _resolve_public_score(base: dict | None) -> float | None:
+def _resolve_public_score(base: dict | None, dataset_hash: str) -> float | None:
     """Что писать в public_score при --write-baseline.
 
     collect() его не считает (public_score — внешний скоринг результата
     прогона, не sanity-метрика), поэтому в отличие от fallback_rate тут нет
     «нового» значения вообще — только перенос старого, чтобы якорь не пропадал
-    молча при каждой перегенерации baseline."""
-    return base.get("public_score") if base else None
+    молча при каждой перегенерации baseline. Перенос только при совпадении
+    dataset_hash со старым baseline: иначе якорь чужого набора (например,
+    публичные 30.0) тихо просочился бы на baseline другого архива, а
+    _DIFF_SKIP это не поймает (ревью PR #12, круг 4)."""
+    if base is None or base.get("dataset_hash") != dataset_hash:
+        return None
+    return base.get("public_score")
 
 
 def diff_baselines(got: dict, base: dict) -> list[str]:
@@ -221,7 +226,7 @@ def main() -> int:
         rate, warning = _resolve_fallback_rate(s["fallback_rate"], base)
         if warning:
             print(warning)
-        s = {**s, "fallback_rate": rate, "public_score": _resolve_public_score(base)}
+        s = {**s, "fallback_rate": rate, "public_score": _resolve_public_score(base, s["dataset_hash"])}
         BASELINE.write_text(json.dumps(s, ensure_ascii=False, indent=1, sort_keys=True) + "\n")
         print(f"baseline записан в {BASELINE}")
         return 0
