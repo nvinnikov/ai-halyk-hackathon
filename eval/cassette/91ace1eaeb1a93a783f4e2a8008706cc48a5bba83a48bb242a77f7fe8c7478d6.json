@@ -1,0 +1,22 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "related_party_ownership_threshold",
+    "quote": "Организации, в которых Группа владеет 40.0% и более голосующих прав, признаются связанными сторонами для целей Договора.",
+    "value": "40"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [
+   {
+    "name": "\"Sayram Holding Group\" LLP",
+    "quote": "\"Sayram Holding Group\" LLP"
+   }
+  ],
+  "unrestricted_subsidiaries": []
+ }
+}
