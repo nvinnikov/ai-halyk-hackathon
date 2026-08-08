@@ -47,6 +47,16 @@ _ELLIPSIS = re.compile(r"\s*(?:…|\.{3,})\s*")
 # протащить выдуманное число.
 _MIN_FRAGMENT = 2
 
+# Потолок на выброшенный многоточием кусок. Многоточие — это разделители
+# колонок внутри строки таблицы, десятки символов; без потолка «после
+# предыдущего» означает «где угодно дальше», а у потребителей source — склейка
+# ВСЕХ документов досье (facts_extract, specs_extract), то есть цитата
+# сшивалась бы из разных документов. Проверка цитаты — единственное, что
+# привязывает число к его формулировке, и поверх неё стоят проверки «число
+# лежит в цитате»: без окна порог из соседнего пункта договора сматчился бы с
+# названием чужого ковенанта.
+_MAX_GAP = 300
+
 
 def verify_quote(quote: str, source: str) -> bool:
     """Проверяет, присутствует ли цитата в исходном тексте.
@@ -76,16 +86,24 @@ def verify_quote(quote: str, source: str) -> bool:
         return " ".join(text.lower().split())
 
     src = normalize(source)
-    fragments = [f for f in _ELLIPSIS.split(normalize(quote)) if f]
+    normalized = normalize(quote)
+    elided = bool(_ELLIPSIS.search(normalized))
+    fragments = [f for f in _ELLIPSIS.split(normalized) if f]
     if not fragments:
         return False
-    if len(fragments) > 1 and any(len(f) < _MIN_FRAGMENT for f in fragments):
+    # Условие на многоточии, а не на числе фрагментов: «… 5 …» режется в один
+    # фрагмент длиной 1 и мимо проверки на содержательность проходил бы, хотя
+    # доказывает ровно ничего. Цитата без многоточия — обычная подстрока,
+    # короткой ей быть можно.
+    if elided and any(len(f) < _MIN_FRAGMENT for f in fragments):
         return False
 
     pos = 0
-    for fragment in fragments:
+    for i, fragment in enumerate(fragments):
         found = src.find(fragment, pos)
         if found < 0:
+            return False
+        if i and found - pos > _MAX_GAP:
             return False
         pos = found + len(fragment)
     return True

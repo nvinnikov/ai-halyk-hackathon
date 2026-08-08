@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal
 
+from engine import LEGAL_FORMS
 from taxonomy import is_category
 
 
@@ -138,6 +139,14 @@ def _as_set_name(value: object) -> str | None:
     if value in _SETS:
         return value
     norm = " ".join(value.lower().replace("ё", "е").split())
+    # Признак юрлица закрывает разрешение: основы названий множеств («affiliat»,
+    # «связанн») встречаются и в настоящих именах компаний, а название множества
+    # юрформы не содержит. Промах в эту сторону молчалив и дорог — вместо одного
+    # контрагента фильтр берёт весь набор связанных сторон, сумма растёт на
+    # чужие строки, вердикт остаётся правдоподобным и алярма нет. Обратный
+    # промах даёт нулевую агрегацию и ловится лестницей фолбэков.
+    if LEGAL_FORMS & set(re.split(r"[^\w]+", norm)):
+        return None
     for setname, stems in sorted(_SET_STEMS.items()):
         if any(stem in norm for stem in stems):
             return setname

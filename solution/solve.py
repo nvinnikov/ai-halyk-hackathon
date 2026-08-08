@@ -775,7 +775,16 @@ def _write_borrower_trace(
             acc = index["scenario_to_account"].get(scenario)
             dossier = json.loads((wd / "dossier" / f"{acc}.json").read_text())
             docs_used = sorted(d["file"] for d in dossier.get("docs", []))
-            docs_rejected = sorted(d.get("file", "") for d in dossier.get("docs_rejected", []))
+            # С причиной, а не одним именем файла: отброс недействующей
+            # редакции уносит из расчёта документальное решение, и в окне
+            # прогона надо видеть не только ЧТО выпало, но и ПОЧЕМУ.
+            docs_rejected = sorted(
+                (
+                    {"file": d.get("file", ""), "reason": d.get("reason", "")}
+                    for d in dossier.get("docs_rejected", [])
+                ),
+                key=lambda d: (d["file"], d["reason"]),
+            )
         except Exception:
             pass  # диагностика: досье могло не собраться — трейс не падает
     cov = coverage_report(rows, referenced)

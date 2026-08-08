@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import llm
-from engine import is_related
+from engine import tokens
 from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
@@ -291,28 +291,37 @@ def _merge_ownership(facts: dict, raw: dict, doc: dict, text: str) -> None:
     назвала. Организация вне таблицы порогом не отменяется — её связанность
     могла быть раскрыта в другом документе.
     """
-    threshold = _percent(raw["threshold_percent"]) if raw["threshold_percent"] else None
-    if threshold is not None and not verify_quote(raw["threshold_quote"], text):
-        facts["alarms"].append(
-            {"kind": "quote_unverified", "field": "ownership_threshold", "file": doc["file"]}
-        )
+    # Проверять существование цитаты мало: число обязано в ней стоять. Тот же
+    # инвариант, что у resolve_doc_fact ниже — иначе доля 12.5% из документа
+    # приезжает в расчёт как 31.4% при настоящей цитате, и организация молча
+    # втягивается в набор (или, что хуже, завышенный порог выкидывает из набора
+    # реально связанную сторону и обнуляет ячейку по статусу).
+    from specs_extract import _limit_in_quote
+
+    def number_from_quote(value: str, quote: str, field: str) -> Decimal | None:
+        number = _percent(value)
+        if number is None:
+            facts["alarms"].append({"kind": "invalid_number", "field": field, "value": value})
+            return None
+        if not verify_quote(quote, text):
+            facts["alarms"].append({"kind": "quote_unverified", "field": field, "file": doc["file"]})
+            return None
+        if not _limit_in_quote(str(number), quote):
+            facts["alarms"].append({"kind": "invalid_number", "field": field, "value": value})
+            return None
+        return number
+
+    if not raw["threshold_percent"]:
         return
+    threshold = number_from_quote(raw["threshold_percent"], raw["threshold_quote"], "ownership_threshold")
     if threshold is None:
         return
 
     above: list[dict] = []
     below: list[dict] = []
     for item in raw["shares"]:
-        share = _percent(item["share_percent"])
+        share = number_from_quote(item["share_percent"], item["quote"], "ownership_share")
         if share is None:
-            facts["alarms"].append(
-                {"kind": "invalid_number", "field": "ownership_share", "value": item["share_percent"]}
-            )
-            continue
-        if not verify_quote(item["quote"], text):
-            facts["alarms"].append(
-                {"kind": "quote_unverified", "field": "ownership_share", "file": doc["file"]}
-            )
             continue
         (above if share >= threshold else below).append(item)
 
@@ -320,10 +329,14 @@ def _merge_ownership(facts: dict, raw: dict, doc: dict, text: str) -> None:
         if item["name"] not in facts["related_parties"]:
             facts["related_parties"].append(item["name"])
         facts["related_quotes"].setdefault(item["name"], item["quote"])
-    # Матч по токенам, а не по строке: одна и та же организация приходит из
-    # таблицы и от модели с разной пунктуацией юрформы («LLP.» против ', LLP').
+    # Равенство наборов токенов, а не is_related: тот матчит подмножество в обе
+    # стороны, и короткое имя из таблицы вычищало бы более длинные чужие — имя
+    # из двух слов поглощало бы одноимённую организацию из трёх, раскрытую в
+    # другом документе, ровно вопреки обещанию докстринга. Равенство токенов
+    # переживает пунктуацию юрформы, ради которой токены и брались.
     for item in below:
-        for name in [n for n in facts["related_parties"] if is_related(n, [item["name"]])]:
+        table_tokens = tokens(item["name"])
+        for name in [n for n in facts["related_parties"] if tokens(n) == table_tokens]:
             facts["related_parties"].remove(name)
             facts["related_quotes"].pop(name, None)
 

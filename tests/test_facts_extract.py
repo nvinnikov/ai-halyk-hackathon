@@ -350,6 +350,64 @@ def test_ownership_keeps_party_absent_from_table(tmp_path, monkeypatch):
     assert facts["related_parties"] == ["Pavlodar Plant Services LLP"]
 
 
+def test_ownership_share_number_must_be_in_its_quote(tmp_path, monkeypatch):
+    """Цитата настоящая, но число доли взято не из неё — факт отбрасывается.
+
+    Тот же инвариант, что у resolve_doc_fact: проверять существование цитаты
+    мало, число обязано в ней стоять. Иначе доля 12.5% из документа приезжает
+    в расчёт как 31.4% и втягивает организацию в набор связанных сторон.
+    """
+    own = ownership([("Ertis Capital, LLP", "31.4", "Irtysh Advisory Bureau 18.6%")])
+    monkeypatch.setattr(facts_extract.llm, "call", _dispatch([], own))
+    facts = facts_extract.extract_facts(tmp_path, OWNERSHIP_DOSSIER)
+    assert facts["related_parties"] == []
+    assert any(a["kind"] == "invalid_number" and a["field"] == "ownership_share" for a in facts["alarms"])
+
+
+def test_ownership_threshold_number_must_be_in_its_quote(tmp_path, monkeypatch):
+    """То же для порога: цитата из документа, но названного в ней порога нет."""
+    own = ownership(
+        [("Ertis Capital, LLP", "31.4", "Ertis Capital, LLP 31.4%")],
+        threshold_quote="Irtysh Advisory Bureau 18.6%",
+    )
+    monkeypatch.setattr(facts_extract.llm, "call", _dispatch([], own))
+    facts = facts_extract.extract_facts(tmp_path, OWNERSHIP_DOSSIER)
+    assert facts["related_parties"] == []
+    assert any(a["kind"] == "invalid_number" and a["field"] == "ownership_threshold" for a in facts["alarms"])
+
+
+ABSORB_TEXT = (
+    "Организация Доля голосующих прав Ertis Capital, LLP 12.5% "
+    "Организации, в которых Группа владеет 20.0% и более голосующих прав, "
+    "признаются связанными сторонами. Примечание 6: операции с "
+    "Ertis Capital Trading LLP совершаются на рыночных условиях."
+)
+ABSORB_DOSSIER = {
+    "account_id": "ACC-1",
+    "scenario_id": "S1",
+    "docs": [{"file": "kyc.pdf", "doc_type": "kyc", "date": "2025-12-31", "text": ABSORB_TEXT}],
+    "docs_rejected": [],
+    "quarantined": [],
+}
+
+
+def test_ownership_below_threshold_does_not_absorb_other_names(tmp_path, monkeypatch):
+    """Снять связанность можно только с той организации, которая в таблице есть.
+
+    is_related матчит подмножество токенов в обе стороны, поэтому короткое имя
+    из таблицы вычищало бы более длинные и другие организации: у
+    «Ertis Capital, LLP» токены — подмножество токенов
+    «Ertis Capital Trading LLP», раскрытой в другом документе. Сравнение
+    наборов токенов на равенство переживает пунктуацию юрформы, ради которой
+    токены и брались, но чужие имена не поглощает.
+    """
+    own = ownership([("Ertis Capital, LLP", "12.5", "Ertis Capital, LLP 12.5%")])
+    model = [{"name": "Ertis Capital Trading LLP", "quote": "операции с Ertis Capital Trading LLP"}]
+    monkeypatch.setattr(facts_extract.llm, "call", _dispatch(model, own))
+    facts = facts_extract.extract_facts(tmp_path, ABSORB_DOSSIER)
+    assert facts["related_parties"] == ["Ertis Capital Trading LLP"]
+
+
 def test_ownership_call_failure_costs_only_the_threshold(tmp_path, monkeypatch):
     """Сбой вызова таблицы владения — потеря уточнения, а не всех фактов.
 
