@@ -5,6 +5,7 @@
   "rows": 800
  },
  "blind_pages": 8,
+ "borderline_pages": 160,
  "clauses": [
   "6.1",
   "6.2",

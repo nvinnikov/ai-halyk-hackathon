@@ -253,6 +253,22 @@ def test_limit_multiplier_suffix_normalized(tmp_path, monkeypatch):
     assert sp["limit"] == "2.5"
 
 
+def test_limit_foreign_currency_sign_stays_loud(tmp_path, monkeypatch):
+    # Ревью PR #11, раунд 2: метрика к сравнению уже нормализована в USD,
+    # и знак чужой валюты в пороге — единственный сигнал, что порог не в
+    # базовой валюте. Молча снять его = уверенно неверный вердикт с ошибкой
+    # в сотни раз (status обнуляет ячейку). Снимается безусловно только $;
+    # порог с €/£/₸ остаётся непарсибельным и громко падает в invalid_spec.
+    for sign in ("€", "£", "₸"):
+        raw = f"{sign}1,234,567"
+        cov = covenant(limit=raw, quote=f"Пункт 6.1 не более {raw} в год")
+        monkeypatch.setattr(specs_extract.llm, "call", lambda *a, _cov=cov, **k: {"covenants": [_cov]})
+        art = specs_extract.extract_specs(tmp_path / sign, make_dossier(cov["quote"]), set())
+        sp = art["clauses"]["6.1"]
+        assert sp["valid"] is False, sign
+        assert any("не число" in e for e in sp["errors"]), (sign, sp["errors"])
+
+
 def test_limit_ambiguous_single_comma_three_digits_stays_loud(tmp_path, monkeypatch):
     # Ревью PR #11: '0,075' (доля с десятичной запятой) и '1,125' (кратность)
     # неотличимы от разрядной запятой '7,500' — снимать её молча нельзя:

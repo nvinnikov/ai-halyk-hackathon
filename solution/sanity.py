@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, "solution")
 
 from ledger import extract_archive, find_inputs, load_ledger, rows_of
-from pdftext import extract_pages
+from pdftext import extract_pages, is_borderline
 from scindex import build_index
 from util import workdir
 
@@ -132,9 +132,19 @@ def collect(archive: Path) -> dict:
     currencies = Counter(
         r["currency"] for r in rows if r["account_id"] in target_accounts and r["currency"] != "USD"
     )
+    # borderline — страницы ровно по одному критерию слепоты из двух:
+    # резкий рост против baseline означает, что в наборе сканов больше и
+    # правило «И» в is_blind пора переключать на «ИЛИ» (research §3).
+    # Считается из текста артефакта, а не пишется в него — TEXT_VERSION
+    # не бампается, кэш text/ не инвалидируется.
     blind = 0
+    borderline = 0
     for pdf in inputs["pdfs"]:
-        blind += sum(1 for p in extract_pages(wd, pdf)["pages"] if p["blind"])
+        for p in extract_pages(wd, pdf)["pages"]:
+            if p["blind"]:
+                blind += 1
+            elif is_borderline(p["text"]):
+                borderline += 1
     clauses = sorted({cl for cells in template["answers"].values() for cl in cells})
     return {
         "dataset_hash": ds_hash,
@@ -146,6 +156,7 @@ def collect(archive: Path) -> dict:
         "index_alarms": index["alarms"],
         "pdf_count": len(inputs["pdfs"]),
         "blind_pages": blind,
+        "borderline_pages": borderline,
         "dirty_rows": len(art["dirty"]),
         "currencies_target": dict(sorted(currencies.items())),
         "clauses": clauses,

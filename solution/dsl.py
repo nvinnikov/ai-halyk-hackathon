@@ -178,7 +178,11 @@ class _Parser:
             self.take("name")
             self.take("eq")
             self.take("lbr")
-            items = [self.parse_call(allow_filter=True)]
+            # filters=[] — пустое эхо поля, равное отсутствию хвоста
+            # (ревью PR #11, раунд 2).
+            items = []
+            if self.peek()[0] != "rbr":
+                items.append(self.parse_call(allow_filter=True))
             while self.peek()[0] == "comma":
                 self.take("comma")
                 items.append(self.parse_call(allow_filter=True))
