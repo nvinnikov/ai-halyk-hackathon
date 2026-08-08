@@ -1,0 +1,27 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "ebitda_addback_materiality",
+    "quote": "Разовыми для целей ковенантов признаются статьи в сумме не менее $300,000.00; статьи меньшей суммы к EBITDA не прибавляются.",
+    "value": "300000.00"
+   },
+   {
+    "key": "ebitda_addback_1",
+    "quote": "| Урегулирование спора по демереджу | «Aral Freight Arbitration Bureau» | $342,905.28 |",
+    "value": "342905.28"
+   },
+   {
+    "key": "ebitda_addback_2",
+    "quote": "| Устранение последствий паводка на силосном комплексе | «Ilek Restoration Works LLP» | $481,247.63 |",
+    "value": "481247.63"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}
