@@ -216,6 +216,13 @@ def run_cell(
         }
         for alarm in cellspec.get("match_alarms", []):
             trace.setdefault("match_alarms", []).append(alarm)
+            # И в общий alarms трейса: сканеры run-report (_alarm_counts) и
+            # invariants._collect_report_alarms читают только alarms/fx_alarms
+            # — без этого подмена метрики шаблоном не видна в run-report
+            # (ревью PR #9, 21-я волна). scenario/clause внутрь словаря: иначе
+            # одинаковое расхождение у разных ячеек схлопнулось бы глобальным
+            # дедупом точных дублей до «1».
+            trace.setdefault("alarms", []).append({**alarm, "scenario": scenario, "clause": clause})
             print(f"ALARM {alarm['kind']} {scenario} {clause}: {alarm}")
         try:
             status, res = evidence.compute(raw, facts, cellspec)
@@ -537,6 +544,37 @@ def _extracted_cellspec(
                     flush=True,
                 )
                 metric_text = sp["metric"]
+        # Подмена извлечённого DSL шаблоном остаётся (ruling: шаблон при матче
+        # исполняется), но обязана быть видимой ЦЕЛИКОМ (ревью PR #9, 10-я
+        # волна): не только другой набор категорий, но и разница по
+        # quarter()/знаку/форме агрегации — сигнатурное сравнение.
+        match_alarms: list[dict] = []
+        if metric_text != sp["metric"]:
+            div = _category_divergence(sp["metric"], metric_text)
+            if div:
+                match_alarms.append(
+                    {"kind": "heading_category_divergence", "extracted": div[0], "template": div[1]}
+                )
+                # Шаблон исполняется и при категорийном расхождении — решение
+                # измерено, а не выбрано вкусом (ревью PR #9, 21-я волна
+                # предлагала откат на извлечённый DSL): на публичном наборе
+                # все такие расхождения — ошибки ИЗВЛЕЧЕНИЯ синонимичных
+                # категорий (OPEX_TOTAL против OTHER_OPEX в EBITDA, OTHER
+                # против ALL у related-party), шаблон их чинит, и откат стоил
+                # −5.0 балла офлайн-скора. Алярм остаётся и доезжает до
+                # run-report — на приватном наборе расхождения видны сразу.
+            else:
+                try:
+                    if signature(parse(sp["metric"])) != signature(parse(metric_text)):
+                        match_alarms.append(
+                            {
+                                "kind": "heading_signature_divergence",
+                                "extracted": sp["metric"],
+                                "template": metric_text,
+                            }
+                        )
+                except DslError:
+                    pass  # сырой DSL не парсится — подмена и так единственный путь
         cellspec = {
             "metric_ast": parse(metric_text),
             "metric_text": metric_text,
@@ -544,28 +582,8 @@ def _extracted_cellspec(
             "limit": Decimal(sp["limit"]),
             "trigger_ast": parse(sp["trigger"]) if sp["trigger"] else None,
         }
-        # Подмена извлечённого DSL шаблоном остаётся (ruling: шаблон при матче
-        # исполняется), но обязана быть видимой ЦЕЛИКОМ (ревью PR #9, 10-я
-        # волна): не только другой набор категорий, но и разница по
-        # quarter()/period()/знаку/форме агрегации — сигнатурное сравнение.
-        if metric_text != sp["metric"]:
-            div = _category_divergence(sp["metric"], metric_text)
-            if div:
-                cellspec["match_alarms"] = [
-                    {"kind": "heading_category_divergence", "extracted": div[0], "template": div[1]}
-                ]
-            else:
-                try:
-                    if signature(parse(sp["metric"])) != signature(parse(metric_text)):
-                        cellspec["match_alarms"] = [
-                            {
-                                "kind": "heading_signature_divergence",
-                                "extracted": sp["metric"],
-                                "template": metric_text,
-                            }
-                        ]
-                except DslError:
-                    pass  # сырой DSL не парсится — подмена и так единственный путь
+        if match_alarms:
+            cellspec["match_alarms"] = match_alarms
         return cellspec, quote
     except (DslError, InvalidOperation, KeyError) as exc:
         return exc, quote

@@ -107,12 +107,45 @@ def test_extracted_cellspec_heading_match_wins_over_template():
     # title_key совпадает с заголовком шаблона capex — исполняется
     # канонический DSL шаблона, даже если specs_extract матчил другую
     # сигнатуру (искусственно испорчена, чтобы отличить источник).
+    # Категория извлечённой метрики совпадает с шаблонной: категорийное
+    # расхождение — отдельный путь с откатом (тест ниже).
     heading = title_key("Максимальные расходы по категории")
-    sp = _spec(title_key=heading, template="revenue", metric="agg(TAX, out)")
+    sp = _spec(title_key=heading, template="revenue", metric="agg(CAPEX, out, min_amount(10))")
     cellspec, quote = solve._extracted_cellspec(sp, "6.1")
     assert isinstance(cellspec, dict)
     assert cellspec["metric_text"] == TEMPLATES["capex"]
     assert quote == sp["quote"]
+
+
+def test_extracted_cellspec_category_divergence_keeps_template_with_alarm():
+    # Заголовок капекс-шаблона, извлечённая формула — про другую категорию:
+    # шаблон всё равно исполняется (на публичном наборе такие расхождения —
+    # ошибки извлечения синонимичных категорий, откат стоил −5.0 офлайн),
+    # но расхождение обязано быть видно алярмом.
+    heading = title_key("Максимальные расходы по категории")
+    sp = _spec(title_key=heading, template=None, metric="agg(TAX, out)")
+    cellspec, _quote = solve._extracted_cellspec(sp, "6.1")
+    assert isinstance(cellspec, dict)
+    assert cellspec["metric_text"] == TEMPLATES["capex"]
+    kinds = [a["kind"] for a in cellspec["match_alarms"]]
+    assert kinds == ["heading_category_divergence"]
+
+
+def test_run_cell_match_alarms_reach_trace_alarms():
+    # match_alarms обязаны доехать до общего trace["alarms"] — только его
+    # читают _alarm_counts и invariants._collect_report_alarms; scenario и
+    # clause внутри словаря спасают от глобального дедупа точных дублей.
+    cellspec = {
+        "metric_ast": parse("agg(CAPEX, out)"),
+        "metric_text": "agg(CAPEX, out)",
+        "direction": "max",
+        "limit": Decimal("100"),
+        "trigger_ast": None,
+        "match_alarms": [{"kind": "heading_signature_divergence", "extracted": "x", "template": "y"}],
+    }
+    _cell, trace = solve.run_cell("SC-X", "9.9", [], {}, cellspec, [])
+    got = [a for a in trace["alarms"] if a["kind"] == "heading_signature_divergence"]
+    assert got and got[0]["scenario"] == "SC-X" and got[0]["clause"] == "9.9"
 
 
 def test_extracted_cellspec_falls_back_to_template_signature():
