@@ -8,9 +8,83 @@ util.OUT/util.WORK читаются через модуль, а не биндя�
 """
 
 import json
+import os
 import shutil
 
 import util
+
+
+def _run_was_public(out) -> bool | None:
+    """Прогон, оставивший этот submission, шёл по публичному набору?
+
+    None — установить не удалось: нет отчёта, битый JSON, отчёт от другого
+    прогона, поле не записано (отчёт от версии до этой правки).
+
+    Вердикт читается ГОТОВЫМ из run-report: его пишет solve, где архив под
+    рукой, сравнением байтов леджера. Выводить его здесь из хранимого
+    отпечатка нельзя (ревью PR #18, круг 5) — eval/public_baseline.json не
+    константа, `sanity.py <любой>.zip --write-baseline` кладёт туда хеш
+    переданного архива.
+    """
+    report = out / "run-report.json"
+    try:
+        # Отчёт старше submission — он от другого прогона, и судить по нему
+        # нельзя ни в какую сторону (ревью PR #18, круг 4). Корень чинится в
+        # solve.main, где отчёт снимается вместе с записью скелета; здесь —
+        # страховка на случай, когда submission.json пришёл не оттуда
+        # (восстановлен из снапшота, положен руками).
+        if report.stat().st_mtime < (out / "submission.json").stat().st_mtime:
+            return None
+        value = json.loads(report.read_text()).get("is_public_dataset")
+    except Exception:
+        return None
+    return value if isinstance(value, bool) else None
+
+
+def _refuse_if_public_run(out) -> None:
+    """Снапшот публичного прогона не снимается (ревью PR #18, круг 3).
+
+    Гейты Makefile закрывают вход, но публичный прогон — штатный путь: `make
+    solve` и `make determinism` его прямо предполагают, и оба оставляют в
+    out/submission.json результат по публичному набору. Следующий `make submit`
+    снял бы его снапшотом как кандидата на отправку. Проверка на выходе — одна
+    точка на все пути перезаписи разом, вместо гейта на каждую цель.
+
+    Fail-open везде, где происхождение установить не удалось: неизвестность
+    печатается, но не блокирует. Блокирует только доказанный публичный прогон —
+    там снапшот и правда снимать нечего.
+
+    У блокировки есть обход SUBMIT_FORCE=1, и он несущий (ревью PR #18,
+    круг 7): вердикт под ней — эвристика, `_is_public_dataset` сравнивает
+    только байты леджера. Приватный пакет, приехавший с тем же
+    master_ledger_2025.csv и другими документами, опознался бы как публичный
+    (гейт require-private-archive такое не поймает — зипы разные), и отказ без
+    обхода стал бы тупиком: совет перезапустить прогон даёт тот же вердикт.
+    """
+    was_public = _run_was_public(out)
+    if was_public is None:
+        print(
+            "происхождение прогона не установлено (нет run-report или он от другого прогона) — "
+            "снапшот снимается как есть",
+            flush=True,
+        )
+        return
+    if was_public:
+        if os.environ.get("SUBMIT_FORCE") == "1":
+            print(
+                "SUBMIT_FORCE=1: прогон опознан как публичный, снапшот снимается принудительно",
+                flush=True,
+            )
+            return
+        print(
+            "!!! ОТКАЗ: прогон шёл по ПУБЛИЧНОМУ НАБОРУ !!!\n"
+            "  out/submission.json — ответы по публичному набору, снапшот кандидатом на отправку не будет.\n"
+            "  Перезапустите боевой прогон: make run ARCHIVE=<приватный>.zip\n"
+            "  Если это ЛОЖНОЕ срабатывание (приватный набор с тем же леджером) — "
+            "SUBMIT_FORCE=1 make submit",
+            flush=True,
+        )
+        raise SystemExit(1)
 
 
 def _next_n(out) -> int:
@@ -36,6 +110,7 @@ def _diff_answers(old: dict, new: dict) -> list[str]:
 
 def snapshot() -> int:
     out = util.OUT
+    _refuse_if_public_run(out)  # до любого копирования: отказ не оставляет половины снапшота
     n = _next_n(out)
     sub_dst = out / f"submission-{n}.json"
     shutil.copy2(out / "submission.json", sub_dst)

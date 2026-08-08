@@ -2,7 +2,8 @@
 # `check` — локальное зеркало CI-гейта. Цели ниже `check` — репетиция
 # (задача 31): однословные команды на 9 августа под трёхчасовым таймером.
 .PHONY: install public-archive solve score lint typecheck test check \
-	run sanity eval-offline eval-live cassette-freeze determinism submit
+	run sanity eval-offline eval-live cassette-freeze determinism submit \
+	require-archive require-private-archive
 
 install:
 	uv sync --extra dev
@@ -51,14 +52,55 @@ check: lint typecheck test
 # набор и перезаписало out/submission.json — ни одна проверка об этом не
 # скажет, потому что прогон формально успешен. Целям репетиции дефолт не нужен:
 # архив 9 августа называют явно.
+#
+# Гейта два, потому что у целей разная цена ошибки. Sanity только печатает и
+# ничего не пишет; run перезаписывает отправляемый out/submission.json.
+#
+# require-archive (sanity) — критерий ПРОИСХОЖДЕНИЕ переменной, а не значение.
+# Сравнение значения с дефолтом не отличало «забыли ARCHIVE» от «назвали
+# публичный архив намеренно», и предполётная проверка стоп-строки из ранбука
+# (`make sanity ARCHIVE=<публичный>`) падала вместо того, чтобы отработать —
+# единственная строка, проверяющая живость стоп-проверки, не исполнялась.
+# `origin == file` означает ровно одно: значение пришло из строки `ARCHIVE ?=`
+# выше, то есть переменную не задали. Аргумент (`command line`) и окружение
+# (`environment`, форма `export ARCHIVE=...` из ранбука — `?=` его не
+# перебивает) проходят оба.
 require-archive:
-	@test "$(ARCHIVE)" != "$(DEFAULT_ARCHIVE)" || { \
-	  echo "ARCHIVE не задан: цели run/sanity требуют явный архив."; \
-	  echo "  make run ARCHIVE=/путь/к/приватному.zip"; \
+	@test "$(origin ARCHIVE)" != "file" || { \
+	  echo "ARCHIVE не задан: целям run/sanity/determinism нужен явный архив."; \
+	  echo "  make <цель> ARCHIVE=/путь/к/архиву.zip"; \
 	  echo "  публичный набор гоняется через 'make solve'"; \
 	  exit 1; }
 
-run: install require-archive
+# require-private-archive (run) — происхождение И значение: у run публичный
+# архив не бывает верным ни при каком раскладе, публичный набор гоняется через
+# `make solve`. Одного происхождения мало (ревью PR #18): `export
+# ARCHIVE=<публичный>`, оставшийся в оболочке с репетиции, прошёл бы гейт, и
+# out/submission.json оказался бы перезаписан результатом по публичному набору
+# — ровно тот молчаливый сбой, ради которого гейт и ставился. Стоп-проверка
+# sanity.py по dataset_hash сработала бы, но уже после перезаписи.
+#
+# Сравнение по СОДЕРЖИМОМУ, а не по имени файла (ревью PR #18, круг 6).
+# `6a741640c31eb032062683.zip` — имя, которым организаторы раздали публичный
+# набор (tools/public_archive.py), и ничто не обещает, что приватный приедет
+# под другим. Гейт по имени отказал бы 9 августа на НАСТОЯЩЕМ архиве, да ещё
+# и посоветовал бы считать публичный набор, — а ложный красный в окне дороже
+# пропуска, содержательные проверки всё равно стоят дальше по пути
+# (sanity.py по dataset_hash, solve._is_public_dataset внутри прогона, отказ
+# submit на выходе). cmp попутно ловит копию публичного архива под любым
+# именем и в любом каталоге — а это и есть публичный набор.
+#
+# Отсутствие любого из файлов cmp считает расхождением (exit 2), то есть гейт
+# пропускает: свежий клон без собранного публичного архива не должен мешать
+# боевому прогону, а несуществующий ARCHIVE поймает run.sh своим сообщением.
+require-private-archive: require-archive
+	@cmp -s "$(ARCHIVE)" "$(DEFAULT_ARCHIVE)" && { \
+	  echo "ARCHIVE побайтово совпал с публичным архивом: run перезапишет out/submission.json."; \
+	  echo "  публичный набор гоняется через 'make solve'"; \
+	  echo "  если это и есть боевой архив — зовите ./run.sh <архив> напрямую"; \
+	  exit 1; } || true
+
+run: install require-private-archive
 	./run.sh $(ARCHIVE)
 
 sanity: install require-archive
@@ -97,7 +139,12 @@ cassette-freeze:
 	mkdir -p eval/cassette && cp work/llm_cache/*.json eval/cassette/
 
 # Прогон дважды, второй целиком из кэша — байт-диф submission.json.
-determinism: install
+# Гейт здесь require-archive, а не require-private-archive (ревью PR #18,
+# круг 2): цель зовёт ./run.sh и точно так же перезаписывает отправляемый
+# out/submission.json, поэтому забытое ARCHIVE= ей запрещено — но публичный
+# архив ей как раз разрешён, это репетиционная цель, и мерить детерминизм
+# больше не на чем. Опасен здесь молчаливый дефолт, а не публичный набор.
+determinism: install require-archive
 	./run.sh $(ARCHIVE) && cp out/submission.json out/.det-a.json
 	./run.sh $(ARCHIVE) && diff out/.det-a.json out/submission.json
 
