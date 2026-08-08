@@ -387,6 +387,38 @@ def test_stale_run_report_removed_with_skeleton(isolated_out, monkeypatch):
     assert not stale.exists(), "отчёт прошлого прогона пережил начало нового"
 
 
+def test_skeleton_written_before_csv_layout_asserts(isolated_out, tmp_path):
+    """Скелет обязан лечь на диск раньше строгих assert'ов find_inputs.
+
+    Приватный архив с лишним CSV в корне (словарь данных, файл курсов —
+    публичный набор уже возит второй CSV, просто в documents/) раньше ронял
+    прогон в find_inputs ДО первой записи submission: на диске оставался ноль
+    ячеек вместо 36 фолбэков — против главного инварианта «файл валиден на
+    любой секунде прогона». Прогон по-прежнему падает громко (расклад чинится
+    руками), но скелет с приорными статусами уже отправляем.
+    """
+    import shutil
+    import zipfile
+
+    broken = tmp_path / "extra-root-csv.zip"
+    shutil.copyfile(PUBLIC_ZIP, broken)
+    with zipfile.ZipFile(broken, "a") as z:
+        tmpl = next(n for n in z.namelist() if n.endswith("submission_template.json"))
+        root = tmpl.rsplit("/", 1)[0] + "/" if "/" in tmpl else ""
+        z.writestr(root + "data_dictionary.csv", "column,meaning\n")
+
+    with pytest.raises(AssertionError, match="CSV"):
+        solve.main(broken, facts_source="expected")
+
+    sub = json.loads((isolated_out / "submission.json").read_text())
+    want = {(sc, cl) for sc, cells in TEMPLATE["answers"].items() for cl in cells}
+    got = {(sc, cl) for sc, cells in sub["answers"].items() for cl in cells}
+    assert got == want, "скелет разошёлся с шаблоном"
+    for sc, cells in sub["answers"].items():
+        for cl, cell in cells.items():
+            assert_cell_valid(cell, f"{sc}/{cl}")
+
+
 def test_stale_run_report_unlink_failure_does_not_kill_run(isolated_out, capsys):
     """Снятие отчёта — диагностика, и ячейки оно стоить не может (ревью PR #18,
     круг 8). `missing_ok=True` глушит только FileNotFoundError; каталог с этим

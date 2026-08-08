@@ -56,6 +56,15 @@ def extract_archive(archive: Path) -> tuple[str, Path]:
     return ds_hash, input_dir
 
 
+def find_template(input_dir: Path) -> Path:
+    """Только шаблон, без проверок раскладки CSV: скелет submission обязан
+    лечь на диск раньше, чем строгие assert'ы find_inputs получат шанс
+    уронить прогон на неожиданной раскладке архива."""
+    templates = sorted(input_dir.rglob("submission_template.json"))
+    assert len(templates) == 1, f"шаблонов найдено {len(templates)}"
+    return templates[0]
+
+
 def find_inputs(input_dir: Path) -> dict:
     """Файлы датасета ищутся, а не зашиваются именами (раздел 9).
 
@@ -65,9 +74,8 @@ def find_inputs(input_dir: Path) -> dict:
     (2) если нет — фолбэк на rglob, исключив файлы в каталогах с PDF;
     (3) иначе (несколько CSV любом уровне) — AssertionError.
     """
-    templates = sorted(input_dir.rglob("submission_template.json"))
-    assert len(templates) == 1, f"шаблонов найдено {len(templates)}"
-    root = templates[0].parent
+    template = find_template(input_dir)
+    root = template.parent
     pdfs = sorted(root.rglob("*.pdf"))
     pdf_dirs = {p.parent for p in pdfs}
 
@@ -76,7 +84,7 @@ def find_inputs(input_dir: Path) -> dict:
     if len(csvs) == 1:
         return {
             "root": root,
-            "template": templates[0],
+            "template": template,
             "ledger_csv": csvs[0],
             "pdfs": pdfs,
         }
@@ -89,7 +97,7 @@ def find_inputs(input_dir: Path) -> dict:
     assert len(csvs) == 1, f"найдено {len(csvs)} CSV вне pdf-каталогов: {csvs}; все CSV: {all_csvs}"
     return {
         "root": root,
-        "template": templates[0],
+        "template": template,
         "ledger_csv": csvs[0],
         "pdfs": pdfs,
     }

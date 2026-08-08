@@ -36,7 +36,7 @@ from engine import agg, prepare_rows, select_rows, sign_divergence
 from facts_extract import extract_facts, resolve_doc_fact
 from fallbacks import fallback_cell, family_of, heuristic_template
 from fx import coverage_alarms, to_usd
-from ledger import dirty_rows_of, extract_archive, find_inputs, load_ledger, rows_of
+from ledger import dirty_rows_of, extract_archive, find_inputs, find_template, load_ledger, rows_of
 from scindex import INDEX_VERSION, build_index
 from specs_extract import extract_specs
 from stages import artifact
@@ -1206,8 +1206,12 @@ def main(
 
     # Скелет — как можно раньше: без шаблона нельзя построить даже его, всё
     # остальное (леджер, индекс, расчёт) уже падает поверх валидного файла.
-    inputs = find_inputs(input_dir)
-    template = json.loads(inputs["template"].read_text())
+    # Ровно поэтому здесь find_template, а не find_inputs: его assert'ы о
+    # раскладке CSV скелету не нужны, и на неожиданной раскладке приватного
+    # архива они роняли бы прогон ДО первой записи submission — ноль ячеек
+    # вместо 36 фолбэков. Раскладку CSV первым судит load_ledger ниже, уже
+    # поверх валидного файла на диске.
+    template = json.loads(find_template(input_dir).read_text())
     answers: dict = skeleton(template["answers"])
     sub = {**submission_meta(), "answers": answers}  # answers — та же ссылка, правки видны в sub
     dump_submission(sub, template["answers"])
