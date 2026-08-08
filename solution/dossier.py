@@ -27,7 +27,10 @@ from stages import artifact
 # v6 — активационный бамп (2026-08-08): досье собиралось из route-артефактов
 # v1; после ROUTE_VERSION=2 (META/WHOSE по тексту без футера) кэшированное
 # досье устарело по входу. v5: алярмы карантина в артефакте досье.
-DOSSIER_VERSION = 6
+DOSSIER_VERSION = 7
+# v7 — кумулятивные типы больше не отдают замененные редакции: рабочий
+# документ с маркером «заменён окончательным отчётом» вносил в досье
+# предварительную реклассификацию операции и искажал две ячейки заёмщика.
 _EDITION_RANK = {"final": 0, "unmarked": 1, "draft": 2, "superseded": 3}
 # Редакционная фильтрация — только для перевыпускаемых целиком типов. Отчёты
 # и записки кумулятивны: каждый несёт своё документальное решение, и отброс
@@ -139,8 +142,23 @@ def build_dossiers(
                 rej: list[dict] = []
                 if dtype in CUMULATIVE_TYPES:
                     # Кумулятивные типы: в досье попадают все документы, их
-                    # факты сливает facts_extract.
-                    actives = sorted(by_type[dtype], key=lambda d: (d["date"], d["file"]))
+                    # факты сливает facts_extract. Кумулятивность — про то, что
+                    # редакции не выбирают по дате; право читать замененный
+                    # документ она не даёт. Рабочий документ с маркером
+                    # «заменён окончательным отчётом» несёт предварительное
+                    # решение по классификации, и применение такого решения
+                    # искажает ковенант ровно так же, как устаревшая редакция
+                    # договора. Инвариант тот же, что в _pick_active: документ
+                    # с маркером superseded не бывает действующим — даже
+                    # единственный.
+                    ordered_type = sorted(by_type[dtype], key=lambda d: (d["date"], d["file"]))
+                    actives = [d for d in ordered_type if d["edition"] != "superseded"]
+                    kept = actives[0]["file"] if actives else None
+                    rej = [
+                        {"file": d["file"], "reason": "superseded_edition", "kept": kept}
+                        for d in ordered_type
+                        if d["edition"] == "superseded"
+                    ]
                 else:
                     active, rej = _pick_active(by_type[dtype])
                     actives = [active] if active is not None else []

@@ -95,6 +95,39 @@ def test_cumulative_types_keep_all_docs(monkeypatch, tmp_path):
     assert d["docs_rejected"] == []
 
 
+def test_cumulative_type_drops_superseded_edition(monkeypatch, tmp_path):
+    """Кумулятивность — про то, что редакции не выбирают по дате, а не про
+    право читать замененный черновик. Рабочий документ с маркером «заменён»
+    несёт предварительное решение; применить его — исказить ковенант."""
+    routes = {
+        "final.pdf": base("final.pdf", dtype="audit_report", date="", edition="final"),
+        "draft.pdf": base("draft.pdf", dtype="audit_report", date="", edition="superseded"),
+    }
+    make_route(monkeypatch, routes, {})
+    d = dossier.build_dossiers(tmp_path, [Path("final.pdf"), Path("draft.pdf")], INDEX)["ACC-1"]
+    assert [x["file"] for x in d["docs"]] == ["final.pdf"]
+    assert d["docs_rejected"] == [{"file": "draft.pdf", "reason": "superseded_edition", "kept": "final.pdf"}]
+
+
+def test_cumulative_type_keeps_draft_without_replacement(monkeypatch, tmp_path):
+    """Черновик — не «заменён»: он может быть единственной редакцией отчёта,
+    и его решение единственное. Отбрасываем только помеченное замененным."""
+    routes = {"d.pdf": base("d.pdf", dtype="audit_report", date="", edition="draft")}
+    make_route(monkeypatch, routes, {})
+    d = dossier.build_dossiers(tmp_path, [Path("d.pdf")], INDEX)["ACC-1"]
+    assert [x["file"] for x in d["docs"]] == ["d.pdf"]
+
+
+def test_cumulative_type_all_superseded_leaves_no_docs(monkeypatch, tmp_path):
+    """Ни одной действующей редакции — досье без документов этого типа, а не
+    откат к замененному: тот же инвариант, что у некумулятивных типов."""
+    routes = {"a.pdf": base("a.pdf", dtype="audit_report", date="", edition="superseded")}
+    make_route(monkeypatch, routes, {})
+    d = dossier.build_dossiers(tmp_path, [Path("a.pdf")], INDEX)["ACC-1"]
+    assert d["docs"] == []
+    assert d["docs_rejected"] == [{"file": "a.pdf", "reason": "superseded_edition", "kept": None}]
+
+
 def test_single_superseded_is_never_active(monkeypatch, tmp_path):
     routes = {"a.pdf": base("a.pdf", edition="superseded")}
     make_route(monkeypatch, routes, {})

@@ -9,7 +9,12 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 2
+FACTS_VERSION = 3
+# v3 — досье перестало отдавать замененные редакции кумулятивных типов
+# (DOSSIER_VERSION=7): набор документов на входе изменился, и артефакт фактов,
+# собранный по старому набору, нёс бы решения из замененного рабочего
+# документа. Пересбор бесплатен по LLM: промпт строится на ОДИН документ,
+# поэтому выпадение черновика убирает вызов, не меняя ключей остальных.
 # v2 — активационный бамп (2026-08-08, docs/ops/activation-step.md): версия
 # СОЗНАТЕЛЬНО удерживалась на 1 после смены входа (TEXT_VERSION=2, снят
 # футер страницы) и фикса paired_payment в _merge_doc — бамп на исчерпанном
