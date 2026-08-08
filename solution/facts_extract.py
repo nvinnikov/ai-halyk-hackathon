@@ -221,8 +221,11 @@ def _empty_facts() -> dict:
 
 def _number_ok(value: str) -> bool:
     try:
-        Decimal(value)
-        return True
+        # is_finite: NaN/Infinity парсятся Decimal'ом без ошибки, но дальше
+        # любое сравнение с NaN сигналит InvalidOperation в неожиданном месте
+        # (ревью PR #9, 27-я волна — NaN с прогретого артефакта ронял
+        # _with_doc_facts на всех заёмщиках).
+        return Decimal(value).is_finite()
     except Exception:
         return False
 

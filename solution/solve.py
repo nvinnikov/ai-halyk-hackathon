@@ -459,7 +459,22 @@ def _extracted_inputs(
                 "clauses": {},
                 "alarms": [{"kind": "specs_failed", "scenario": sc, "error": repr(exc)}],
             }
-        facts_by_sc[sc] = _with_doc_facts(facts)
+        try:
+            facts_by_sc[sc] = _with_doc_facts(facts)
+        except Exception as exc:
+            # Пер-заёмщицкий рубеж и на хвосте цикла (ревью PR #9, 27-я
+            # волна): NaN, пролезший в факты с прогретого артефакта, ронял
+            # InvalidOperation из _with_doc_facts мимо всех try — и внешний
+            # catch-all main() обнулял извлечение всем 12 заёмщикам вместо
+            # одного. Сырые факты лучше пустых: doc()-метрики уйдут лестницей,
+            # остальное посчитается.
+            print(f"ALARM doc_facts_derivation_failed {sc}: {exc!r}", flush=True)
+            facts_by_sc[sc] = {
+                **facts,
+                "doc_facts": dict(facts.get("doc_facts", {})),
+                "alarms": facts.get("alarms", [])
+                + [{"kind": "doc_facts_derivation_failed", "scenario": sc, "error": repr(exc)}],
+            }
         specs_by_sc[sc] = spec_art
     return facts_by_sc, specs_by_sc
 

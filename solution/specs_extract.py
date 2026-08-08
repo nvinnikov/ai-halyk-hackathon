@@ -167,14 +167,32 @@ def _scaled_in_quote(d: Decimal, quote: str) -> bool:
     return False
 
 
+# Словесная форма процента: «7 (семи) процентов», "7 percent" — знак %
+# в такой вёрстке не печатается (ревью PR #9, 27-я волна; тот же класс,
+# что запятая-десятичная и «млн»). Допускается вставка прописью в скобках.
+_PERCENT_WORD = re.compile(r"\s*(?:\([^)]{0,60}\))?\s*(?:процент|percent)", re.IGNORECASE)
+
+
+def _percent_word_in_quote(d: Decimal, quote: str) -> bool:
+    if not 0 < d <= 1:
+        return False
+    pct = _strip_trailing_zeros(format(d * 100, "f"))
+    for p in {pct, pct.replace(".", ",")}:
+        for m in re.finditer(rf"(?<![\d.,]){re.escape(p)}(?![\d.,])", quote):
+            if _PERCENT_WORD.match(quote[m.end() :]):
+                return True
+    return False
+
+
 def _limit_in_quote(limit: str, quote: str) -> bool:
     degrouped = _degroup_thousands(quote)
     if any(form in quote or form in degrouped for form in _limit_forms(limit)):
         return True
     try:
-        return _scaled_in_quote(Decimal(limit), quote)
+        d = Decimal(limit)
     except InvalidOperation:
         return False
+    return _scaled_in_quote(d, quote) or _percent_word_in_quote(d, quote)
 
 
 def _heading_key_from_text(agreement_text: str, clause: str) -> str:

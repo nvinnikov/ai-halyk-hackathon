@@ -218,6 +218,17 @@ def test_limit_scaled_form_in_quote():
     assert not specs_extract._limit_in_quote("10000000", "не более 20 млн долларов")
 
 
+def test_limit_percent_word_form_in_quote():
+    """Ревью PR #9 (27-я волна): словесная форма процента — «7 (семи)
+    процентов» / "7 percent" — без знака %; чужое число или не-процент
+    по-прежнему провал."""
+    assert specs_extract._limit_in_quote("0.07", "не более 7 (семи) процентов от выручки")
+    assert specs_extract._limit_in_quote("0.07", "not exceeding 7 percent of revenue")
+    assert specs_extract._limit_in_quote("0.045", "не выше 4,5 процента годовых")
+    assert not specs_extract._limit_in_quote("0.07", "не более 7 штук")
+    assert not specs_extract._limit_in_quote("0.07", "не более 17 процентов")
+
+
 def test_non_numeric_limit_invalid_in_check(tmp_path, monkeypatch):
     """«5%» вместо числа — спека невалидна уже в _check с внятной ошибкой,
     а не молча на лестнице после Decimal() в solve."""

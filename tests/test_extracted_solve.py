@@ -293,6 +293,32 @@ def test_specs_failure_keeps_extracted_facts(monkeypatch, tmp_path):
     assert specs_by_sc["S1"]["alarms"][0]["kind"] == "specs_failed"
 
 
+def test_doc_facts_derivation_failure_is_per_borrower(monkeypatch, tmp_path):
+    """NaN (или иной мусор), уроненный _with_doc_facts, стоит производных
+    ключей одного заёмщика, а не извлечения всех 12 (ревью PR #9, 27-я
+    волна): хвост цикла _extracted_inputs под пер-заёмщицким рубежом."""
+    import facts_extract as fe
+
+    monkeypatch.setattr(solve, "find_inputs", lambda d: {"pdfs": []})
+    monkeypatch.setattr(
+        solve, "build_dossiers", lambda wd, pdfs, index, all_accounts=None: {"ACC-X": {"account_id": "ACC-X"}}
+    )
+    bad_facts = {**fe._empty_facts(), "ebitda_addbacks": ["NaN"]}
+    monkeypatch.setattr(solve, "extract_facts", lambda wd, d: dict(bad_facts))
+    monkeypatch.setattr(solve, "extract_specs", lambda wd, d, keys: {"clauses": {}, "alarms": []})
+    index = {"scenario_to_account": {"S1": "ACC-X"}}
+    facts_by_sc, _specs = solve._extracted_inputs(tmp_path, tmp_path, index, ["S1"])
+    assert any(a.get("kind") == "doc_facts_derivation_failed" for a in facts_by_sc["S1"]["alarms"])
+
+
+def test_number_ok_rejects_nan_and_infinity():
+    import facts_extract as fe
+
+    assert not fe._number_ok("NaN")
+    assert not fe._number_ok("Infinity")
+    assert fe._number_ok("-1200000.50")
+
+
 def test_resolve_failure_keeps_spec_art(monkeypatch, tmp_path):
     """Транзиентный сбой resolve_doc_fact стоит максимум своего doc-ключа:
     уже извлечённые спеки заёмщика не заменяются пустышкой specs_failed
