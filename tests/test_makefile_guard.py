@@ -151,6 +151,36 @@ def test_run_guard_allows_private_archive():
 # --- проводка гейтов к целям, которые пишут out/submission.json --------------
 
 
+_PRIVATE_GUARD_MARK = "совпал с публичным"  # текст только из require-private-archive
+_ANY_GUARD_MARK = "ARCHIVE не задан"  # текст из require-archive, печатается и в обоих случаях
+
+
+def test_run_target_is_gated_by_private_archive_guard():
+    """`run` — самая дорогая цель: она перезаписывает отправляемый файл, и
+    именно ради неё вводится require-private-archive (ревью PR #18, круг 9).
+    Тесты выше зовут гейты напрямую и проводку не проверяют: снос зависимости
+    в строке `run:` или подмена её на более слабый require-archive оставили бы
+    их все зелёными.
+
+    Совпадение ищется по тексту ИМЕННО сильного гейта: require-private-archive
+    зависит от require-archive, поэтому текст слабого печатается в обоих
+    случаях и подмену не различил бы.
+    """
+    r = _make("run", ["--dry-run"])
+    assert _PRIVATE_GUARD_MARK in r.stdout + r.stderr, "цель run не проходит через require-private-archive"
+
+
+def test_sanity_target_is_gated_by_weak_guard_only():
+    """У `sanity` гейт обязан остаться слабым: на ней держится предполётная
+    проверка стоп-строки, которая гоняется ПО ПУБЛИЧНОМУ архиву. Сильный гейт
+    здесь сломал бы её — это ровно та ошибка, с которой начался круг 1, только
+    в другую сторону."""
+    r = _make("sanity", ["--dry-run"])
+    out = r.stdout + r.stderr
+    assert _ANY_GUARD_MARK in out, "цель sanity не проходит через require-archive"
+    assert _PRIVATE_GUARD_MARK not in out, "sanity гейтится сильным гейтом — предполётная проверка сломана"
+
+
 def test_determinism_target_is_gated():
     """`determinism` зовёт ./run.sh дважды и перезаписывает отправляемый файл,
     так что забытое ARCHIVE= стоит ей того же, что и run (ревью PR #18,
