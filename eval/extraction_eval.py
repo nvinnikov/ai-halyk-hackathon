@@ -6,7 +6,7 @@
 
 import json
 import sys
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 sys.path.insert(0, "solution")
@@ -204,8 +204,15 @@ def diff_specs(got_clauses: dict, want_specs: dict) -> list[str]:
         if sp["direction"] != direction:
             out.append(f"{cl}: direction {sp['direction']} != {direction}")
 
-        # Проверяем limit (точное сравнение после нормализации в Decimal)
-        if abs(Decimal(sp["limit"]) - Decimal(str(limit))) > Decimal("1E-9"):
+        # Проверяем limit (точное сравнение после нормализации в Decimal).
+        # Порог, который _check пропустил как невалидный («5%»), — не число:
+        # InvalidOperation ронял бы весь отчёт, теряя разбор по остальным
+        # заёмщикам (ревью PR #9, 19-я волна) — фиксируем как расхождение.
+        try:
+            limit_diverges = abs(Decimal(sp["limit"]) - Decimal(str(limit))) > Decimal("1E-9")
+        except InvalidOperation:
+            limit_diverges = True
+        if limit_diverges:
             out.append(f"{cl}: limit {sp['limit']} != {limit}")
 
         # Проверяем template (если он есть и не None)

@@ -325,7 +325,14 @@ def extract_specs(wd: Path, dossier_art: dict, fact_keys: set[str]) -> dict:
         try:
             raw = llm.call(prompt, SPECS_SCHEMA, SCHEMA_VERSION, max_tokens=16000)
         except llm.SchemaRejected as exc:
-            return {"covenants": [], "alarms": [{"kind": "specs_extraction_failed", "error": str(exc)}]}
+            # account внутрь build() (как у no_agreement, ревью PR #9, 19-я
+            # волна): иначе сырая копия на диске и обогащённая при чтении —
+            # разные словари, глобальный дедуп их не схлопывает и счётчик в
+            # run-report удваивается.
+            return {
+                "covenants": [],
+                "alarms": [{"kind": "specs_extraction_failed", "account": acc, "error": str(exc)}],
+            }
         return {"covenants": raw["covenants"], "alarms": []}
 
     raw_art = artifact(wd / "specs" / f"{acc}.json", SPECS_STAGE_VERSION, build)

@@ -369,15 +369,17 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
         # "251338.94" и в трейсе выглядит ошибкой.
         facts["ebitda_addbacks"].sort(key=Decimal)
         facts["reclass"].sort(key=lambda rc: (str(rc["txn"]), str(rc["counterparty"])))
+        # account в каждом алярме — внутри build(), чтобы он лёг НА ДИСК
+        # (ревью PR #9, 19-я волна): _alarm_counts, _collect_report_alarms и
+        # sanity._stage_alarms читают facts/*.json с диска, обогащение при
+        # чтении они не видели — invalid_number у 12 заёмщиков схлопывался
+        # глобальным дедупом точных дублей до «1». Артефакты, собранные до
+        # этой правки, остаются без account до пересбора (FACTS_VERSION
+        # бампает активационная волна).
+        facts["alarms"] = [{**a, "account": acc} for a in facts["alarms"]]
         return facts
 
-    art = artifact(wd / "facts" / f"{acc}.json", FACTS_VERSION, build)
-    # account в каждом алярме — при ЧТЕНИИ, артефакт не меняется (ревью PR #9,
-    # 18-я волна, симметрично specs_extract 15-й): без него системная поломка
-    # у 12 заёмщиков схлопывалась бы глобальным дедупом точных дублей до «1».
-    if art.get("alarms"):
-        art = {**art, "alarms": [{**a, "account": acc} for a in art["alarms"]]}
-    return art
+    return artifact(wd / "facts" / f"{acc}.json", FACTS_VERSION, build)
 
 
 def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) -> dict | None:
@@ -407,7 +409,14 @@ def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) ->
                 "value": "",
                 "quote": "",
                 "error": str(exc),
-                "alarms": [{"kind": "doc_fact_resolve_failed", "key": key, "error": str(exc)}],
+                "alarms": [
+                    {
+                        "kind": "doc_fact_resolve_failed",
+                        "account": dossier_art["account_id"],
+                        "key": key,
+                        "error": str(exc),
+                    }
+                ],
             }
         return ans
 
