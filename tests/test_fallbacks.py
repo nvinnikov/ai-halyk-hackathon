@@ -45,6 +45,29 @@ def test_heuristic_template_keywords():
     assert heuristic_template("что-то невнятное") is None
 
 
+def test_heuristic_icr_matches_organizer_wording():
+    """«Покрытия процентов» — формулировка из публичных договоров; суффиксная
+    игла «процентн» её не матчила, и ступень icr для русского текста была
+    мертва (ревью 2026-08-08)."""
+    quote = "не допускать снижения Коэффициента покрытия процентов ниже величины 2.00x"
+    assert heuristic_template(quote) == "icr"
+
+
+def test_heuristic_coverage_beats_revenue():
+    """«Покрытие … выручкой» — коэффициент, а не доллары: игла «выручк» не
+    должна перехватывать такую цитату, иначе в actual уедет сумма в миллионах
+    против порога вида «3.0x» — в клетке, где guard семьи метрики молчит."""
+    quote = "Минимальное покрытие расходов на персонал и коммунальные услуги выручкой: не ниже 3.0x"
+    assert heuristic_template(quote) == "revenue_cover_payroll_utilities"
+
+
+def test_heuristic_insurance_beats_generic_coverage():
+    """Страховые иглы стоят раньше обобщённого «покрыти»: страховой ковенант не
+    должен уезжать в шаблон покрытия выручкой."""
+    quote = "покрытие страховыми премиями арендных и коммунальных платежей"
+    assert heuristic_template(quote) == "insurance_cover"
+
+
 def test_fallback_cell_actual_ladder():
     # порог известен → actual = порог
     cell, alarms = fallback_cell("max", "absolute", Decimal("500000"), [])
