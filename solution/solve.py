@@ -250,19 +250,30 @@ def _metric_inputs(node, raw: list, facts: dict) -> dict:
     }
 
 
-# Во сколько раз посчитанное значение должно разойтись с порогом, чтобы счесть
-# их величинами разной природы. Однородная пара (доллары против долларов,
-# коэффициент против коэффициента) так разойтись не может: на публичном наборе
-# все посчитанные ячейки лежат в пределах ±45% от своего порога, то есть запас
-# здесь — больше двух порядков. Разнородная пара (сумма в долларах против
-# коэффициента) расходится сразу на пять-шесть порядков, так что промежуток
-# между «однородно» и «разнородно» пустой и выбор множителя внутри него
-# ни на что не влияет.
-_FAMILY_MISMATCH_FACTOR = Decimal(100)
+# Во сколько раз посчитанное значение должно ПРЕВЫСИТЬ порог, чтобы счесть их
+# величинами разной природы. Промах эвристики, который мы ловим, — долларовый
+# шаблон при коэффициентном пороге, то есть 10^6 против 10^0.
+#
+# Проверяется только превышение, и это осознанно узко (ревью PR #21). Обратная
+# сторона — «значение много МЕНЬШЕ порога» — неотличима от законного ответа:
+# у max-ковенанта это просто комфортное соблюдение, и разрыв там ничем не
+# ограничен. Замерено подстановками (см. тест ниже): доля, меньшая своего
+# порога в двести раз, — рядовой COMPLIANT; почти пустая расходная категория
+# против нормального долларового лимита даёт уже пять-шесть порядков, то есть
+# ровно столько же, сколько настоящий промах семьёй. Порога, разделяющего эти
+# два класса, не существует, поэтому нижней ветви нет вовсе: подмена верного
+# actual порогом стоит ровно столько же, сколько guard экономит, и брать этот
+# риск на неограниченной стороне незачем.
+#
+# Сверху граница есть: однородной паре, чтобы превысить порог в 10^4 раз,
+# нужно нарушение ковенанта в десять тысяч раз. Публичный промах даёт
+# двадцатикратный запас до этой границы.
+_FAMILY_MISMATCH_FACTOR = Decimal(10_000)
 
 
 def _family_mismatch(value: Decimal, limit: Decimal | None) -> bool:
-    """Посчитанное значение и порог — величины разной природы?
+    """Посчитанное значение НАСТОЛЬКО больше порога, что это величины разной
+    природы?
 
     Ноль исключён намеренно: относительное сравнение на нём не определено, а
     ноль — законный ответ («таких операций не было»), и подменять его порогом
@@ -270,7 +281,7 @@ def _family_mismatch(value: Decimal, limit: Decimal | None) -> bool:
     """
     if limit is None or limit <= 0 or value <= 0:
         return False
-    return value > limit * _FAMILY_MISMATCH_FACTOR or value * _FAMILY_MISMATCH_FACTOR < limit
+    return value > limit * _FAMILY_MISMATCH_FACTOR
 
 
 def _shadow_compare(
@@ -286,8 +297,10 @@ def _shadow_compare(
     """Теневой расчёт извлечённой формулы, подменённой шаблоном.
 
     Диагностика, а не расчёт: ячейку по-прежнему считает шаблон, значение
-    тени в submission не попадает, и упасть эта функция права не имеет —
-    любая её ошибка уходит в трейс полем shadow.error.
+    тени в submission не попадает. Своего try здесь нет намеренно — ловит
+    вызывающий, и потому инвариант «тень не может стоить ячейки» держится
+    структурой вызова, а не тем, что все опасные строки оказались внутри
+    внутреннего try (ревью PR #21).
 
     Зачем. Решение «шаблон исполняется и при расхождении» измерено и остаётся
     (откат стоил −5.0 офлайн-скора), но текст двух формул не отвечает на
@@ -299,13 +312,9 @@ def _shadow_compare(
     shadow_text = cellspec.get("shadow_metric_text")
     if not shadow_text:
         return
-    try:
-        shadow_cs = {**cellspec, "metric_ast": parse(shadow_text), "metric_text": shadow_text}
-        shadow_status, shadow_res = evidence.compute(raw, facts, shadow_cs)
-        shadow_actual = q2(abs(shadow_res.value))
-    except Exception as exc:  # тень не считается — это не повод трогать ячейку
-        trace["shadow"] = {"metric": shadow_text, "error": repr(exc)}
-        return
+    shadow_cs = {**cellspec, "metric_ast": parse(shadow_text), "metric_text": shadow_text}
+    shadow_status, shadow_res = evidence.compute(raw, facts, shadow_cs)
+    shadow_actual = q2(abs(shadow_res.value))
     actual = q2(abs(res.value))
     changed = shadow_status != status or shadow_actual != actual
     trace["shadow"] = {
@@ -375,7 +384,17 @@ def run_cell(
                 flags=sorted(res.flags),
             )
             cell = {"status": status, "actual": q2(abs(res.value)), "evidence_txn_id": ev_txn}
-            _shadow_compare(trace, cellspec, raw, facts, scenario, clause, status, res)
+            try:
+                _shadow_compare(trace, cellspec, raw, facts, scenario, clause, status, res)
+            except Exception as shadow_exc:
+                # Ячейка уже собрана и остаётся ярусом 0: диагностика не имеет
+                # права уронить расчёт во внешний except и заменить посчитанное
+                # приором. Свой except именно здесь, а не внутри функции, —
+                # тогда инвариант структурный (ревью PR #21).
+                trace["shadow"] = {
+                    "metric": cellspec.get("shadow_metric_text", ""),
+                    "error": repr(shadow_exc),
+                }
             return cell, trace
         except Exception as exc:
             # Спека построилась, вычисление упало: направление и порог прочитаны,

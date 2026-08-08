@@ -212,17 +212,53 @@ def test_shadow_failure_never_costs_the_cell():
     assert trace["tier"] == 0 and "error" in trace["shadow"]
 
 
+def test_shadow_failure_is_caught_structurally_not_by_luck(monkeypatch):
+    """Падение ЛЮБОЙ строки тени не роняет ячейку во внешний except.
+
+    Регрессия на ревью PR #21: раньше внутренний try покрывал только
+    parse/compute, а q2 и print лежали снаружи — инвариант держался
+    расположением строк. Ловит вызывающий, поэтому проверяем именно это:
+    функция взрывается целиком, ячейка остаётся ярусом 0.
+    """
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("тень взорвалась целиком")
+
+    monkeypatch.setattr(solve, "_shadow_compare", boom)
+    rows = [_row("TXN-1", "CAPEX", "-50")]
+    cellspec = _shadow_cellspec("agg(TAX, out)")
+    cell, trace = solve.run_cell("SC-S", "6.1", rows, {}, cellspec, [])
+    assert cell["status"] == "COMPLIANT" and cell["actual"] == 50.0
+    assert trace["tier"] == 0 and trace["path"] == "dsl"
+    assert "тень взорвалась целиком" in trace["shadow"]["error"]
+
+
 def test_family_mismatch_detects_dollars_against_ratio_limit():
     # Доллары против «9.00x» — 189 тысяч раз, величины разной природы.
     assert solve._family_mismatch(Decimal("1703882.44"), Decimal("9.00")) is True
-    # И обратная сторона: коэффициент против долларового порога.
-    assert solve._family_mismatch(Decimal("0.33"), Decimal("1800000")) is True
 
 
 def test_family_mismatch_silent_on_homogeneous_pair():
     # Самое дальнее расхождение однородной пары на публичном наборе — ±45%.
     assert solve._family_mismatch(Decimal("8104772.36"), Decimal("6500000")) is False
     assert solve._family_mismatch(Decimal("0.0411"), Decimal("0.04")) is False
+
+
+def test_family_mismatch_never_fires_below_the_limit():
+    """Значение много меньше порога — законный ответ, а не промах семьёй.
+
+    Регрессия на ревью PR #21: нижняя ветвь guard'а била по комфортному
+    соблюдению max-ковенанта, и разрыв там ничем не ограничен — пустая
+    категория даёт сколь угодно большой. Ни один из этих случаев (200x,
+    13 тысяч, 133 тысячи — последний вплотную к настоящему промаху в 189
+    тысяч) не имеет права поднимать guard.
+    """
+    assert solve._family_mismatch(Decimal("0.0002"), Decimal("0.04")) is False
+    assert solve._family_mismatch(Decimal("150"), Decimal("2000000")) is False
+    assert solve._family_mismatch(Decimal("15"), Decimal("2000000")) is False
+    # Та же сторона у коэффициентного шаблона при долларовом пороге: ловить
+    # её магнитудой нельзя, не задев строки выше.
+    assert solve._family_mismatch(Decimal("0.33"), Decimal("1800000")) is False
 
 
 def test_family_mismatch_never_fires_on_zero_or_unknown_limit():
