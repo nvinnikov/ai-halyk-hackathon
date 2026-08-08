@@ -1,6 +1,7 @@
 """Факты досье (5.2/5.3): LLM извлекает с цитатами, код сливает детерминированно."""
 
 import hashlib
+import re
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -277,6 +278,22 @@ def _percent(value: str) -> Decimal | None:
     return d if d.is_finite() else None
 
 
+def _percent_in_quote(number: Decimal, quote: str) -> bool:
+    """Стоит ли доля в цитате самостоятельным числом, а не куском другого.
+
+    Проверка порогов спек (_limit_in_quote) подстрочна — она обслуживает
+    разнообразные формы записи сумм, — и «5» находится внутри «25.0». Для доли
+    этого мало: заниженный порог тише завышенного, организации ниже настоящего
+    порога молча уезжают в набор с настоящей цитатой, и алярма о снятии в эту
+    сторону не бывает. Здесь значение всегда процент, поэтому границы числа
+    требуются локально, не трогая общую проверку.
+    """
+    plain = format(number, "f")
+    forms = {plain, plain.rstrip("0").rstrip(".") if "." in plain else plain}
+    forms |= {f.replace(".", ",") for f in forms}
+    return any(re.search(rf"(?<![\d.,]){re.escape(f)}(?![\d.,])", quote) for f in forms if f)
+
+
 def _ownership_rows(facts: dict, raw: dict, doc: dict, text: str) -> tuple[list, list]:
     """Строки таблицы владения, разложенные по порогу: (выше-или-равно, ниже).
 
@@ -313,7 +330,7 @@ def _ownership_rows(facts: dict, raw: dict, doc: dict, text: str) -> tuple[list,
         if not verify_quote(quote, text):
             facts["alarms"].append({"kind": "quote_unverified", "field": field, "file": doc["file"]})
             return None
-        if not _limit_in_quote(str(number), quote):
+        if not _limit_in_quote(str(number), quote) or not _percent_in_quote(number, quote):
             facts["alarms"].append({"kind": "invalid_number", "field": field, "value": value})
             return None
         return number

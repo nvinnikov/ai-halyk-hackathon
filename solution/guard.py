@@ -98,12 +98,30 @@ def verify_quote(quote: str, source: str) -> bool:
     if elided and any(len(f) < _MIN_FRAGMENT for f in fragments):
         return False
 
-    pos = 0
-    for i, fragment in enumerate(fragments):
-        found = src.find(fragment, pos)
-        if found < 0:
+    return _fits(src, fragments, 0, anchored=False)
+
+
+def _fits(src: str, fragments: list[str], pos: int, anchored: bool) -> bool:
+    """Есть ли размещение фрагментов по порядку, где каждый разрыв в пределах окна.
+
+    Поиск с откатом, а не жадный: первое вхождение фрагмента — не единственное
+    место, где цитата может стоять, и модель чаще всего берёт первый фрагмент
+    из повторяющегося текста (шапка колонки, «Организация», «Группа владеет»).
+    Жадный якорь на самом раннем совпадении отказывал бы там, где корректное
+    размещение существует, а отброшенный порог владения отключает применение
+    кодом целиком и возвращает набор к суждению модели.
+
+    Откат ограничен: если разрыв уже больше окна, следующие вхождения только
+    дальше — ветка обрывается, а не перебирается до конца документа.
+    """
+    if not fragments:
+        return True
+    head, rest = fragments[0], fragments[1:]
+    at = src.find(head, pos)
+    while at >= 0:
+        if anchored and at - pos > _MAX_GAP:
             return False
-        if i and found - pos > _MAX_GAP:
-            return False
-        pos = found + len(fragment)
-    return True
+        if _fits(src, rest, at + len(head), anchored=True):
+            return True
+        at = src.find(head, at + 1)
+    return False

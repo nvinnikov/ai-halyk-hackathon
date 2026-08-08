@@ -423,6 +423,39 @@ TWO_ROW_DOSSIER = {
 }
 
 
+def test_ownership_number_must_stand_alone_in_quote(tmp_path, monkeypatch):
+    """Число обязано стоять в цитате целиком, а не быть куском другого числа.
+
+    Проверка порогов спек подстрочна, и «5» находится внутри «25.0». Заниженный
+    порог тише завышенного: организации ниже настоящего порога молча уезжают в
+    набор с настоящей цитатой, related-фильтр расширяется на чужие строки, а
+    вердикт остаётся правдоподобным. Промах в эту сторону алярма о снятии не
+    оставляет — значит ловить надо на входе.
+    """
+    text = (
+        "Организация Доля голосующих прав Ertis Capital, LLP 31.4% "
+        "Организации, в которых Группа владеет 25.0% и более голосующих прав, "
+        "признаются связанными сторонами."
+    )
+    dossier = {
+        "account_id": "ACC-1",
+        "scenario_id": "S1",
+        "docs": [{"file": "kyc.pdf", "doc_type": "kyc", "date": "2025-12-31", "text": text}],
+        "docs_rejected": [],
+        "quarantined": [],
+    }
+    # Цитата настоящая, но «5» в ней — кусок «25.0», а не самостоятельное число.
+    own = ownership(
+        [("Ertis Capital, LLP", "31.4", "Ertis Capital, LLP 31.4%")],
+        threshold="5",
+        threshold_quote="Группа владеет 25.0% и более",
+    )
+    monkeypatch.setattr(facts_extract.llm, "call", _dispatch([], own))
+    facts = facts_extract.extract_facts(tmp_path, dossier)
+    assert facts["related_parties"] == []
+    assert any(a["kind"] == "invalid_number" and a["field"] == "ownership_threshold" for a in facts["alarms"])
+
+
 def test_ownership_row_above_threshold_wins_over_row_below(tmp_path, monkeypatch):
     """Организация в таблице двумя строками остаётся связанной по большей доле.
 
