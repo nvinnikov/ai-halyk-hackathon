@@ -12,6 +12,7 @@ fx до любой агрегации. Складывать rows_of() напря
 """
 
 import csv
+import re
 import zipfile
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -41,7 +42,9 @@ class LedgerRow(TypedDict):
 # промпта обязана поднимать версию: stages.artifact инвалидирует только по
 # ней, и без инкремента повторный прогон на том же архиве молча переиспользует
 # старые категории — правка промпта в окне 9 августа не дала бы ничего.
-LEDGER_VERSION = 6
+# 7: parse_amount отправляет запятую-десятичный разделитель в dirty; артефакт
+# хранит разобранные суммы, значит правка разбора обязана его пересобрать.
+LEDGER_VERSION = 7
 _NA = {"n/a", "na", "none", "-", "—", "--"}
 
 
@@ -103,10 +106,24 @@ def find_inputs(input_dir: Path) -> dict:
     }
 
 
+# Запятая в роли десятичного разделителя: «,» с 1–2 цифрами до границы числа
+# («1 234,56», «1,5») либо запятая правее точки («1.234,56»). Разделитель тысяч
+# («1,234.56») под шаблон не подпадает — за его запятой ровно три цифры.
+_DECIMAL_COMMA = re.compile(r",\d{1,2}(?!\d)|\.\d*,")
+
+
 def parse_amount(raw: str) -> Decimal | None:
-    s = raw.strip().replace(",", "").replace(" ", "")
+    s = raw.strip().replace(" ", "")
     if not s or s.lower() in _NA:
         return None
+    # Европейский формат — в dirty, а не в другое число: снятие запятых
+    # превращало бы «1 234,56» в 123456 (×100), а «1.234,56» в 1.23456 (÷1000)
+    # — единственное место разбора леджера, где мусор не уходил в dirty с
+    # sanity-отчётом, а тихо искажался. Восстановить такую строку может
+    # amount_override из записки казначейства, как любую другую грязную.
+    if _DECIMAL_COMMA.search(s):
+        return None
+    s = s.replace(",", "")
     neg = s.startswith("(") and s.endswith(")")
     if neg:
         s = s[1:-1]
