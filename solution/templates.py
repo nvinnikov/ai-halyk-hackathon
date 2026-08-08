@@ -156,7 +156,13 @@ TEMPLATES: dict[str, str] = {
     ),
     "springing_leverage": f"ratio(agg(FINANCING, in), {_EBITDA})",
     "adj_ebitda_margin": (f"ratio(add({_EBITDA}, doc(ebitda_addbacks_material_total)), agg(REVENUE, in))"),
-    "group_capex_to_ebitda": f"ratio(agg(CAPEX, out), {_EBITDA})",
+    # Числителя нет в леджере: капитальные затраты ГРУППЫ определяются по
+    # консолидированной отчётности материнской компании, а леджер знает только
+    # затраты самого заёмщика — это другая величина, а не приближение к ней.
+    # Ключ считает код по отчётности группового уровня (facts_extract.
+    # _group_capex); нет её в досье — спека невалидна и ячейка уходит на
+    # лестницу, что честнее уверенно посчитанной не той суммы.
+    "group_capex_to_ebitda": f"ratio(doc(group_capex), {_EBITDA})",
     "tax_utility_to_ebitda": f"ratio(add(agg(TAX, out), agg(UTILITIES, out)), {_EBITDA})",
     "staff_liabilities": "add(agg(PAYROLL, out), doc(severance_liability))",
     "revenue_cover_payroll_utilities": (

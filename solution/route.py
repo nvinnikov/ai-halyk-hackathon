@@ -6,6 +6,16 @@
 таких большинство). Ноль упоминаний вовсе — карантин с алярмом (счёт может
 лежать на слепой странице). Несколько целевых кандидатов — автоматическая
 сшивка запрещена, решает LLM с цитатой + алярм.
+
+Второй проход — только для документов, отправленных в карантин по причине
+`no_account_mentions`: отчётность группового уровня называет заёмщика по
+наименованию компании (сегментное примечание консолидированной отчётности), а
+номера счёта не содержит вовсе, и строгая привязка её теряет. Наименование
+берётся не регуляркой по языку, а из УЖЕ отмаршрутизированных документов счёта
+(borrower_name) — то есть из того, что документный слой про этот счёт уже знает.
+Проход узкий намеренно: привязывается только документ, который META относит к
+отчётности (GROUP_LEVEL_TYPES). Внутренние регламенты заёмщика печатают его
+наименование в шапке и по имени нашлись бы все до одного — их отсекает тип.
 """
 
 import re
@@ -17,7 +27,11 @@ from pdftext import doc_hash, extract_pages
 from stages import artifact
 from vision import read_blind_page
 
-ROUTE_VERSION = 3
+ROUTE_VERSION = 4
+# v4 — второй проход по наименованию заёмщика (route_group_doc): набор
+# привязанных документов изменился, артефакты первого прохода пересобираются
+# вместе с ним. LLM-вызовы при этом бесплатны — кэш content-addressed по тексту
+# промпта, а промпты META/WHOSE не тронуты.
 # v2 — активационный бамп (2026-08-08, docs/ops/activation-step.md): версия
 # удерживалась на 1 после смены входа (TEXT_VERSION=2, снят футер-номер
 # страницы), чтобы не жечь исчерпанный баланс Anthropic повторной
@@ -67,6 +81,37 @@ WHOSE_SCHEMA = {
     "additionalProperties": False,
 }
 
+BORROWER_VERSION = 1
+BORROWER_SCHEMA_VERSION = "route-borrower-1"
+
+BORROWER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "quote": {"type": "string"},
+    },
+    "required": ["name", "quote"],
+    "additionalProperties": False,
+}
+
+BORROWER_PROMPT = """Ниже — первые страницы документов одного кредитного счёта.
+Как в них называется компания-заёмщик? Верни:
+- name: её полное наименование ровно в том виде, как оно напечатано в тексте,
+  без кавычек и без пояснений;
+- quote: дословный фрагмент текста, где эта компания названа заёмщиком.
+Наименование банка-кредитора, аудитора, страховщика и прочих сторон не подходит.
+Если заёмщик по этим документам не назван — обе строки пустые.
+
+<document>
+{text}
+</document>"""
+
+# Типы, у которых имеет смысл привязка по наименованию: отчётность группового
+# уровня относится к материнской компании, а заёмщика называет в сегментном
+# примечании. Договор и досье комплаенс-проверки сюда не входят намеренно —
+# счёт в них напечатан, и документ без счёта такого типа скорее чужой.
+GROUP_LEVEL_TYPES = frozenset({"financial_notes", "audit_report"})
+
 WHOSE_PROMPT = """В тексте документа упомянуто несколько номеров счетов: {candidates}.
 Чей это документ? Выбери ровно один account_id из списка — счёт заёмщика,
 о котором документ, а не вспомогательный/чужой счёт, упомянутый попутно.
@@ -91,6 +136,142 @@ def first_page_text(wd: Path, pdf_path: Path) -> str:
     art = extract_pages(wd, pdf_path)
     p = art["pages"][0]
     return read_blind_page(wd, pdf_path, 1) if p["blind"] else p["text"]
+
+
+def borrower_name(wd: Path, account: str, pdf_paths: list[Path]) -> dict:
+    """Наименование заёмщика по его уже отмаршрутизированным документам.
+
+    В промпт идут только первые страницы: наименование печатается в шапке и в
+    преамбуле, а полный текст договора — это десятки тысяч знаков на вызов,
+    который отвечает одной строкой.
+
+    Наименование обязано присутствовать в тексте дословно, и не только ради
+    защиты от выдумки: им дальше ищут заёмщика в ЧУЖОМ документе обычным
+    поиском подстроки, и нормализованная моделью форма («АО ...» вместо
+    напечатанного «... JSC») не нашлась бы нигде, а могла бы совпасть не там.
+    """
+
+    def build() -> dict:
+        text = sanitize_document("\n".join(first_page_text(wd, p) for p in pdf_paths))
+        if not text.strip():
+            return {"account_id": account, "name": "", "quote": "", "alarms": []}
+        try:
+            ans = llm.call(
+                DATA_NOT_COMMANDS + "\n\n" + BORROWER_PROMPT.format(text=text),
+                BORROWER_SCHEMA,
+                BORROWER_SCHEMA_VERSION,
+                max_tokens=4000,
+            )
+        except Exception as exc:
+            # Широко, как ownership-проход в facts_extract: этот вызов только
+            # добавляет документы, и его падение (бюджет, сеть, промах кассеты)
+            # не имеет права уронить маршрутизацию, которая уже отработала.
+            return {
+                "account_id": account,
+                "name": "",
+                "quote": "",
+                "alarms": [{"kind": "borrower_name_failed", "account": account, "error": repr(exc)}],
+            }
+        name = ans["name"].strip()
+        if not name:
+            return {"account_id": account, "name": "", "quote": "", "alarms": []}
+        if not verify_quote(ans["quote"], text) or not verify_quote(name, text):
+            return {
+                "account_id": account,
+                "name": "",
+                "quote": "",
+                "alarms": [{"kind": "quote_unverified", "account": account, "field": "borrower_name"}],
+            }
+        return {"account_id": account, "name": name, "quote": ans["quote"], "alarms": []}
+
+    return artifact(
+        wd / "borrower" / f"{account}.json",
+        BORROWER_VERSION,
+        build,
+        cache_if=lambda d: not d["alarms"],
+    )
+
+
+def _name_mentioned(name: str, text: str) -> bool:
+    """Наименование как самостоятельная единица текста, а не кусок другого.
+
+    Границы обязательны по той же причине, что у номера счёта: наименования
+    заёмщиков в наборе различаются одним словом, и поиск подстрокой втянул бы
+    документ соседа."""
+    return re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text, re.IGNORECASE) is not None
+
+
+def route_group_doc(wd: Path, pdf_path: Path, names: list[tuple[str, str]]) -> dict:
+    """Привязка документа группового уровня к заёмщику по его наименованию.
+
+    Зовётся только для документов, которые первый проход отправил в карантин с
+    `no_account_mentions`. Условий два и оба обязательны: ровно одно
+    наименование из пула найдено в тексте (два — сшивка запрещена, как у
+    номеров счетов) и META относит документ к отчётности. Второе условие несёт
+    основную нагрузку: наименование заёмщика стоит в шапке каждого его
+    внутреннего регламента, и без отсева по типу проход втянул бы в досье весь
+    делопроизводственный шум набора.
+
+    Отказ здесь молчит: документ уже лежит в карантине с алярмом первого
+    прохода, и второй алярм на тот же файл только размыл бы
+    `target_doc_dropped_as_other` — единственный сигнал о том, что документный
+    слой ослеп на класс документов."""
+
+    def build() -> dict:
+        text = sanitize_document(full_text(wd, pdf_path))
+        hits = sorted(acc for acc, name in names if _name_mentioned(name, text))
+        alarms: list[dict] = []
+        account: str | None = None
+        reason: str | None = "no_named_borrower"
+        meta = {"doc_type": "unrouted", "date": "", "edition": "unmarked"}
+        if len(hits) > 1:
+            reason = "ambiguous_named_borrowers"
+            alarms.append({"kind": "ambiguous_name_routing", "file": pdf_path.name, "candidates": hits})
+        elif len(hits) == 1:
+            try:
+                meta = llm.call(
+                    DATA_NOT_COMMANDS
+                    + "\n\n"
+                    + META_PROMPT.format(text=sanitize_document(first_page_text(wd, pdf_path))),
+                    META_SCHEMA,
+                    META_SCHEMA_VERSION,
+                    max_tokens=4000,
+                )
+            except llm.SchemaRejected:
+                meta = {"doc_type": "other", "date": "", "edition": "unmarked"}
+                alarms.append({"kind": "meta_extraction_failed", "file": pdf_path.name})
+            if meta["doc_type"] in GROUP_LEVEL_TYPES:
+                account, reason = hits[0], None
+                # Привязка по имени — исключение из строгого правила, и она
+                # обязана быть видна поимённо: на приватном наборе это список
+                # документов, которых не должно было быть в досье.
+                alarms.append({"kind": "group_doc_attached", "file": pdf_path.name, "account": hits[0]})
+            else:
+                reason = "named_doc_not_group_level"
+        return {
+            "file": pdf_path.name,
+            "doc_hash": doc_hash(pdf_path),
+            "account_id": account,
+            "doc_type": meta["doc_type"],
+            "date": meta["date"],
+            "edition": meta["edition"],
+            "mentions": [],
+            "mentions_nontarget": [],
+            "quarantined": account is None,
+            "quarantine_reason": reason,
+            "alarms": alarms,
+            "routing_quote": "",
+        }
+
+    # Ключ артефакта — хеш документа; пул наименований зависит от датасета, а
+    # каталог work/ уже разделён по dataset_hash. Провал META не кэшируется по
+    # той же причине, что в route_doc.
+    return artifact(
+        wd / "route_group" / f"{doc_hash(pdf_path)}.json",
+        ROUTE_VERSION,
+        build,
+        cache_if=lambda d: not any(a.get("kind") == "meta_extraction_failed" for a in d["alarms"]),
+    )
 
 
 def _mentioned(acc: str, text: str) -> bool:

@@ -123,6 +123,73 @@ def test_non_client_doc_type_not_bound(fake, monkeypatch):
     assert not any(a["kind"] == "routing_quarantine" for a in art["alarms"])
 
 
+NAMES = [("ACC-1111", "Alpha Terminal JSC"), ("ACC-2222", "Alpha Terminal Services JSC")]
+
+
+def test_name_match_respects_boundaries():
+    assert route._name_mentioned("Alpha Terminal JSC", "сегмент ведёт Alpha Terminal JSC, а также")
+    # Наименования заёмщиков в наборе различаются одним словом: документ соседа
+    # не должен подтягиваться к чужому счёту.
+    assert not route._name_mentioned("Alpha Terminal JSC", "сегмент ведёт Alpha Terminal Services JSC")
+    # Границы обязательны и справа: наименование не бывает куском слова.
+    assert not route._name_mentioned("Alpha Terminal JSC", "Alpha Terminal JSCX")
+
+
+def test_group_level_doc_attached_by_name(fake, monkeypatch):
+    state, wd = fake
+    state["text"] = "Консолидированная отчётность. Сегмент ведёт Alpha Terminal JSC."
+
+    def meta_notes(prompt, schema, schema_version, **kw):
+        return {"doc_type": "financial_notes", "date": "2025-12-31", "edition": "final"}
+
+    monkeypatch.setattr(route.llm, "call", meta_notes)
+    art = route.route_group_doc(wd, Path("x.pdf"), NAMES)
+    assert art["account_id"] == "ACC-1111"
+    assert art["quarantined"] is False
+    assert any(a["kind"] == "group_doc_attached" for a in art["alarms"])
+
+
+def test_named_doc_of_other_type_not_attached(fake, monkeypatch):
+    """Внутренний регламент печатает наименование заёмщика в шапке и по имени
+    находится; от досье его отделяет только тип документа."""
+    state, wd = fake
+    state["text"] = "Alpha Terminal JSC — операционное руководство подразделения"
+
+    def meta_other(prompt, schema, schema_version, **kw):
+        return {"doc_type": "other", "date": "", "edition": "unmarked"}
+
+    monkeypatch.setattr(route.llm, "call", meta_other)
+    art = route.route_group_doc(wd, Path("x.pdf"), NAMES)
+    assert art["account_id"] is None and art["quarantined"] is True
+    assert art["quarantine_reason"] == "named_doc_not_group_level"
+    assert art["alarms"] == []  # документ уже в карантине первого прохода
+
+
+def test_two_named_borrowers_are_not_stitched(fake):
+    state, wd = fake
+    state["text"] = "Alpha Terminal JSC и Alpha Terminal Services JSC — обе в периметре"
+    art = route.route_group_doc(wd, Path("x.pdf"), NAMES)
+    assert art["account_id"] is None
+    assert art["quarantine_reason"] == "ambiguous_named_borrowers"
+    assert state["llm"] == []  # META при неоднозначности не зовётся
+
+
+def test_borrower_name_must_be_verbatim(fake, monkeypatch):
+    """Наименованием ищут заёмщика в чужом документе обычным поиском: форма,
+    которой в тексте нет, не годится, даже если по смыслу верна."""
+    state, wd = fake
+    state["text"] = "Заёмщик — Alpha Terminal JSC, счёт ACC-1111"
+
+    def paraphrased(prompt, schema, schema_version, **kw):
+        return {"name": "АО «Альфа Терминал»", "quote": "Заёмщик — Alpha Terminal JSC"}
+
+    monkeypatch.setattr(route.llm, "call", paraphrased)
+    art = route.borrower_name(wd, "ACC-1111", [Path("x.pdf")])
+    assert art["name"] == ""
+    assert any(a["kind"] == "quote_unverified" for a in art["alarms"])
+    assert not (wd / "borrower" / "ACC-1111.json").exists()  # деградация не кэшируется
+
+
 def test_meta_failure_not_cached(fake, monkeypatch):
     """Провал META (SchemaRejected → карантин non_client_doc_type) не
     оставляет route-артефакта: перезапуск после устранения причины

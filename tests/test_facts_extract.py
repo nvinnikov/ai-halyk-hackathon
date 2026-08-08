@@ -561,3 +561,125 @@ def test_ownership_unverifiable_threshold_quote_ignored(tmp_path, monkeypatch):
     assert any(
         a["kind"] == "quote_unverified" and a["field"] == "ownership_threshold" for a in facts["alarms"]
     )
+
+
+# --- капитальные затраты Группы (документ группового уровня) -----------------
+
+GROUP_TEXT = (
+    "Note 7 - Property, Plant and Equipment. "
+    "There were no disposals of property, plant and equipment during the year. "
+    "Net book value at the beginning of the year $148,028,989.69 "
+    "Depreciation charge for the year $15,826,229.43 "
+    "Net book value at the end of the year $154,050,122.81"
+)
+GROUP_DOSSIER = {
+    "account_id": "ACC-1",
+    "scenario_id": "S1",
+    "docs": [
+        {
+            "file": "group.pdf",
+            "doc_type": "financial_notes",
+            "date": "2025-12-31",
+            "scope": "group",
+            "text": GROUP_TEXT,
+        }
+    ],
+    "docs_rejected": [],
+    "quarantined": [],
+}
+
+
+def ppe(**over):
+    base = {
+        "opening_value": "148028989.69",
+        "opening_quote": "Net book value at the beginning of the year $148,028,989.69",
+        "closing_value": "154050122.81",
+        "closing_quote": "Net book value at the end of the year $154,050,122.81",
+        "depreciation": "15826229.43",
+        "depreciation_quote": "Depreciation charge for the year $15,826,229.43",
+        "additions": "",
+        "additions_quote": "",
+        "no_disposals": True,
+        "no_disposals_quote": "There were no disposals of property, plant and equipment during the year",
+    }
+    return {**base, **over}
+
+
+def _group_dispatch(raw):
+    def fake_call(prompt, schema, schema_version, **kw):
+        assert schema_version == facts_extract.GROUP_PPE_SCHEMA_VERSION
+        return raw
+
+    return fake_call
+
+
+def test_group_capex_computed_by_code(tmp_path, monkeypatch):
+    """Модель отдаёт три числа примечания, поступления считает код:
+    конец − начало + амортизация."""
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(ppe()))
+    facts = facts_extract.extract_facts(tmp_path, GROUP_DOSSIER)
+    assert facts["doc_facts"][facts_extract.GROUP_CAPEX_KEY] == "21847362.55"
+
+
+def test_group_doc_not_read_by_common_facts_pass(tmp_path, monkeypatch):
+    """Решения материнской компании не применяются к операциям заёмщика:
+    общий проход фактов документ группового уровня не читает вовсе."""
+    seen = []
+
+    def fake_call(prompt, schema, schema_version, **kw):
+        seen.append(schema_version)
+        return ppe()
+
+    monkeypatch.setattr(facts_extract.llm, "call", fake_call)
+    facts_extract.extract_facts(tmp_path, GROUP_DOSSIER)
+    assert seen == [facts_extract.GROUP_PPE_SCHEMA_VERSION]
+
+
+def test_group_capex_needs_no_disposals_clause(tmp_path, monkeypatch):
+    """Без оговорки об отсутствии выбытий тождество даёт не поступления —
+    расчёта нет, ячейка уходит на лестницу."""
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(ppe(no_disposals=False)))
+    facts = facts_extract.extract_facts(tmp_path, GROUP_DOSSIER)
+    assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
+    assert any(a["kind"] == "group_capex_disposals_unconfirmed" for a in facts["alarms"])
+
+
+def test_group_capex_number_must_be_in_its_quote(tmp_path, monkeypatch):
+    """Цитата привязывает число к формулировке: подменённое значение при
+    настоящей цитате не принимается."""
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(ppe(closing_value="254050122.81")))
+    facts = facts_extract.extract_facts(tmp_path, GROUP_DOSSIER)
+    assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
+    assert any(a["kind"] == "invalid_number" for a in facts["alarms"])
+
+
+def test_group_capex_stated_additions_win(tmp_path, monkeypatch):
+    """Если документ называет поступления отдельным числом — берётся оно,
+    восстанавливать их из движения стоимости незачем."""
+    raw = ppe(
+        additions="21847362.55",
+        additions_quote="Additions during the year $21,847,362.55",
+        no_disposals=False,
+    )
+    text = GROUP_TEXT + " Additions during the year $21,847,362.55"
+    dossier = {**GROUP_DOSSIER, "docs": [{**GROUP_DOSSIER["docs"][0], "text": text}]}
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(raw))
+    facts = facts_extract.extract_facts(tmp_path, dossier)
+    assert facts["doc_facts"][facts_extract.GROUP_CAPEX_KEY] == "21847362.55"
+
+
+def test_group_capex_negative_rejected(tmp_path, monkeypatch):
+    """Отрицательных поступлений не бывает: перепутанные начало и конец дали бы
+    уверенный COMPLIANT на max-ковенанте."""
+    raw = ppe(
+        opening_value="154050122.81",
+        opening_quote="Net book value at the end of the year $154,050,122.81",
+        closing_value="148028989.69",
+        closing_quote="Net book value at the beginning of the year $148,028,989.69",
+        depreciation="0",
+        depreciation_quote="Net book value at the end of the year $154,050,122.81",
+    )
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(raw))
+    facts = facts_extract.extract_facts(tmp_path, GROUP_DOSSIER)
+    assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
+    assert any(a["kind"] == "group_capex_negative" for a in facts["alarms"])

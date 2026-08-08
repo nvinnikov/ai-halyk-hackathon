@@ -229,3 +229,69 @@ def test_build_failed_dossier_not_cached(monkeypatch, tmp_path):
     monkeypatch.setattr(dossier, "full_text", lambda wd, p: "text")
     d2 = dossier.build_dossiers(tmp_path, [Path("a.pdf")], INDEX)["ACC-1"]
     assert [x["file"] for x in d2["docs"]] == ["a.pdf"]
+
+
+def test_group_doc_attached_by_name_gets_own_scope(monkeypatch, tmp_path):
+    """Документ группового уровня приходит в досье отдельной областью видимости
+    и НЕ участвует в выборе действующей редакции по своему типу: он про
+    материнскую компанию, а не про заёмщика."""
+    routes = {
+        "notes.pdf": base("notes.pdf", dtype="financial_notes", date="2025-06-01"),
+        "group.pdf": base("group.pdf", acc=None, reason="no_account_mentions"),
+    }
+    make_route(monkeypatch, routes, {"notes.pdf": "своё", "group.pdf": "консолидация"})
+    monkeypatch.setattr(dossier, "borrower_name", lambda wd, acc, paths: {"name": "Alpha JSC", "alarms": []})
+    monkeypatch.setattr(
+        dossier,
+        "route_group_doc",
+        lambda wd, p, names: {
+            **base(p.name, dtype="financial_notes", date="2025-12-31"),
+            "alarms": [{"kind": "group_doc_attached", "file": p.name, "account": "ACC-1"}],
+        },
+    )
+    d = dossier.build_dossiers(tmp_path, [Path("notes.pdf"), Path("group.pdf")], INDEX)["ACC-1"]
+    assert [(x["file"], x["scope"]) for x in d["docs"]] == [
+        ("notes.pdf", "borrower"),
+        ("group.pdf", "group"),
+    ]
+    assert d["docs_rejected"] == []
+    assert any(a["kind"] == "group_doc_attached" for a in d["alarms"])
+
+
+def test_background_document_not_offered_to_name_pass(monkeypatch, tmp_path):
+    """Второй проход берёт только документы без счетов вовсе: там, где счёт
+    напечатан, решение уже принято и наименованием не переигрывается."""
+    routes = {"bg.pdf": base("bg.pdf", acc=None, reason="background_document")}
+    make_route(monkeypatch, routes, {})
+
+    def boom(*a, **kw):
+        raise AssertionError("второй проход не должен трогать фоновый документ")
+
+    monkeypatch.setattr(dossier, "borrower_name", boom)
+    monkeypatch.setattr(dossier, "route_group_doc", boom)
+    d = dossier.build_dossiers(tmp_path, [Path("bg.pdf")], INDEX)["ACC-1"]
+    assert d["docs"] == []
+
+
+def test_name_pass_skipped_when_name_pool_degraded(monkeypatch, tmp_path):
+    """Артефакт route_group кэшируется по хешу документа, и пул наименований в
+    ключ не входит: отказ, посчитанный при неполном пуле, пережил бы устранение
+    причины. При транзиентном сбое имени проход не делается вовсе."""
+    routes = {
+        "a.pdf": base("a.pdf"),
+        "group.pdf": base("group.pdf", acc=None, reason="no_account_mentions"),
+    }
+    make_route(monkeypatch, routes, {})
+
+    def boom(wd, acc, paths):
+        raise RuntimeError("бюджет исчерпан")
+
+    monkeypatch.setattr(dossier, "borrower_name", boom)
+
+    def never(*a, **kw):
+        raise AssertionError("привязка по имени при неполном пуле запрещена")
+
+    monkeypatch.setattr(dossier, "route_group_doc", never)
+    d = dossier.build_dossiers(tmp_path, [Path("a.pdf"), Path("group.pdf")], INDEX)["ACC-1"]
+    assert any(a["kind"] == "borrower_name_failed" for a in d["alarms"])
+    assert not (tmp_path / "dossier" / "ACC-1.json").exists()  # деградация не кэшируется

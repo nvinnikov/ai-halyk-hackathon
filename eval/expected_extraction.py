@@ -56,6 +56,11 @@ FACTS: dict[str, dict[str, Any]] = {
     },
     "P5": {  # ACC-7805 Ekibastuz Power Services JSC
         "related_parties": ["Sarybel Capital LLP"],
+        # Капитальные затраты Группы — из консолидированной отчётности
+        # материнской компании (Примечание 7, a5cc1400b640.pdf): выбытий за год
+        # не было, поэтому поступления = 154,050,122.81 − 148,028,989.69 +
+        # 15,826,229.43. В леджере этого числа нет ни в каком виде.
+        "doc_facts": {"group_capex": "21847362.55"},
     },
     "P6": {  # ACC-7806 Taraz Cement Works JSC  (KYC целиком скан — vision)
         "related_parties": ["Taraz Holding Group LLP"],

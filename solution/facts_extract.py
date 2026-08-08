@@ -11,7 +11,11 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 6
+FACTS_VERSION = 7
+# v7 — DOSSIER_VERSION=10: в досье появились документы группового уровня
+# (scope="group"). Общий проход фактов их НЕ читает — решения материнской
+# компании не применяются к операциям заёмщика, — их читает отдельный проход
+# GROUP_PPE_PROMPT, и поступления основных средств группы считает код.
 # v4 — DOSSIER_VERSION=8: правило недействующих редакций расширено на
 # черновики, набор документов снова изменился.
 # v3 — досье перестало отдавать замененные редакции кумулятивных типов
@@ -218,6 +222,66 @@ OWNERSHIP_PROMPT = """Ниже — документ комплаенс-пров�
 {text}
 </document>"""
 
+GROUP_PPE_SCHEMA_VERSION = "group-ppe-1"
+
+# doc()-ключ капитальных затрат Группы. Значение под ним считает КОД (_group_capex);
+# то же имя модель знает из FACTS_PROMPT, и её значение код перебивает.
+GROUP_CAPEX_KEY = "group_capex"
+
+# Отдельный вызов по тем же соображениям, что OWNERSHIP: промпт фактов остаётся
+# байт в байт прежним, ключи его кэша не меняются, кассета переживает правку.
+GROUP_PPE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "opening_value": {"type": "string"},
+        "opening_quote": {"type": "string"},
+        "closing_value": {"type": "string"},
+        "closing_quote": {"type": "string"},
+        "depreciation": {"type": "string"},
+        "depreciation_quote": {"type": "string"},
+        "additions": {"type": "string"},
+        "additions_quote": {"type": "string"},
+        "no_disposals": {"type": "boolean"},
+        "no_disposals_quote": {"type": "string"},
+    },
+    "required": [
+        "opening_value",
+        "opening_quote",
+        "closing_value",
+        "closing_quote",
+        "depreciation",
+        "depreciation_quote",
+        "additions",
+        "additions_quote",
+        "no_disposals",
+        "no_disposals_quote",
+    ],
+    "additionalProperties": False,
+}
+
+GROUP_PPE_PROMPT = """Ниже — консолидированная отчётность материнской компании
+Группы. Выпиши из примечания об основных средствах то, что в нём НАПЕЧАТАНО,
+ничего не вычисляя, не складывая и не выводя одно число из других:
+
+- opening_value: балансовая стоимость основных средств на начало периода;
+  opening_quote — дословная цитата строки, где это число напечатано;
+- closing_value: та же стоимость на конец периода; closing_quote — цитата;
+- depreciation: начисленная за период амортизация основных средств;
+  depreciation_quote — цитата;
+- additions: поступления (приобретения) основных средств за период, ЕСЛИ
+  документ называет их отдельным числом; additions_quote — цитата. Если такого
+  числа в тексте нет — обе строки пустые;
+- no_disposals: true, только если документ прямо утверждает, что выбытий
+  основных средств за период не было; no_disposals_quote — дословная цитата
+  этого утверждения. Иначе false и пустая цитата.
+
+Числа — строкой, без разделителей разрядов. Любое поле, которого в тексте нет,
+— пустая строка. Ничего не вычисляй.
+
+<document type="{doc_type}">
+{text}
+</document>"""
+
 RESOLVE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -403,6 +467,65 @@ def _apply_ownership(facts: dict, above: list[dict], below: list[dict]) -> None:
             )
 
 
+def _group_capex(facts: dict, raw: dict, doc: dict, text: str) -> tuple[Decimal, str] | None:
+    """Поступления основных средств Группы за период: (значение, цитата).
+
+    Модель здесь только читает. Если документ называет поступления отдельным
+    числом — берётся оно. Если нет, они восстанавливаются из движения
+    балансовой стоимости: конец − начало + амортизация. Это тождество верно
+    ровно тогда, когда за период не было выбытий, поэтому оговорка об их
+    отсутствии — не риторика, а условие применимости формулы: без неё
+    выражение даёт не поступления, а поступления за вычетом выбывшего. Оговорка
+    извлекается как отдельный признак с цитатой и проверяется здесь; нет её —
+    расчёта нет, и ячейка честно уходит на лестницу.
+
+    Число обязано стоять в собственной верифицированной цитате — тот же
+    инвариант, что у порогов спек и долей владения: цитата привязывает число к
+    его формулировке, иначе стоимость на начало приезжает в расчёт как
+    стоимость на конец при настоящей цитате.
+    """
+    from specs_extract import _limit_in_quote, _normalize_limit
+
+    def number(value: str, quote: str, field: str) -> Decimal | None:
+        if not str(value).strip():
+            return None
+        try:
+            d = Decimal(_normalize_limit(str(value)))
+        except InvalidOperation:
+            d = None
+        if d is None or not d.is_finite():
+            facts["alarms"].append({"kind": "invalid_number", "field": field, "value": value})
+            return None
+        if not verify_quote(quote, text):
+            facts["alarms"].append({"kind": "quote_unverified", "field": field, "file": doc["file"]})
+            return None
+        if not _limit_in_quote(str(abs(d)), quote):
+            facts["alarms"].append({"kind": "invalid_number", "field": field, "value": value})
+            return None
+        return d
+
+    stated = number(raw["additions"], raw["additions_quote"], "group_capex_additions")
+    if stated is not None:
+        return stated, raw["additions_quote"]
+
+    if not raw["no_disposals"] or not verify_quote(raw["no_disposals_quote"], text):
+        facts["alarms"].append({"kind": "group_capex_disposals_unconfirmed", "file": doc["file"]})
+        return None
+    opening = number(raw["opening_value"], raw["opening_quote"], "group_capex_opening")
+    closing = number(raw["closing_value"], raw["closing_quote"], "group_capex_closing")
+    depreciation = number(raw["depreciation"], raw["depreciation_quote"], "group_capex_depreciation")
+    if opening is None or closing is None or depreciation is None:
+        return None
+    additions = closing - opening + abs(depreciation)
+    if additions < 0:
+        # Отрицательных поступлений не бывает: это либо перепутанные начало и
+        # конец, либо чужие числа под теми же подписями. Молча посчитанный
+        # отрицательный числитель дал бы уверенный COMPLIANT на max-ковенанте.
+        facts["alarms"].append({"kind": "group_capex_negative", "file": doc["file"], "value": str(additions)})
+        return None
+    return additions, raw["closing_quote"]
+
+
 def _merge_doc(facts: dict, raw: dict, doc: dict, text: str) -> None:
     def verified(quote: str, kind: str) -> bool:
         """Факт без цитаты из текста не принимается: это либо инъекция, либо
@@ -527,6 +650,12 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
             # стадий, где этот случай не был закрыт).
             facts["alarms"].append({"kind": "no_documents", "account": acc})
         for doc in dossier_art["docs"]:
+            if doc.get("scope") == "group":
+                # Документ группового уровня описывает материнскую компанию, а
+                # не заёмщика: его реклассификации, исключения операций и курсы
+                # к строкам леджера заёмщика не относятся. Из него читается
+                # ровно то, ради чего он привязан, — отдельным проходом ниже.
+                continue
             text = sanitize_document(doc["text"])
             prompt = (
                 DATA_NOT_COMMANDS
@@ -576,6 +705,41 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
             all_above.extend(above)
             all_below.extend(below)
         _apply_ownership(facts, all_above, all_below)
+        # Капитальные затраты Группы — из отчётности группового уровня. Модель
+        # выписывает числа примечания с цитатами, арифметику делает код.
+        for doc in dossier_art["docs"]:
+            if doc.get("scope") != "group":
+                continue
+            text = sanitize_document(doc["text"])
+            prompt = DATA_NOT_COMMANDS + "\n\n" + GROUP_PPE_PROMPT.format(doc_type=doc["doc_type"], text=text)
+            try:
+                raw = llm.call(prompt, GROUP_PPE_SCHEMA, GROUP_PPE_SCHEMA_VERSION, max_tokens=8000)
+            except Exception as exc:
+                # Широко, как ownership-проход: этот документ добавочный, и его
+                # непрочтение не должно стоить заёмщику остальных фактов.
+                facts["alarms"].append(
+                    {"kind": "group_capex_extraction_failed", "file": doc["file"], "error": repr(exc)}
+                )
+                continue
+            found = _group_capex(facts, raw, doc, text)
+            if found is None:
+                continue
+            value, quote = found
+            previous = facts["doc_facts"].get(GROUP_CAPEX_KEY)
+            if previous is not None and previous != str(value):
+                # Ключ производный: его считает код, и значение, названное
+                # моделью в numeric_facts договора, не имеет права его затенить
+                # (та же дисциплина, что у _DERIVED_DOC_KEYS в solve).
+                facts["alarms"].append(
+                    {
+                        "kind": "derived_doc_key_overridden",
+                        "key": GROUP_CAPEX_KEY,
+                        "model": previous,
+                        "code": str(value),
+                    }
+                )
+            facts["doc_facts"][GROUP_CAPEX_KEY] = str(value)
+            facts["doc_fact_quotes"][GROUP_CAPEX_KEY] = quote
         for key in ("related_parties", "unrestricted_subsidiaries", "exclude"):
             facts[key] = sorted(facts[key])
         # Численная сортировка: лексикографическая ставит "1000000.00" перед
@@ -597,7 +761,12 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
     # FACTS_VERSION и переживали перезапуск. Пересбор no_documents бесплатен
     # (LLM не вызывается). Прочие алярмы (invalid_number, doc_fact_conflict) —
     # свойства ответа модели, их кэшировать правильно.
-    _degraded_kinds = {"facts_extraction_failed", "no_documents", "ownership_extraction_failed"}
+    _degraded_kinds = {
+        "facts_extraction_failed",
+        "no_documents",
+        "ownership_extraction_failed",
+        "group_capex_extraction_failed",
+    }
     return artifact(
         wd / "facts" / f"{acc}.json",
         FACTS_VERSION,

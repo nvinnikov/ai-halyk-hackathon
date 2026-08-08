@@ -104,9 +104,11 @@ def _(rows, f):
     return (ebitda(rows) + addbacks) / revenue(rows)
 
 
-@metric("group_capex_to_ebitda")
+@metric("group_capex_to_ebitda")  # капитальные затраты ГРУППЫ / EBITDA заёмщика
 def _(rows, f):
-    return totals(rows)["CAPEX"] / ebitda(rows)
+    # Числителя нет в леджере: он берётся из консолидированной отчётности
+    # материнской компании — леджер знает только затраты самого заёмщика.
+    return Decimal(str(f["doc_facts"]["group_capex"])) / ebitda(rows)
 
 
 @metric("tax_utility_to_ebitda")

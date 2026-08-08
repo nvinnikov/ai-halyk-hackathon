@@ -16,13 +16,15 @@
  },
  "dataset_hash": "03b886a4f357722e",
  "dirty_rows": 2,
- "fallback_rate": 0.05555555555555555,
+ "fallback_rate": 0.027777777777777776,
  "index_alarms": [],
  "pdf_count": 200,
- "public_score": 34.5,
+ "public_score": 35.0,
  "stage_alarms": {
+  "group_doc_attached": 1,
   "quote_unverified": 1,
-  "routing_quarantine": 133
+  "routing_quarantine": 133,
+  "target_doc_dropped_as_other": 13
  },
  "targets": 12
 }

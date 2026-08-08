@@ -18,11 +18,16 @@ from score import score
 PUBLIC_ZIP = Path("6a741640c31eb032062683.zip")
 GT = json.loads(Path("dataset/agentic-bank-public/ground_truth.json").read_text())["scenarios"]
 TEMPLATE = json.loads(Path("dataset/agentic-bank-public/submission_template.json").read_text())
-BASELINE = 34.00
+# 35.00 — было 34.00. Причина: капитальные затраты Группы у P5 6.1. Шаблон
+# перестал считать числитель по леджеру (там лежат затраты самого заёмщика, а
+# не Группы — другая величина) и берёт doc(group_capex); эталон извлечения
+# (eval/expected_extraction.py) получил это число из примечания об основных
+# средствах консолидированной отчётности. Ячейка была 0.00 по статусу.
+BASELINE = 35.00
 # Потолок фундамента по LOBO-замеру: скор выше — признак подгонки под публичный
 # ключ, а не улучшения. Легитимный рост потолка поднимается осознанно, тем же
 # коммитом, что и его причина.
-MAX_SCORE = 34.00
+MAX_SCORE = 35.00
 CELL_FIELDS = ("actual", "evidence_txn_id", "status")
 
 
