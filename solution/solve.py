@@ -983,6 +983,16 @@ def _build_run_report(archive: Path, ds_hash: str, wd: Path, duration_s: float) 
         "alarm_counts": _alarm_counts(wd),
         "git_sha": _git_sha(),
         "duration_s": duration_s,
+        # Вердикт «прогон по публичному набору» пишется здесь, где архив под
+        # рукой, а не выводится потребителем из хранимого отпечатка (ревью
+        # PR #18, круг 5). eval/public_baseline.json константой не является:
+        # `sanity.py <любой>.zip --write-baseline` кладёт туда dataset_hash
+        # переданного архива, и ре-baseline по приватному набору (прямая
+        # рекомендация docs/ops/fresh-workdir-noise-diagnosis.md) сделал бы
+        # «публичным отпечатком» приватный хеш. Сравнение байтов леджера от
+        # этого не зависит вовсе, а его собственный fail-safe — «любой сбой
+        # сопоставления — не публичный».
+        "is_public_dataset": _is_public_dataset(archive, ROOT / "dataset" / "agentic-bank-public"),
     }
 
 

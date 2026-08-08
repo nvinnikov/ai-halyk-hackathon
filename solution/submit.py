@@ -12,19 +12,32 @@ import shutil
 
 import util
 
-# Отпечаток публичного набора — из того же снимка, что читает стоп-проверка
-# sanity.py. Общий источник осознан: живость обоих держится на одной
-# предполётной строке ранбука («стоп-проверка жива»), и baseline с хешем от
-# старой упаковки убил бы сразу обе — а проверять одну строку в окне дешевле,
-# чем две.
-_BASELINE = util.ROOT / "eval" / "public_baseline.json"
 
+def _run_was_public(out) -> bool | None:
+    """Прогон, оставивший этот submission, шёл по публичному набору?
 
-def _public_dataset_hash() -> str | None:
+    None — установить не удалось: нет отчёта, битый JSON, отчёт от другого
+    прогона, поле не записано (отчёт от версии до этой правки).
+
+    Вердикт читается ГОТОВЫМ из run-report: его пишет solve, где архив под
+    рукой, сравнением байтов леджера. Выводить его здесь из хранимого
+    отпечатка нельзя (ревью PR #18, круг 5) — eval/public_baseline.json не
+    константа, `sanity.py <любой>.zip --write-baseline` кладёт туда хеш
+    переданного архива.
+    """
+    report = out / "run-report.json"
     try:
-        return json.loads(_BASELINE.read_text())["dataset_hash"]
+        # Отчёт старше submission — он от другого прогона, и судить по нему
+        # нельзя ни в какую сторону (ревью PR #18, круг 4). Корень чинится в
+        # solve.main, где отчёт снимается вместе с записью скелета; здесь —
+        # страховка на случай, когда submission.json пришёл не оттуда
+        # (восстановлен из снапшота, положен руками).
+        if report.stat().st_mtime < (out / "submission.json").stat().st_mtime:
+            return None
+        value = json.loads(report.read_text()).get("is_public_dataset")
     except Exception:
         return None
+    return value if isinstance(value, bool) else None
 
 
 def _refuse_if_public_run(out) -> None:
@@ -36,33 +49,21 @@ def _refuse_if_public_run(out) -> None:
     снял бы его снапшотом как кандидата на отправку. Проверка на выходе — одна
     точка на все пути перезаписи разом, вместо гейта на каждую цель.
 
-    Fail-open, если происхождение прогона не установлено: нет run-report, битый
-    JSON, нет baseline. Отправленная работа лучше неотправленной, поэтому
-    неизвестность печатается, но не блокирует, — блокирует только доказанный
-    публичный отпечаток.
+    Fail-open везде, где происхождение установить не удалось: неизвестность
+    печатается, но не блокирует. Блокирует только доказанный публичный прогон —
+    там снапшот и правда снимать нечего.
     """
-    public = _public_dataset_hash()
-    report = out / "run-report.json"
-    try:
-        got = json.loads(report.read_text())["dataset_hash"]
-        # Отчёт старше submission — он от другого прогона, и судить по нему
-        # нельзя ни в какую сторону (ревью PR #18, круг 4). Корень чинится в
-        # solve.main, где отчёт снимается вместе с записью скелета; здесь —
-        # страховка на случай, когда submission.json пришёл не оттуда
-        # (восстановлен из снапшота, положен руками).
-        if report.stat().st_mtime < (out / "submission.json").stat().st_mtime:
-            got = None
-    except Exception:
-        got = None
-    if got is None or public is None:
+    was_public = _run_was_public(out)
+    if was_public is None:
         print(
-            "происхождение прогона не установлено (нет run-report или baseline) — снапшот снимается как есть",
+            "происхождение прогона не установлено (нет run-report или он от другого прогона) — "
+            "снапшот снимается как есть",
             flush=True,
         )
         return
-    if got == public:
+    if was_public:
         print(
-            f"!!! ОТКАЗ: прогон принадлежит ПУБЛИЧНОМУ НАБОРУ (dataset_hash {got}) !!!\n"
+            "!!! ОТКАЗ: прогон шёл по ПУБЛИЧНОМУ НАБОРУ !!!\n"
             "  out/submission.json — ответы по публичному набору, снапшот кандидатом на отправку не будет.\n"
             "  Перезапустите боевой прогон: make run ARCHIVE=<приватный>.zip",
             flush=True,

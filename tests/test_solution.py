@@ -348,6 +348,21 @@ def test_run_report_failure_does_not_kill_run(monkeypatch):
             assert_cell_valid(cell, f"{sc} {clause}")
 
 
+def test_run_report_carries_public_dataset_verdict(isolated_out):
+    """Вердикт о происхождении прогона пишет solve, а не выводит потребитель
+    (ревью PR #18, круг 5): eval/public_baseline.json перезаписывается
+    `sanity.py <любой>.zip --write-baseline`, и приватный хеш в нём штатно
+    возможен. Сравнение байтов леджера от снимка не зависит.
+
+    main зовётся своим вызовом, а не через фикстуру answers: соседний тест
+    роняет _build_run_report, и после него отчёта на диске нет — порядок тестов
+    не должен решать, что здесь проверяется.
+    """
+    solve.main(PUBLIC_ZIP, facts_source="expected")
+    report = json.loads((isolated_out / "run-report.json").read_text())
+    assert report["is_public_dataset"] is True, "прогон публичного архива не опознан как публичный"
+
+
 def test_stale_run_report_removed_with_skeleton(isolated_out, monkeypatch):
     """Отчёт прошлого прогона не переживает начало нового (ревью PR #18, круг 4).
 

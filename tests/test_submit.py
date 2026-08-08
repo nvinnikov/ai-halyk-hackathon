@@ -103,14 +103,22 @@ def test_diff_silent_when_answers_unchanged(isolated_out, capsys):
 # out/submission.json результат по публичному набору, и следующий `make submit`
 # снял бы его снапшотом как кандидата на отправку. Проверка на выходе — одна
 # точка на все пути перезаписи разом.
+#
+# Вердикт берётся готовым из run-report (поле is_public_dataset, его пишет
+# solve сравнением байтов леджера). Хранимый отпечаток тут не годится: ревью
+# PR #18, круг 5 — eval/public_baseline.json перезаписывается
+# `sanity.py <любой>.zip --write-baseline` и приватный хеш в нём штатно
+# возможен.
 
-PUBLIC_HASH = json.loads((util.ROOT / "eval" / "public_baseline.json").read_text())["dataset_hash"]
+
+def _report(out, **fields):
+    (out / "run-report.json").write_text(json.dumps(fields))
 
 
 def test_snapshot_refuses_public_dataset_run(isolated_out, capsys):
     out, _work = isolated_out
     _write_submission(out, {"P1": {"6.1": {"status": "COMPLIANT"}}})
-    (out / "run-report.json").write_text(json.dumps({"dataset_hash": PUBLIC_HASH}))
+    _report(out, is_public_dataset=True)
     with pytest.raises(SystemExit):
         submit.snapshot()
     assert not (out / "submission-1.json").exists(), "снапшот публичного прогона всё-таки создан"
@@ -120,8 +128,19 @@ def test_snapshot_refuses_public_dataset_run(isolated_out, capsys):
 def test_snapshot_allows_private_dataset_run(isolated_out):
     out, _work = isolated_out
     _write_submission(out, {"P1": {"6.1": {"status": "COMPLIANT"}}})
-    (out / "run-report.json").write_text(json.dumps({"dataset_hash": "0123456789abcdef"}))
+    _report(out, is_public_dataset=False)
     assert submit.snapshot() == 1
+
+
+def test_snapshot_proceeds_when_verdict_field_absent(isolated_out, capsys):
+    """Отчёт от версии до этой правки поля не несёт — это «не установлено», а
+    не «не публичный»: молчаливое «не публичный» пропустило бы ровно тот
+    сценарий, ради которого проверка и вводилась."""
+    out, _work = isolated_out
+    _write_submission(out, {"P1": {"6.1": {"status": "COMPLIANT"}}})
+    _report(out, dataset_hash="03b886a4f357722e")
+    assert submit.snapshot() == 1
+    assert "происхождение прогона не установлено" in capsys.readouterr().out
 
 
 def test_snapshot_proceeds_when_run_report_older_than_submission(isolated_out, capsys):
@@ -130,16 +149,15 @@ def test_snapshot_proceeds_when_run_report_older_than_submission(isolated_out, c
     solve пишет отчёт последним, а скелет submission — первым, поэтому
     прерванный прогон штатно оставляет пару «свежий submission + отчёт
     прошлого прогона». Судить по такому отчёту нельзя ни в какую сторону:
-    публичный хеш от репетиции обернулся бы отказом снять снапшот с приватных
-    ответов упавшего боевого прогона, а ранбук в этом месте велит снимать
-    снапшот немедленно.
+    вердикт от репетиции по публичному архиву обернулся бы отказом снять
+    снапшот с приватных ответов упавшего боевого прогона, а ранбук в этом
+    месте велит снимать снапшот немедленно.
     """
     out, _work = isolated_out
-    (out / "run-report.json").write_text(json.dumps({"dataset_hash": PUBLIC_HASH}))
+    _report(out, is_public_dataset=True)
     _write_submission(out, {"P1": {"6.1": {"status": "COMPLIANT"}}})
-    report, submission = out / "run-report.json", out / "submission.json"
-    os.utime(report, (1_000_000, 1_000_000))
-    os.utime(submission, (2_000_000, 2_000_000))
+    os.utime(out / "run-report.json", (1_000_000, 1_000_000))
+    os.utime(out / "submission.json", (2_000_000, 2_000_000))
     assert submit.snapshot() == 1
     assert "происхождение прогона не установлено" in capsys.readouterr().out
 
