@@ -77,11 +77,14 @@ def public_hash():
     from ledger import extract_archive
 
     ds_hash, _ = extract_archive(PUBLIC_ZIP)
-    if not (Path("work") / ds_hash / "text").is_dir():
-        # Холодный CI: work/ пуст, text/-артефакты — продукт живого прогона
-        # документного конвейера. Все тесты этой фикстуры (включая shift/fx)
-        # честно пропускаются, а не падают на отсутствующем прогреве.
-        pytest.skip("публичный workdir не прогрет")
+    wd = Path("work") / ds_hash
+    if not ((wd / "text").is_dir() and (wd / "route").is_dir()):
+        # Холодный CI: work/ пуст. Проверять только text/ мало — text/
+        # создаёт и sanity без LLM (extract_pages), а shift/fx-мутациям
+        # нужен route/ — продукт полного документного прогона. Гард по
+        # одному text/ ронял эти тесты на workdir, «прогретом» одной
+        # sanity. Все тесты фикстуры честно пропускаются, а не падают.
+        pytest.skip("публичный workdir не прогрет (нет text/ и route/)")
     return ds_hash
 
 

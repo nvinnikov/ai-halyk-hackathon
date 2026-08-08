@@ -55,6 +55,16 @@ def is_blind(text: str) -> bool:
     return len(t) < _MIN_CHARS and len(_NUM.findall(t)) < _MIN_NUMBERS
 
 
+def is_borderline(text: str) -> bool:
+    """Ровно один критерий слепоты из двух: страница видима правилом «И»,
+    но ослепла бы при «ИЛИ». Порог «И» откалиброван на одном публичном
+    наборе (research §3, оговорка): резкий рост пограничных страниц в
+    sanity-отчёте на новом архиве означает, что сканов больше и правило
+    пора переключать на «ИЛИ» прямо в окне."""
+    t = _normalize(text)
+    return (len(t) < _MIN_CHARS) != (len(_NUM.findall(t)) < _MIN_NUMBERS)
+
+
 def extract_pages(wd: Path, pdf_path: Path) -> dict:
     def build() -> dict:
         pages = []

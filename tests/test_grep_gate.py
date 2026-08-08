@@ -38,6 +38,17 @@ def test_planted_literal_caught(tmp_path):
     assert hits[0]["literal"] in {"4_000_000", "P3"}
 
 
+def test_planted_threshold_with_separators_caught(tmp_path):
+    """Порог с разделителями тысяч (запятая, пробел, NBSP) не проходит гейт."""
+    bad = tmp_path / "bad.py"
+    bad.write_text('a = "porog $4,000,000"\nb = "porog $4 000 000"\nc = "porog $4\u00a0000\u00a0000"\n')
+    hits = scan([bad])
+    literals = {h["literal"] for h in hits}
+    assert "4,000,000" in literals
+    assert "4 000 000" in literals
+    assert "4\u00a0000\u00a0000" in literals
+
+
 def test_planted_violation_in_solution(tmp_path):
     """Файлы solution сканируются на нарушения (без исключений allowlist)."""
     # Поддельный каталог solution в tmp_path
