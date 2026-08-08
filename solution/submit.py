@@ -8,6 +8,7 @@ util.OUT/util.WORK читаются через модуль, а не биндя�
 """
 
 import json
+import os
 import shutil
 
 import util
@@ -52,6 +53,13 @@ def _refuse_if_public_run(out) -> None:
     Fail-open везде, где происхождение установить не удалось: неизвестность
     печатается, но не блокирует. Блокирует только доказанный публичный прогон —
     там снапшот и правда снимать нечего.
+
+    У блокировки есть обход SUBMIT_FORCE=1, и он несущий (ревью PR #18,
+    круг 7): вердикт под ней — эвристика, `_is_public_dataset` сравнивает
+    только байты леджера. Приватный пакет, приехавший с тем же
+    master_ledger_2025.csv и другими документами, опознался бы как публичный
+    (гейт require-private-archive такое не поймает — зипы разные), и отказ без
+    обхода стал бы тупиком: совет перезапустить прогон даёт тот же вердикт.
     """
     was_public = _run_was_public(out)
     if was_public is None:
@@ -62,10 +70,18 @@ def _refuse_if_public_run(out) -> None:
         )
         return
     if was_public:
+        if os.environ.get("SUBMIT_FORCE") == "1":
+            print(
+                "SUBMIT_FORCE=1: прогон опознан как публичный, снапшот снимается принудительно",
+                flush=True,
+            )
+            return
         print(
             "!!! ОТКАЗ: прогон шёл по ПУБЛИЧНОМУ НАБОРУ !!!\n"
             "  out/submission.json — ответы по публичному набору, снапшот кандидатом на отправку не будет.\n"
-            "  Перезапустите боевой прогон: make run ARCHIVE=<приватный>.zip",
+            "  Перезапустите боевой прогон: make run ARCHIVE=<приватный>.zip\n"
+            "  Если это ЛОЖНОЕ срабатывание (приватный набор с тем же леджером) — "
+            "SUBMIT_FORCE=1 make submit",
             flush=True,
         )
         raise SystemExit(1)

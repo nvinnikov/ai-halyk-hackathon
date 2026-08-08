@@ -115,6 +115,14 @@ def _report(out, **fields):
     (out / "run-report.json").write_text(json.dumps(fields))
 
 
+@pytest.fixture(autouse=True)
+def no_force(monkeypatch):
+    """SUBMIT_FORCE снимается по умолчанию: иначе экспортированная в оболочке
+    переменная молча переводила бы тесты отказа в проверку обхода — тот же
+    класс, что унаследованный ARCHIVE в тестах гейтов (ревью PR #18, круг 3)."""
+    monkeypatch.delenv("SUBMIT_FORCE", raising=False)
+
+
 def test_snapshot_refuses_public_dataset_run(isolated_out, capsys):
     out, _work = isolated_out
     _write_submission(out, {"P1": {"6.1": {"status": "COMPLIANT"}}})
@@ -122,7 +130,25 @@ def test_snapshot_refuses_public_dataset_run(isolated_out, capsys):
     with pytest.raises(SystemExit):
         submit.snapshot()
     assert not (out / "submission-1.json").exists(), "снапшот публичного прогона всё-таки создан"
-    assert "ПУБЛИЧНОМУ НАБОРУ" in capsys.readouterr().out
+    printed = capsys.readouterr().out
+    assert "ПУБЛИЧНОМУ НАБОРУ" in printed
+    assert "SUBMIT_FORCE=1" in printed, "отказ не называет выход — под таймером его придётся придумывать"
+
+
+def test_snapshot_force_overrides_refusal(isolated_out, capsys, monkeypatch):
+    """Критерий под отказом — эвристика: solve._is_public_dataset сравнивает
+    только байты леджера, а приватный пакет может приехать с тем же леджером и
+    другими документами (ревью PR #18, круг 7). Отказ без обхода превратил бы
+    ложное срабатывание в тупик: совет «перезапустите прогон» даст тот же
+    вердикт, и выйти можно было бы только копированием файла руками.
+    """
+    out, _work = isolated_out
+    _write_submission(out, {"P1": {"6.1": {"status": "COMPLIANT"}}})
+    _report(out, is_public_dataset=True)
+    monkeypatch.setenv("SUBMIT_FORCE", "1")
+    assert submit.snapshot() == 1
+    assert (out / "submission-1.json").exists()
+    assert "принудительно" in capsys.readouterr().out
 
 
 def test_snapshot_allows_private_dataset_run(isolated_out):
