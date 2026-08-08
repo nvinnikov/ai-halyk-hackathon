@@ -44,9 +44,11 @@ CASSETTE = ROOT / "eval" / "cassette"
 # до 2×MAX_ATTEMPTS запросов).
 MAX_ATTEMPTS = 4
 DEFAULT_MAX_TOKENS = 8000
-# стандартный прайс Sonnet 5; до 2026-08-31 действует вводный $2/$10 за млн —
-# учёт консервативен в 1.5 раза
-PRICE_IN, PRICE_OUT = 3e-6, 15e-6
+# Прайс Haiku 4.5 (модель в MODEL выше): $1/$5 за млн токенов. Раньше здесь
+# стоял прайс Sonnet — счётчик завышал трату втрое, и дефолтный потолок
+# LLM_BUDGET_USD=50 сработал бы уже на ~$17 реальных денег: BudgetExhausted
+# посреди окна = ячейки по лестнице (ревью PR #9, 22-я волна).
+PRICE_IN, PRICE_OUT = 1e-6, 5e-6
 
 RETRYABLE = (
     anthropic.RateLimitError,
