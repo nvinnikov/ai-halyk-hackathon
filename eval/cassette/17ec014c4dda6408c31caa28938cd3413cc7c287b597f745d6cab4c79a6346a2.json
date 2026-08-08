@@ -1,0 +1,23 @@
+{
+ "result": {
+  "shares": [
+   {
+    "name": "Pavlodar Plant Services LLP",
+    "quote": "Pavlodar Plant Services LLP 33.8%",
+    "share_percent": "33.8"
+   },
+   {
+    "name": "Sarybel Capital LLP.",
+    "quote": "Sarybel Capital LLP. 41.2%",
+    "share_percent": "41.2"
+   },
+   {
+    "name": "Ural Turbine Works LLP",
+    "quote": "Ural Turbine Works LLP 9.4%",
+    "share_percent": "9.4"
+   }
+  ],
+  "threshold_percent": "35.0",
+  "threshold_quote": "Организации, в которых Группа владеет 35.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal
 
+from engine import LEGAL_FORMS
 from taxonomy import is_category
 
 
@@ -112,6 +113,44 @@ _TOKEN = re.compile(
 _SIGNS = {"out", "in", "net"}
 _SETS = {"related_parties", "unrestricted_subsidiaries"}
 _FILTERS = {"period", "quarter", "counterparty_in", "txn_in", "min_amount", "desc_contains"}
+
+# Основы слов, по которым строка распознаётся как НАЗВАНИЕ множества, а не имя
+# контрагента. Не привязка к языку договора: обе формулировки, которыми
+# множество называют в тексте, — на равных правах, набор расширяется, а не
+# заменяется. Основы, не полные фразы: падежи и род («связанных сторон»,
+# «аффилированного лица») ловятся тем же элементом.
+_SET_STEMS = {
+    "related_parties": ("related part", "affiliat", "связанн", "аффилир"),
+    "unrestricted_subsidiaries": ("unrestricted sub", "необремен", "неограничен"),
+}
+
+
+def _as_set_name(value: object) -> str | None:
+    """Имя множества, если строка — его название; иначе None.
+
+    Литеральный список у counterparty_in — перечень контрагентов, и матч в
+    интерпретаторе идёт по токенам имени. Название множества человеческими
+    словами (`['аффилированные лица']`) не совпадёт ни с одним контрагентом:
+    фильтр отсечёт весь леджер и ячейка гарантированно обнулится. Поэтому такая
+    строка разрешается в само множество — форма аргумента, а не данные.
+    """
+    if not isinstance(value, str):
+        return None
+    if value in _SETS:
+        return value
+    norm = " ".join(value.lower().replace("ё", "е").split())
+    # Признак юрлица закрывает разрешение: основы названий множеств («affiliat»,
+    # «связанн») встречаются и в настоящих именах компаний, а название множества
+    # юрформы не содержит. Промах в эту сторону молчалив и дорог — вместо одного
+    # контрагента фильтр берёт весь набор связанных сторон, сумма растёт на
+    # чужие строки, вердикт остаётся правдоподобным и алярма нет. Обратный
+    # промах даёт нулевую агрегацию и ловится лестницей фолбэков.
+    if LEGAL_FORMS & set(re.split(r"[^\w]+", norm)):
+        return None
+    for setname, stems in sorted(_SET_STEMS.items()):
+        if any(stem in norm for stem in stems):
+            return setname
+    return None
 
 
 def _tokenize(text: str) -> list[tuple[str, str]]:
@@ -303,15 +342,24 @@ def _build_filter(name, args):
                 raise DslError(f"неизвестное множество {setname!r}")
             return CounterpartyIn(setname=setname)
         if _is_lit(args[0], "list"):
-            return CounterpartyIn(setname=args[0][1])
+            items = args[0][1]
+            # Список, целиком являющийся названием одного множества, — то же
+            # множество: `['аффилированные лица']` перечисляет не контрагентов.
+            # Целиком, а не по одному элементу: смешанный список (описание плюс
+            # настоящее имя) остаётся буквальным — там имя ещё сматчится, а
+            # подмена множеством стёрла бы его.
+            resolved = {_as_set_name(i) for i in items} if items else {None}
+            if len(resolved) == 1 and (setname := resolved.pop()) is not None:
+                return CounterpartyIn(setname=setname)
+            return CounterpartyIn(setname=items)
         if _is_lit(args[0], "str"):
             # Модель иногда путает две формы аргумента и кавычит то, что
             # грамматика ждёт голым идентификатором: counterparty_in
             # ('related_parties') вместо counterparty_in(related_parties).
-            # Строка, совпадающая с именем известного множества, — то же
-            # множество; любая другая строка — список из одного контрагента.
+            # Строка, называющая известное множество, — то же множество; любая
+            # другая строка — список из одного контрагента.
             value = args[0][1]
-            return CounterpartyIn(setname=value if value in _SETS else (value,))
+            return CounterpartyIn(setname=_as_set_name(value) or (value,))
     if name == "txn_in" and len(args) == 1 and _is_lit(args[0], "list"):
         return TxnIn(ids=args[0][1])
     if name == "min_amount" and len(args) == 1:

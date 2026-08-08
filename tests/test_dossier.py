@@ -95,6 +95,76 @@ def test_cumulative_types_keep_all_docs(monkeypatch, tmp_path):
     assert d["docs_rejected"] == []
 
 
+def test_cumulative_type_drops_superseded_edition(monkeypatch, tmp_path):
+    """Кумулятивность — про то, что редакции не выбирают по дате, а не про
+    право читать замененный черновик. Рабочий документ с маркером «заменён»
+    несёт предварительное решение; применить его — исказить ковенант."""
+    routes = {
+        "final.pdf": base("final.pdf", dtype="audit_report", date="", edition="final"),
+        "draft.pdf": base("draft.pdf", dtype="audit_report", date="", edition="superseded"),
+    }
+    make_route(monkeypatch, routes, {})
+    d = dossier.build_dossiers(tmp_path, [Path("final.pdf"), Path("draft.pdf")], INDEX)["ACC-1"]
+    assert [x["file"] for x in d["docs"]] == ["final.pdf"]
+    assert d["docs_rejected"] == [{"file": "draft.pdf", "reason": "superseded_edition", "kept": "final.pdf"}]
+
+
+def test_cumulative_type_drops_lone_draft(monkeypatch, tmp_path):
+    """Черновик кумулятивного типа не несёт решений — даже единственный.
+
+    Промежуточная ведомость аудитора сама пишет, что она рабочий документ, не
+    окончательная позиция, и что первоначальная классификация сохраняется.
+    Отбросить её — значит оставить операцию в исходной категории, то есть ровно
+    то, что документ и предписывает. Граница «draft против superseded» здесь
+    решается кодом, а не моделью: в тексте таких ведомостей стоят оба маркера
+    сразу, и выбор между ними был бы недетерминирован."""
+    routes = {"d.pdf": base("d.pdf", dtype="audit_report", date="", edition="draft")}
+    make_route(monkeypatch, routes, {})
+    d = dossier.build_dossiers(tmp_path, [Path("d.pdf")], INDEX)["ACC-1"]
+    assert d["docs"] == []
+    assert d["docs_rejected"] == [{"file": "d.pdf", "reason": "draft_edition", "kept": None}]
+
+
+def test_cumulative_type_keeps_draft_treasury_memo(monkeypatch, tmp_path):
+    """Записка казначейства — рабочий документ по природе: окончательной формы у
+    неё нет, заменённой она себя не объявляет, и её черновик несёт настоящее
+    исправление суммы. Правило про черновики касается только типов с
+    окончательной формой."""
+    routes = {"m.pdf": base("m.pdf", dtype="treasury_memo", date="", edition="draft")}
+    make_route(monkeypatch, routes, {})
+    d = dossier.build_dossiers(tmp_path, [Path("m.pdf")], INDEX)["ACC-1"]
+    assert [x["file"] for x in d["docs"]] == ["m.pdf"]
+
+
+def test_cumulative_type_drops_superseded_treasury_memo(monkeypatch, tmp_path):
+    """Маркер «заменён» отменяет документ любого кумулятивного типа: тут
+    сомнений в редакции нет, в отличие от черновика."""
+    routes = {"m.pdf": base("m.pdf", dtype="treasury_memo", date="", edition="superseded")}
+    make_route(monkeypatch, routes, {})
+    d = dossier.build_dossiers(tmp_path, [Path("m.pdf")], INDEX)["ACC-1"]
+    assert d["docs"] == []
+
+
+def test_noncumulative_type_keeps_lone_draft(monkeypatch, tmp_path):
+    """Договор — не решение, а источник самого ковенанта: единственный черновик
+    договора остаётся, иначе считать нечего. Правило про черновики касается
+    только типов, несущих документальные решения."""
+    routes = {"a.pdf": base("a.pdf", dtype="agreement", edition="draft")}
+    make_route(monkeypatch, routes, {})
+    d = dossier.build_dossiers(tmp_path, [Path("a.pdf")], INDEX)["ACC-1"]
+    assert [x["file"] for x in d["docs"]] == ["a.pdf"]
+
+
+def test_cumulative_type_all_superseded_leaves_no_docs(monkeypatch, tmp_path):
+    """Ни одной действующей редакции — досье без документов этого типа, а не
+    откат к замененному: тот же инвариант, что у некумулятивных типов."""
+    routes = {"a.pdf": base("a.pdf", dtype="audit_report", date="", edition="superseded")}
+    make_route(monkeypatch, routes, {})
+    d = dossier.build_dossiers(tmp_path, [Path("a.pdf")], INDEX)["ACC-1"]
+    assert d["docs"] == []
+    assert d["docs_rejected"] == [{"file": "a.pdf", "reason": "superseded_edition", "kept": None}]
+
+
 def test_single_superseded_is_never_active(monkeypatch, tmp_path):
     routes = {"a.pdf": base("a.pdf", edition="superseded")}
     make_route(monkeypatch, routes, {})

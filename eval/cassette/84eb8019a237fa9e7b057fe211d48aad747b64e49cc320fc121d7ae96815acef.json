@@ -1,0 +1,28 @@
+{
+ "result": {
+  "shares": [
+   {
+    "name": "Atyrau Pipeline Engineering LLP",
+    "quote": "Atyrau Pipeline Engineering LLP 11.7%",
+    "share_percent": "11.7"
+   },
+   {
+    "name": "Kazyna Capital LLP.",
+    "quote": "Kazyna Capital LLP. 38.9%",
+    "share_percent": "38.9"
+   },
+   {
+    "name": "Shymkent Fuel Distributors LLP",
+    "quote": "Shymkent Fuel Distributors LLP 48.0%",
+    "share_percent": "48.0"
+   },
+   {
+    "name": "Turkistan Petroleum Traders LLP",
+    "quote": "Turkistan Petroleum Traders LLP 29.4%",
+    "share_percent": "29.4"
+   }
+  ],
+  "threshold_percent": "30.0",
+  "threshold_quote": "Организации, в которых Группа владеет 30.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

@@ -5,11 +5,19 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import llm
+from engine import tokens
 from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 2
+FACTS_VERSION = 6
+# v4 — DOSSIER_VERSION=8: правило недействующих редакций расширено на
+# черновики, набор документов снова изменился.
+# v3 — досье перестало отдавать замененные редакции кумулятивных типов
+# (DOSSIER_VERSION=7): набор документов на входе изменился, и артефакт фактов,
+# собранный по старому набору, нёс бы решения из замененного рабочего
+# документа. Пересбор бесплатен по LLM: промпт строится на ОДИН документ,
+# поэтому выпадение черновика убирает вызов, не меняя ключей остальных.
 # v2 — активационный бамп (2026-08-08, docs/ops/activation-step.md): версия
 # СОЗНАТЕЛЬНО удерживалась на 1 после смены входа (TEXT_VERSION=2, снят
 # футер страницы) и фикса paired_payment в _merge_doc — бамп на исчерпанном
@@ -165,6 +173,50 @@ FOCUS = {
     "other": "Фокус: любые факты из перечисленных ниже.",
 }
 
+OWNERSHIP_SCHEMA_VERSION = "ownership-1"
+
+# Отдельный вызов, а не поля в FACTS_SCHEMA: промпт фактов остаётся байт в байт
+# тем же, поэтому его ключи кэша не меняются и кассета переживает эту правку.
+OWNERSHIP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "shares": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "share_percent": {"type": "string"},
+                    "quote": {"type": "string"},
+                },
+                "required": ["name", "share_percent", "quote"],
+                "additionalProperties": False,
+            },
+        },
+        "threshold_percent": {"type": "string"},
+        "threshold_quote": {"type": "string"},
+    },
+    "required": ["shares", "threshold_percent", "threshold_quote"],
+    "additionalProperties": False,
+}
+
+OWNERSHIP_PROMPT = """Ниже — документ комплаенс-проверки заёмщика. Выпиши из него
+две вещи, ничего не сравнивая и не вычисляя:
+
+- shares: таблица участия — организация (name), её доля в процентах числом без
+  знака процента (share_percent, строкой) и дословная цитата строки таблицы
+  (quote). Если таблицы участия нет — пустой список.
+- threshold_percent: доля в процентах, начиная с которой документ признаёт
+  организацию связанной стороной, числом строкой; threshold_quote — дословная
+  цитата предложения, где этот порог назван. Если порог в документе не назван —
+  обе строки пустые.
+
+Не решай, кто связанная сторона: сравнение доли с порогом делается вне модели.
+
+<document type="{doc_type}">
+{text}
+</document>"""
+
 RESOLVE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -214,6 +266,116 @@ def _number_ok(value: str) -> bool:
         return Decimal(value).is_finite()
     except Exception:
         return False
+
+
+def _percent(value: str) -> Decimal | None:
+    """Доля в процентах числом; знак процента и пробелы допускаются."""
+    try:
+        d = Decimal(value.replace("%", "").replace(",", ".").strip())
+    except (InvalidOperation, AttributeError):
+        return None
+    return d if d.is_finite() else None
+
+
+def _ownership_rows(facts: dict, raw: dict, doc: dict, text: str) -> tuple[list, list]:
+    """Строки таблицы владения, разложенные по порогу: (выше-или-равно, ниже).
+
+    Порог владения применяет код: сравнение доли с порогом — арифметика.
+
+    Модель называет связанные стороны сама, но это решение держится на том, что
+    она сделала сравнение (у каждого заёмщика свой порог) — на живом прогоне
+    один заёмщик из двенадцати приходил с пустым набором при написанном в
+    документе пороге. Здесь модель только выписывает таблицу и порог, а
+    принадлежность считается здесь.
+
+    Таблица с порогом старше суждения модели по тем организациям, которые в
+    таблице есть: доля ниже порога — не связанная сторона, даже если модель её
+    назвала. Организация вне таблицы порогом не отменяется — её связанность
+    могла быть раскрыта в другом документе.
+
+    Раскладка отделена от применения (_apply_ownership) намеренно: строки
+    собираются по ВСЕМ досье комплаенс-проверки и применяются один раз, иначе
+    порядок документов решал бы исход — таблица второго документа снимала бы
+    признанное по таблице первого.
+    """
+    # Проверять существование цитаты мало: число обязано в ней стоять. Тот же
+    # инвариант, что у resolve_doc_fact ниже — иначе доля 12.5% из документа
+    # приезжает в расчёт как 31.4% при настоящей цитате, и организация молча
+    # втягивается в набор (или, что хуже, завышенный порог выкидывает из набора
+    # реально связанную сторону и обнуляет ячейку по статусу).
+    from specs_extract import _limit_in_quote
+
+    def number_from_quote(value: str, quote: str, field: str) -> Decimal | None:
+        number = _percent(value)
+        if number is None:
+            facts["alarms"].append({"kind": "invalid_number", "field": field, "value": value})
+            return None
+        if not verify_quote(quote, text):
+            facts["alarms"].append({"kind": "quote_unverified", "field": field, "file": doc["file"]})
+            return None
+        if not _limit_in_quote(str(number), quote):
+            facts["alarms"].append({"kind": "invalid_number", "field": field, "value": value})
+            return None
+        return number
+
+    if not raw["threshold_percent"]:
+        return [], []
+    threshold = number_from_quote(raw["threshold_percent"], raw["threshold_quote"], "ownership_threshold")
+    if threshold is None:
+        return [], []
+
+    above: list[dict] = []
+    below: list[dict] = []
+    for item in raw["shares"]:
+        share = number_from_quote(item["share_percent"], item["quote"], "ownership_share")
+        if share is None:
+            continue
+        row = {**item, "threshold_percent": raw["threshold_percent"]}
+        (above if share >= threshold else below).append(row)
+    return above, below
+
+
+def _apply_ownership(facts: dict, above: list[dict], below: list[dict]) -> None:
+    """Признанное таблицей — в набор; ниже порога — снять, но не своё же.
+
+    Порядок строк не должен решать исход: организация приходит в таблицу двумя
+    строками (прямая доля и косвенная), дублируется в ответе модели или
+    встречается в двух досье. Достаточно одной строки не ниже порога, чтобы
+    организация была связанной, поэтому строки ниже порога не трогают то, что
+    признано таблицей.
+    """
+    for item in above:
+        if item["name"] not in facts["related_parties"]:
+            facts["related_parties"].append(item["name"])
+        facts["related_quotes"].setdefault(item["name"], item["quote"])
+
+    above_tokens = {tokens(item["name"]) for item in above}
+    # Равенство наборов токенов, а не is_related: тот матчит подмножество в обе
+    # стороны, и короткое имя из таблицы вычищало бы более длинные чужие — имя
+    # из двух слов поглощало бы одноимённую организацию из трёх, раскрытую в
+    # другом документе, ровно вопреки обещанию докстринга. Равенство токенов
+    # переживает пунктуацию юрформы, ради которой токены и брались.
+    for item in below:
+        table_tokens = tokens(item["name"])
+        if table_tokens in above_tokens:
+            continue
+        removed = [n for n in facts["related_parties"] if tokens(n) == table_tokens]
+        for name in removed:
+            facts["related_parties"].remove(name)
+            facts["related_quotes"].pop(name, None)
+        if removed:
+            # Добавление оставляет след в related_quotes, снятие молчало бы:
+            # сузившийся набор — это статус ячейки, и в окне прогона надо
+            # видеть, кого сняли, по какой доле и против какого порога.
+            facts["alarms"].append(
+                {
+                    "kind": "ownership_below_threshold",
+                    "name": item["name"],
+                    "share": item["share_percent"],
+                    "threshold": item["threshold_percent"],
+                    "quote": item["quote"],
+                }
+            )
 
 
 def _merge_doc(facts: dict, raw: dict, doc: dict, text: str) -> None:
@@ -359,6 +521,36 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
                 )
                 continue
             _merge_doc(facts, raw, doc, text)
+        # Порог владения — вторым проходом, после всех документов: сначала
+        # набор, который назвала модель, затем правило таблицы поверх него.
+        # Только досье комплаенс-проверки: раскрытие долей с порогом живёт
+        # там, и ограничение держит стоимость на одном вызове за заёмщика.
+        # Строки собираются по всем таким документам и применяются один раз —
+        # иначе порядок документов решал бы исход.
+        all_above: list[dict] = []
+        all_below: list[dict] = []
+        for doc in dossier_art["docs"]:
+            if doc["doc_type"] != "kyc":
+                continue
+            text = sanitize_document(doc["text"])
+            prompt = DATA_NOT_COMMANDS + "\n\n" + OWNERSHIP_PROMPT.format(doc_type=doc["doc_type"], text=text)
+            try:
+                own = llm.call(prompt, OWNERSHIP_SCHEMA, OWNERSHIP_SCHEMA_VERSION, max_tokens=8000)
+            except Exception as exc:
+                # Ловим широко, в отличие от общего прохода: этот проход только
+                # уточняет уже названный моделью набор, и его падение (бюджет,
+                # промах кассеты, сеть) не должно стоить заёмщику
+                # реклассификаций, курсов и обязательств. Артефакт при таком
+                # алярме не кэшируется — причина транзиентная, перезапуск
+                # обязан перепытаться.
+                facts["alarms"].append(
+                    {"kind": "ownership_extraction_failed", "file": doc["file"], "error": repr(exc)}
+                )
+                continue
+            above, below = _ownership_rows(facts, own, doc, text)
+            all_above.extend(above)
+            all_below.extend(below)
+        _apply_ownership(facts, all_above, all_below)
         for key in ("related_parties", "unrestricted_subsidiaries", "exclude"):
             facts[key] = sorted(facts[key])
         # Численная сортировка: лексикографическая ставит "1000000.00" перед
@@ -380,7 +572,7 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
     # FACTS_VERSION и переживали перезапуск. Пересбор no_documents бесплатен
     # (LLM не вызывается). Прочие алярмы (invalid_number, doc_fact_conflict) —
     # свойства ответа модели, их кэшировать правильно.
-    _degraded_kinds = {"facts_extraction_failed", "no_documents"}
+    _degraded_kinds = {"facts_extraction_failed", "no_documents", "ownership_extraction_failed"}
     return artifact(
         wd / "facts" / f"{acc}.json",
         FACTS_VERSION,

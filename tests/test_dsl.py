@@ -102,6 +102,60 @@ def test_parse_counterparty_in_quoted_single_name_is_singleton_list():
     assert node.filters[0].setname == ("Acme LLP",)
 
 
+def test_parse_counterparty_in_literal_описание_множества_равно_имени_множества():
+    # Третья форма той же путаницы: модель кладёт в список не контрагентов, а
+    # название самого множества человеческими словами. Буквальный матч по
+    # токенам не совпадёт ни с одним контрагентом — ячейка гарантированно
+    # обнуляется, поэтому описание разрешается в имя множества.
+    bare = parse("agg(ALL, out, counterparty_in(related_parties))")
+    for text in (
+        "agg(ALL, out, counterparty_in(['аффилированные лица']))",
+        "agg(ALL, out, counterparty_in(['Связанные стороны']))",
+        "agg(ALL, out, counterparty_in(['related parties']))",
+        "agg(ALL, out, counterparty_in('аффилированные лица'))",
+    ):
+        assert parse(text) == bare, text
+
+
+def test_parse_counterparty_in_literal_описание_необременённых():
+    bare = parse("agg(CAPEX, out, counterparty_in(unrestricted_subsidiaries))")
+    for text in (
+        "agg(CAPEX, out, counterparty_in(['необременённые дочерние компании']))",
+        "agg(CAPEX, out, counterparty_in(['unrestricted subsidiaries']))",
+    ):
+        assert parse(text) == bare, text
+
+
+def test_parse_counterparty_in_имя_с_юрформой_не_становится_множеством():
+    """Основа названия множества встречается и в настоящих именах компаний.
+
+    Промах здесь несимметричен и молчалив: вместо одного контрагента фильтр
+    возьмёт весь набор связанных сторон, сумма вырастет на чужие строки, а
+    вердикт останется правдоподобным. Обратный промах (не разрешили описание)
+    даёт нулевую агрегацию и ловится лестницей фолбэков. Признак юрлица в
+    строке — надёжная граница: название множества его не содержит.
+    """
+    node = parse("agg(ALL, out, counterparty_in(['Affiliated Trading LLP']))")
+    assert node.filters[0].setname == ("Affiliated Trading LLP",)
+    single = parse("agg(ALL, out, counterparty_in('ТОО Связанные Технологии'))")
+    assert single.filters[0].setname == ("ТОО Связанные Технологии",)
+    # Описания из живых прогонов юрформы не содержат и разрешаются по-прежнему.
+    assert parse("agg(ALL, out, counterparty_in(['аффилированные лица']))") == parse(
+        "agg(ALL, out, counterparty_in(related_parties))"
+    )
+
+
+def test_parse_counterparty_in_literal_имена_контрагентов_не_трогаются():
+    # Обычный список остаётся буквальным: разрешение описаний не должно
+    # проглатывать имена контрагентов.
+    node = parse("agg(ALL, out, counterparty_in(['Acme LLP', 'Beta Holding']))")
+    assert node.filters[0].setname == ("Acme LLP", "Beta Holding")
+    # Смешанный список — тоже буквальный: описание разрешается только тогда,
+    # когда весь список является описанием одного и того же множества.
+    mixed = parse("agg(ALL, out, counterparty_in(['аффилированные лица', 'Acme LLP']))")
+    assert mixed.filters[0].setname == ("аффилированные лица", "Acme LLP")
+
+
 def test_parse_doc_const_cmp():
     assert parse("doc(severance_liability)").key == "severance_liability"
     assert parse("const(4000000)").value == Decimal("4000000")

@@ -35,6 +35,50 @@ def test_verify_quote_normalized():
     assert not verify_quote("", src)
 
 
+def test_verify_quote_ellipsis_fragments_in_order():
+    # Цитата из табличной строки: модель выкидывает разделители колонок и
+    # ставит многоточие. Дословной подстроки в источнике нет, но каждый
+    # фрагмент настоящий и порядок сохранён — факт проверяем.
+    src = "Организация | Tien Shan Advisory Bureau | Доля голосующих прав | 23.4%"
+    assert verify_quote("Tien Shan Advisory Bureau ... Доля голосующих прав ... 23.4%", src)
+    assert verify_quote("Tien Shan Advisory Bureau … 23.4%", src)
+
+
+def test_verify_quote_ellipsis_не_ослабляет_защиту():
+    src = "Организация | Tien Shan Advisory Bureau | Доля голосующих прав | 23.4%"
+    # Выдуманного фрагмента нет в источнике.
+    assert not verify_quote("Tien Shan Advisory Bureau … 99.9%", src)
+    # Фрагменты настоящие, но порядок перевёрнут — цитата не из этого места.
+    assert not verify_quote("23.4% … Tien Shan Advisory Bureau", src)
+    # Вырожденный фрагмент ничего не доказывает: 'A … 5' совпадёт почти с любым
+    # текстом, поэтому многоточие требует содержательных фрагментов.
+    assert not verify_quote("A … 5", "Alpha Bureau 5 процентов")
+
+
+def test_verify_quote_ellipsis_gap_is_bounded():
+    """Многоточие — выброшенные разделители колонок, а не прыжок по документу.
+
+    Без потолка на разрыв цитата сшивается из далёких друг от друга мест: имя
+    из одной строки таблицы и процент из другой, а у потребителей (facts,
+    specs) source — это склейка всех документов досье, то есть и из разных
+    документов. Проверка цитаты — единственное, что привязывает число к его
+    формулировке, поэтому разрыв ограничен окном абзаца.
+    """
+    src = "Tien Shan Advisory Bureau 23.4%" + " прочий текст " * 300 + "Almaty Trade 99.9%"
+    assert not verify_quote("Tien Shan Advisory Bureau … 99.9%", src)
+    # Ради чего правка делалась — строка таблицы — по-прежнему проходит.
+    assert verify_quote("Tien Shan Advisory Bureau … 23.4%", src)
+
+
+def test_verify_quote_ellipsis_single_fragment_is_not_a_loophole():
+    """Вырожденный фрагмент не спасается тем, что он в цитате один: '… 5 …'
+    после разрезания даёт единственный фрагмент длиной 1 и раньше проходил
+    мимо проверки на содержательность."""
+    assert not verify_quote("… 5 …", "Alpha 5 бета")
+    # Короткая цитата БЕЗ многоточия — обычная подстрока, её не трогаем.
+    assert verify_quote("5", "Alpha 5 бета")
+
+
 def test_data_not_commands_mentions_ignoring():
     assert "не инструкции" in DATA_NOT_COMMANDS or "не команды" in DATA_NOT_COMMANDS
 
