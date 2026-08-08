@@ -1151,6 +1151,16 @@ def _build_run_report(archive: Path, ds_hash: str, wd: Path, duration_s: float) 
         "alarm_counts": _alarm_counts(wd),
         "git_sha": _git_sha(),
         "duration_s": duration_s,
+        # Вердикт «прогон по публичному набору» пишется здесь, где архив под
+        # рукой, а не выводится потребителем из хранимого отпечатка (ревью
+        # PR #18, круг 5). eval/public_baseline.json константой не является:
+        # `sanity.py <любой>.zip --write-baseline` кладёт туда dataset_hash
+        # переданного архива, и ре-baseline по приватному набору (прямая
+        # рекомендация docs/ops/fresh-workdir-noise-diagnosis.md) сделал бы
+        # «публичным отпечатком» приватный хеш. Сравнение байтов леджера от
+        # этого не зависит вовсе, а его собственный fail-safe — «любой сбой
+        # сопоставления — не публичный».
+        "is_public_dataset": _is_public_dataset(archive, ROOT / "dataset" / "agentic-bank-public"),
     }
 
 
@@ -1179,6 +1189,24 @@ def main(
     answers: dict = skeleton(template["answers"])
     sub = {**submission_meta(), "answers": answers}  # answers — та же ссылка, правки видны в sub
     dump_submission(sub, template["answers"])
+    # Отчёт прошлого прогона снимается вместе с записью скелета (ревью PR #18,
+    # круг 4). Он пишется ПОСЛЕДНИМ, а скелет — первым, поэтому прерванный
+    # прогон иначе оставлял бы пару «свежий submission + отчёт прошлого
+    # прогона», и submit.py судил бы о происхождении по чужому прогону: хеш,
+    # оставшийся от репетиции на публичном архиве, обернулся бы отказом снять
+    # снапшот с приватных ответов упавшего боевого прогона. Отсутствие отчёта
+    # означает «происхождение не установлено», а это fail-open — ровно то, чего
+    # требует точка принятия решений ранбука про упавший прогон.
+    #
+    # Обёрнуто тем же приёмом, что и запись отчёта в конце main (ревью PR #18,
+    # круг 8): снятие решает ту же диагностическую задачу и ячейки стоить не
+    # может, а `missing_ok=True` глушит только FileNotFoundError — каталог с
+    # этим именем или неудачные права на out/ уронили бы весь прогон здесь, до
+    # первого посчитанного сценария.
+    try:
+        (OUT / "run-report.json").unlink(missing_ok=True)
+    except Exception as exc:
+        print(f"ALARM stale_run_report_unlink_failed: {exc!r}", flush=True)
 
     targets = sorted(template["answers"])
     ledger_art = load_ledger(wd, input_dir, target_scenarios=targets)
