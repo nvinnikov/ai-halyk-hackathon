@@ -205,6 +205,19 @@ def test_other_unassigned_written_when_rows_lost(monkeypatch):
         ]
         assert hit, "потерянная строка REVENUE не подняла ни одного алярма"
         assert all(a["other_sum"] != "0" for a in hit)
+        # И в общий alarms: только его читают _alarm_counts и
+        # invariants._collect_report_alarms, а в окне решают по run-report —
+        # верхнего ключа трейса и строки в stdout для этого мало.
+        in_alarms = [
+            a
+            for t in _cell_traces()
+            for a in json.loads(t.read_text()).get("alarms", [])
+            if a.get("kind") == "other_unassigned"
+        ]
+        assert in_alarms, "алярм не доехал до trace['alarms'] — run-report его не увидит"
+        assert all(a.get("scenario") and a.get("clause") for a in in_alarms), (
+            "без scenario/clause точный дедуп схлопнет срабатывания разных ячеек в одно"
+        )
     finally:
         # Трейсы на диске общие: испорченный прогон обязан быть переписан
         # чистым, иначе соседний тест увидит чужой алярм.
