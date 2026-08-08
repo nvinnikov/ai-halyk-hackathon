@@ -135,7 +135,6 @@ def _(rows, f):
             for r in rows
             if r["cat"] == "CAPEX"
             and r["amt"] < 0
-            and "subsidiary" in r["description"].lower()
             and any(s in norm(r["counterparty"]) or norm(r["counterparty"]) in s for s in subs)
         ),
         Decimal(0),

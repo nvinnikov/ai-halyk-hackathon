@@ -108,7 +108,11 @@ def test_desc_contains_tokens_survive(tmp_path):
     REPLACEMENTS) дал бы ровно ту ложную деградацию, ради которой тест и
     заведён."""
     tokens = set(re.findall(r"desc_contains\('([^']*)'\)", " ".join(TEMPLATES.values())))
-    assert tokens, "desc_contains исчез из шаблонов — тест потерял предмет"
+    if not tokens:
+        # Единственный desc_contains ушёл из библиотеки вместе с английской
+        # иглой 'subsidiary' (языковой хардкод под публичный леджер); тест
+        # остаётся гвардом на случай возвращения фильтра в шаблоны.
+        pytest.skip("в TEMPLATES нет desc_contains — мутациям нечего сохранять")
     _, report = _mutated(tmp_path)
     for token in tokens:
         src = [d for d in _source_descriptions() if token in d.lower()]

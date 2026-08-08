@@ -162,9 +162,14 @@ TEMPLATES: dict[str, str] = {
     "revenue_cover_payroll_utilities": (
         "ratio(agg(REVENUE, in), add(agg(PAYROLL, out), agg(UTILITIES, out)))"
     ),
+    # Без desc_contains('subsidiary'): английская игла существовала ради двух
+    # строк публичного леджера и на русских описаниях приватного набора
+    # («Передача оборудования дочерней организации») обнуляла бы числитель —
+    # уверенный ложный COMPLIANT на max-ковенанте. Принадлежность перевода
+    # дочке судит counterparty_in: множество имён извлекается из документов
+    # и от языка описания не зависит.
     "unrestricted_transfer_share": (
-        "ratio(agg(CAPEX, out, counterparty_in(unrestricted_subsidiaries), "
-        "desc_contains('subsidiary')), agg(CAPEX, out))"
+        "ratio(agg(CAPEX, out, counterparty_in(unrestricted_subsidiaries)), agg(CAPEX, out))"
     ),
     "insurance_cover": "ratio(agg(INSURANCE, out), add(agg(RENT, out), agg(UTILITIES, out)))",
     "revenue_less_max_overhead": "sub(agg(REVENUE, in), max(agg(PAYROLL, out), agg(TAX, out)))",
