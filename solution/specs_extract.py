@@ -20,7 +20,11 @@ from stages import artifact
 from taxonomy import LEAVES
 from templates import match_signature, title_key
 
-SPECS_STAGE_VERSION = 1
+# v2 — активационный бамп (2026-08-08): артефакт стадии кэшируется по версии,
+# а не по промпту — правки SPECS_PROMPT (пример «7% => 0.07») и
+# DATA_NOT_COMMANDS без бампа остались бы неактивными на прогретом workdir
+# (сырой ответ старого промпта продолжал бы отдаваться из specs/*.json).
+SPECS_STAGE_VERSION = 2
 SCHEMA_VERSION = "specs-1"
 
 # Порог семейного выброса (задача 23, п.5в): порог отличается от медианы
