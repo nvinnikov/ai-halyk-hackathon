@@ -78,6 +78,29 @@ debug-волне: `facts/ACC-7803.json` (P3) ДО повторного вызо�
 верификацию/производные поправки за пределы кэша `build()`, кэшировать
 только сырой ответ LLM) — отдельная задача, не входит в этот чек-лист.
 
+## Кассета заморожена под LLM_PROVIDER=gemini
+
+`eval/cassette` собрана из прогона с `LLM_PROVIDER=gemini` (модель —
+`GEMINI_MODEL` в `solution/llm.py`, см. [[llm-provider-gemini-switch]]).
+Ключ кассеты — `sha256(model + prompt + json_schema + schema_version)`, а
+`model` зависит от `LLM_PROVIDER` (дефолт в коде — `anthropic`). Любой
+офлайн-путь (`LLM_OFFLINE=1`), запущенный БЕЗ явного `LLM_PROVIDER=gemini`,
+промахивается кассетой на 100% ключей — не громким `CassetteMiss` по
+каждому, а молчаливым обнулением офлайн-гейта до фолбэков/skip.
+
+Выставлено точечно, НЕ блоком на весь `pytest`: `.github/workflows/ci.yml`
+(шаг `run.sh end-to-end`) и обе строки `eval/invariants.py` в
+`make eval-offline` ставят `LLM_PROVIDER=gemini` на весь процесс — это
+отдельные однократные прогоны пайплайна без мок-инъекций. Строка
+`uv run pytest -q` в `make eval-offline` эту переменную НЕ ставит:
+`tests/test_faults.py` намеренно снимает `LLM_OFFLINE` и мокает
+`llm._create` (anthropic-путь) для симуляции мёртвой сети, и глобальный
+`LLM_PROVIDER=gemini` увёл бы вызов мимо мока в реальную сеть Gemini
+(живой 403 без ключа — проверено при ревизии этого чек-листа). Офлайн-гейт
+extracted-пути (`tests/test_extracted_gate.py`) ставит переменную сам,
+точечно, через `monkeypatch.setenv` внутри теста. При добавлении новых
+офлайн-путей — так же точечно, не блоком на весь `pytest`.
+
 ## Команда верификации
 
 ```bash

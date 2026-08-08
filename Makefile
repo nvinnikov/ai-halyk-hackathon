@@ -52,15 +52,22 @@ sanity: install
 
 # Без сети: инварианты (expected-режим по умолчанию) + греп-гейт + юниты.
 # LLM_OFFLINE=1 — защита от случайного промаха кассеты/кэша мимо сети.
-# ВАЖНО: инварианты гоняются в ОБОИХ режимах (ревью PR #9, 10-я волна) —
-# extracted ПОСЛЕДНИМ, чтобы trace/ остался от боевого режима (режимы делят
-# каталог трейсов, и check_fallback_rate обязан мерить extracted, а не
-# expected с tier==0 по построению).
+# LLM_PROVIDER=gemini — кассета заморожена под gemini-прогон (llm.py: ключ
+# кэша зависит от модели, а модель — от LLM_PROVIDER); без неё все ключи
+# мимо кассеты, забор мёртв. НЕ ставить на строку pytest: tests/test_faults.py
+# намеренно снимает LLM_OFFLINE и мокает llm._create (anthropic-путь) для
+# симуляции мёртвой сети — глобальный LLM_PROVIDER=gemini увёл бы вызов мимо
+# мока в реальную сеть Gemini (проверено: живой 403 без ключа). Офлайн-гейт
+# extracted-пути (tests/test_extracted_gate.py) сам ставит LLM_PROVIDER=gemini
+# точечно через monkeypatch. ВАЖНО: инварианты гоняются в ОБОИХ режимах
+# (ревью PR #9, 10-я волна) — extracted ПОСЛЕДНИМ, чтобы trace/ остался от
+# боевого режима (режимы делят каталог трейсов, и check_fallback_rate
+# обязан мерить extracted, а не expected с tier==0 по построению).
 eval-offline: install
 	LLM_OFFLINE=1 uv run pytest -q
 	uv run python eval/grep_gate.py
-	LLM_OFFLINE=1 uv run python eval/invariants.py $(ARCHIVE)
-	LLM_OFFLINE=1 uv run python eval/invariants.py $(ARCHIVE) extracted
+	LLM_OFFLINE=1 LLM_PROVIDER=gemini uv run python eval/invariants.py $(ARCHIVE)
+	LLM_OFFLINE=1 LLM_PROVIDER=gemini uv run python eval/invariants.py $(ARCHIVE) extracted
 
 # С ключом в окружении: extraction eval, мутации (включая fx), LOBO.
 eval-live: install
