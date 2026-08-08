@@ -274,6 +274,9 @@ def test_limit_unambiguous_groupings_normalized(tmp_path, monkeypatch):
     cases = {"7,500,000": "7500000", "$1,234,567.89": "1234567.89", "1,44": "1.44"}
     for raw, expected in cases.items():
         assert specs_extract._normalize_limit(raw) == expected, raw
+
+
+def test_non_numeric_limit_invalid_in_check(tmp_path, monkeypatch):
     """«5%» вместо числа — спека невалидна уже в _check с внятной ошибкой,
     а не молча на лестнице после Decimal() в solve."""
     quote = "Пункт 6.1: доля не выше 5% от выручки"
