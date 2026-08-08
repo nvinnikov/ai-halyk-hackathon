@@ -16,11 +16,12 @@
  },
  "dataset_hash": "03b886a4f357722e",
  "dirty_rows": 2,
- "fallback_rate": 0.027777777777777776,
+ "fallback_rate": 0.05555555555555555,
  "index_alarms": [],
  "pdf_count": 200,
  "public_score": 35.0,
  "stage_alarms": {
+  "group_capex_from_model_ignored": 1,
   "group_doc_attached": 1,
   "quote_unverified": 1,
   "routing_quarantine": 133,

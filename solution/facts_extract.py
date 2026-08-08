@@ -11,7 +11,10 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 8
+FACTS_VERSION = 9
+# v9 — ревью PR #23, вторая волна: group_capex от модели не попадает в
+# doc_facts вовсе, а resolve_doc_fact больше не видит документы группового
+# уровня ни в промпте, ни в корпусе проверки цитат.
 # v8 — ревью PR #23: тождество движения стоимости гейтится не только выбытиями,
 # но и иными изменениями (обесценение, курсовые разницы); проверка знака стала
 # общей для названных и посчитанных поступлений; расхождение двух документов
@@ -590,11 +593,19 @@ def _apply_group_capex(facts: dict, computed: list[tuple[Decimal, str, str]]) ->
     снимается, ячейка уходит на лестницу — тот же выбор, что и везде в этом
     расчёте: отсутствие ответа честнее неверного.
 
-    Значение модели из numeric_facts договора код перебивает (дисциплина
-    _DERIVED_DOC_KEYS), и алярм об этом называет источники своими именами:
-    прежнее значение здесь всегда модельное — код пишет ключ только отсюда.
+    Источник у ключа ровно один — этот. Значение, которое модель выписывает в
+    numeric_facts (FACTS_PROMPT просит ключ прямо), в doc_facts не попадает
+    вовсе: его отсеивает _merge_doc. Поэтому «не посчитали» здесь означает
+    «ключа нет», и ячейка уходит на лестницу — а не считается по числу, которое
+    модель приняла за капзатраты Группы.
     """
     if not computed:
+        # Пояс поверх подтяжек (ревью PR #23, вторая волна): источник закрыт в
+        # _merge_doc, но ключ производный, и цена его протечки — статус ячейки,
+        # а не точность. Снятие громкое, чтобы протечка не осталась незамеченной.
+        if facts["doc_facts"].pop(GROUP_CAPEX_KEY, None) is not None:
+            facts["doc_fact_quotes"].pop(GROUP_CAPEX_KEY, None)
+            facts["alarms"].append({"kind": "group_capex_stale_key_dropped"})
         return
     distinct = sorted({str(value) for value, _quote, _file in computed})
     if len(distinct) > 1:
@@ -609,16 +620,6 @@ def _apply_group_capex(facts: dict, computed: list[tuple[Decimal, str, str]]) ->
         facts["doc_fact_quotes"].pop(GROUP_CAPEX_KEY, None)
         return
     value, quote, _file = sorted(computed, key=lambda item: item[2])[0]
-    from_model = facts["doc_facts"].get(GROUP_CAPEX_KEY)
-    if from_model is not None and from_model != str(value):
-        facts["alarms"].append(
-            {
-                "kind": "derived_doc_key_overridden",
-                "key": GROUP_CAPEX_KEY,
-                "model": from_model,
-                "code": str(value),
-            }
-        )
     facts["doc_facts"][GROUP_CAPEX_KEY] = str(value)
     facts["doc_fact_quotes"][GROUP_CAPEX_KEY] = quote
 
@@ -718,6 +719,25 @@ def _merge_doc(facts: dict, raw: dict, doc: dict, text: str) -> None:
             continue
         if key == "ebitda_addback_materiality":
             materiality = nf["value"]
+            continue
+        if key == GROUP_CAPEX_KEY:
+            # Ключ производный: его считает КОД по отчётности группового уровня
+            # (_group_capex), и другого источника у него нет. FACTS_PROMPT
+            # просит его у модели прямо, и промпт здесь сознательно не трогают —
+            # его текст держит ключи кэша всей кассеты, — поэтому значение
+            # отсеивается тут. Пока шаблон считал числитель по леджеру,
+            # модельное значение было безвредным; после перевода шаблона на
+            # doc(group_capex) оно ИСПОЛНЯЕТСЯ, а модель выписывает сюда
+            # порог из цитаты пункта договора, а не капзатраты Группы (ревью
+            # PR #23, вторая волна). Значение не теряется молча — оно в алярме.
+            facts["alarms"].append(
+                {
+                    "kind": "group_capex_from_model_ignored",
+                    "value": nf["value"],
+                    "quote": nf["quote"],
+                    "file": doc["file"],
+                }
+            )
             continue
         if key in facts["doc_facts"] and facts["doc_facts"][key] != nf["value"]:
             facts["alarms"].append(
@@ -853,19 +873,47 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
         "ownership_extraction_failed",
         "group_capex_extraction_failed",
     }
+    # Деградация ДОСЬЕ запрещает кэш фактов так же, как своя собственная.
+    # dossier при транзиентном сбое не ложится на диск, но объект в памяти
+    # отдаётся дальше — и факты, собранные по неполному набору документов,
+    # закреплялись под FACTS_VERSION без единого алярма и переживали устранение
+    # причины. Поймано вживую: офлайн-прогон уронил маршрутизацию на промахе
+    # кассеты, досье не закэшировалось, а факты без документа группового уровня
+    # — закэшировались, и следующий ЖИВОЙ прогон честно взял их с диска.
+    # Ровно то же случится в окне при перезапуске после сбоя сети.
+    _degraded_dossier = {
+        "routing_failed",
+        "meta_extraction_failed",
+        "borrower_name_failed",
+        "group_routing_failed",
+        "dossier_build_failed",
+        "name_pass_skipped_degraded_routing",
+    }
+    dossier_degraded = any(a.get("kind") in _degraded_dossier for a in dossier_art.get("alarms", []))
     return artifact(
         wd / "facts" / f"{acc}.json",
         FACTS_VERSION,
         build,
-        cache_if=lambda d: not any(a.get("kind") in _degraded_kinds for a in d["alarms"]),
+        cache_if=lambda d: not dossier_degraded
+        and not any(a.get("kind") in _degraded_kinds for a in d["alarms"]),
     )
 
 
 def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) -> dict | None:
-    """Адресное извлечение числа под doc()-ключ спеки, которого нет в doc_facts."""
+    """Адресное извлечение числа под doc()-ключ спеки, которого нет в doc_facts.
+
+    Периметр тот же, что у общего прохода фактов: документы группового уровня
+    сюда не входят. Довод «решения материнской компании не применяются к
+    операциям заёмщика» ровно так же относится к её ЧИСЛАМ — обязательство по
+    персоналу или страховое покрытие в консолидированной отчётности носят то же
+    название и больше на порядок. Защита цитатой это не ловит: цитата
+    верифицируется против того же корпуса, поэтому фильтровать надо оба —
+    и промпт, и корпус (ревью PR #23, вторая волна).
+    """
+    own_docs = [d for d in dossier_art["docs"] if d.get("scope") != "group"]
     documents = "\n".join(
         f'<document type="{d["doc_type"]}" file="{d["file"]}">\n{sanitize_document(d["text"])}\n</document>'
-        for d in dossier_art["docs"]
+        for d in own_docs
     )
 
     def build() -> dict:
@@ -908,7 +956,7 @@ def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) ->
     )
     if not art.get("found"):
         return None
-    combined = "\n".join(sanitize_document(d["text"]) for d in dossier_art["docs"])
+    combined = "\n".join(sanitize_document(d["text"]) for d in own_docs)
     if not verify_quote(art["quote"], combined) or not _number_ok(art["value"]):
         return None  # непроверяемая цитата или мусорное число — факта нет
     # Число обязано присутствовать в верифицированной цитате (ревью PR #9,

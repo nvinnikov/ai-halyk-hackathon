@@ -816,6 +816,26 @@ def _extracted_cellspec(
                     f"ALARM heading_doc_keys_missing {scenario} {clause}: {missing_tpl}",
                     flush=True,
                 )
+                derived_missing = sorted(set(missing_tpl) & _DERIVED_DOC_KEYS)
+                if derived_missing:
+                    # Производный ключ считает КОД из документов досье. Не
+                    # посчитал — значит документа нет, и извлечённая формула его
+                    # не заменяет: она берёт число из леджера, а это другая
+                    # величина, не приближение к недостающей. Откат сюда,
+                    # задуманный как страховка от KeyError на валидной ячейке,
+                    # дал бы уверенно посчитанный не тот ответ; отсутствие
+                    # ответа честнее (ревью PR #23, вторая волна).
+                    print(
+                        f"ALARM derived_doc_key_missing {scenario} {clause}: {derived_missing}",
+                        flush=True,
+                    )
+                    err = ValueError(f"невалидная спека: {derived_missing}")
+                    try:
+                        err.spec_direction = sp["direction"]  # type: ignore[attr-defined]
+                        err.spec_limit = Decimal(sp["limit"])  # type: ignore[attr-defined]
+                    except (InvalidOperation, KeyError, TypeError):
+                        pass
+                    return err, quote
                 metric_text = sp["metric"]
         # Подмена извлечённого DSL шаблоном остаётся (ruling: шаблон при матче
         # исполняется), но обязана быть видимой ЦЕЛИКОМ (ревью PR #9, 10-я

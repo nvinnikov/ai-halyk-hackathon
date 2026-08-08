@@ -126,6 +126,17 @@ def test_non_client_doc_type_not_bound(fake, monkeypatch):
 NAMES = [("ACC-1111", "Alpha Terminal JSC"), ("ACC-2222", "Alpha Terminal Services JSC")]
 
 
+def _group_meta_and_issuer(issuer):
+    """META отвечает «отчётность», ISSUER называет издателя."""
+
+    def call(prompt, schema, schema_version, **kw):
+        if schema is route.ISSUER_SCHEMA:
+            return {"reporting_entity": issuer, "quote": f"{issuer} consolidated statements"}
+        return {"doc_type": "financial_notes", "date": "2025-12-31", "edition": "final"}
+
+    return call
+
+
 def test_name_match_respects_boundaries():
     assert route._name_mentioned("Alpha Terminal JSC", "сегмент ведёт Alpha Terminal JSC, а также")
     # Наименования заёмщиков в наборе различаются одним словом: документ соседа
@@ -137,12 +148,9 @@ def test_name_match_respects_boundaries():
 
 def test_group_level_doc_attached_by_name(fake, monkeypatch):
     state, wd = fake
-    state["text"] = "Консолидированная отчётность. Сегмент ведёт Alpha Terminal JSC."
+    state["text"] = "Parent Holding JSC consolidated statements. Сегмент ведёт Alpha Terminal JSC."
 
-    def meta_notes(prompt, schema, schema_version, **kw):
-        return {"doc_type": "financial_notes", "date": "2025-12-31", "edition": "final"}
-
-    monkeypatch.setattr(route.llm, "call", meta_notes)
+    monkeypatch.setattr(route.llm, "call", _group_meta_and_issuer("Parent Holding JSC"))
     art = route.route_group_doc(wd, Path("x.pdf"), NAMES)
     assert art["account_id"] == "ACC-1111"
     assert art["quarantined"] is False
@@ -215,3 +223,41 @@ def test_meta_failure_not_cached(fake, monkeypatch):
     art2 = route.route_doc(wd, Path("x.pdf"), TARGETS, ALL_ACCOUNTS)
     assert art2["account_id"] == "ACC-1111"
     assert (wd / "route" / "cafe00000000.json").exists()
+
+
+def test_own_reporting_without_account_not_attached(fake, monkeypatch):
+    """Без проверки издателя правило читается как «называет заёмщика и не
+    печатает номер счёта» — под это подходит и собственная отчётность заёмщика,
+    а она в роли группового документа теряет свои реклассификации и отдаёт свои
+    основные средства за капзатраты Группы (ревью PR #23, вторая волна)."""
+    state, wd = fake
+    state["text"] = "Alpha Terminal JSC consolidated statements. Отчётность за год."
+    monkeypatch.setattr(route.llm, "call", _group_meta_and_issuer("Alpha Terminal JSC"))
+    art = route.route_group_doc(wd, Path("x.pdf"), NAMES)
+    assert art["account_id"] is None and art["quarantined"] is True
+    assert art["quarantine_reason"] == "own_reporting_not_group_level"
+    assert any(a["kind"] == "own_reporting_rejected" for a in art["alarms"])
+
+
+def test_name_search_survives_line_break(fake):
+    """verify_quote, которым наименование допущено, пробелы схлопывает — поиск
+    обязан вести себя так же, иначе перенос строки в вёрстке PDF даёт
+    молчаливый промах на единственной ячейке, ради которой проход и делается."""
+    assert route._name_mentioned("Alpha Terminal JSC", "ведёт Alpha Terminal\nServices") is False
+    assert route._name_mentioned("Alpha Terminal JSC", "ведёт Alpha Terminal\nJSC, сегмент")
+    assert route._name_mentioned("Alpha Terminal JSC", "ведёт Alpha  Terminal JSC")
+
+
+def test_generic_borrower_name_rejected(fake, monkeypatch):
+    """Наименованием ищут заёмщика в произвольных чужих документах: общее слово
+    прошло бы verify_quote по его собственным страницам и совпало бы везде."""
+    state, wd = fake
+    state["text"] = "Заёмщик — Группа, счёт ACC-1111"
+
+    def generic(prompt, schema, schema_version, **kw):
+        return {"name": "Группа", "quote": "Заёмщик — Группа"}
+
+    monkeypatch.setattr(route.llm, "call", generic)
+    art = route.borrower_name(wd, "ACC-1111", [Path("x.pdf")])
+    assert art["name"] == ""
+    assert any(a["kind"] == "borrower_name_too_generic" for a in art["alarms"])

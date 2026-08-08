@@ -320,3 +320,54 @@ def test_name_pass_skipped_when_first_pass_degraded(monkeypatch, tmp_path):
     d = dossier.build_dossiers(tmp_path, pdfs, INDEX)["ACC-1"]
     assert any(a["kind"] == "name_pass_skipped_degraded_routing" for a in d["alarms"])
     assert not (tmp_path / "dossier" / "ACC-1.json").exists()  # деградация не кэшируется
+
+
+def test_group_meta_failure_does_not_block_dossier_cache(monkeypatch, tmp_path):
+    """Второй проход зовёт META по каждому непривязанному документу (на публичном
+    наборе их 122). Под общим именем один SchemaRejected среди них ставил бы
+    degraded=True и запрещал запись ВСЕХ досье — то есть отменял бы рестарт в
+    окне из-за документа, который и так остаётся в карантине (ревью PR #23)."""
+    routes = {
+        "a.pdf": base("a.pdf"),
+        "junk.pdf": base("junk.pdf", acc=None, reason="no_account_mentions"),
+    }
+    make_route(monkeypatch, routes, {})
+    monkeypatch.setattr(dossier, "borrower_name", lambda wd, acc, paths: {"name": "Alpha JSC", "alarms": []})
+    monkeypatch.setattr(
+        dossier,
+        "route_group_doc",
+        lambda wd, p, names: {
+            **base(p.name, acc=None, reason="named_doc_not_group_level"),
+            "alarms": [{"kind": "meta_extraction_failed", "file": p.name}],
+        },
+    )
+    d = dossier.build_dossiers(tmp_path, [Path("a.pdf"), Path("junk.pdf")], INDEX)["ACC-1"]
+    assert any(a["kind"] == "group_meta_extraction_failed" for a in d["alarms"])
+    assert (tmp_path / "dossier" / "ACC-1.json").exists()  # рестарт не отменён
+
+
+def test_warm_dossiers_skip_the_name_pass(monkeypatch, tmp_path):
+    """Все досье уже текущей версии — artifact() вернёт их готовыми, а проход
+    успел бы прочитать полный текст сотни документов впустую. В окне это прямая
+    цена рестарта (ревью PR #23, вторая волна)."""
+    routes = {
+        "a.pdf": base("a.pdf"),
+        "group.pdf": base("group.pdf", acc=None, reason="no_account_mentions"),
+    }
+    make_route(monkeypatch, routes, {})
+    monkeypatch.setattr(dossier, "borrower_name", lambda wd, acc, paths: {"name": "Alpha JSC", "alarms": []})
+    monkeypatch.setattr(
+        dossier,
+        "route_group_doc",
+        lambda wd, p, names: base(p.name, acc=None, reason="named_doc_not_group_level"),
+    )
+    pdfs = [Path("a.pdf"), Path("group.pdf")]
+    dossier.build_dossiers(tmp_path, pdfs, INDEX)  # прогрев
+
+    def never(*a, **kw):
+        raise AssertionError("тёплые досье не должны запускать второй проход")
+
+    monkeypatch.setattr(dossier, "borrower_name", never)
+    monkeypatch.setattr(dossier, "route_group_doc", never)
+    d = dossier.build_dossiers(tmp_path, pdfs, INDEX)["ACC-1"]
+    assert [x["file"] for x in d["docs"]] == ["a.pdf"]

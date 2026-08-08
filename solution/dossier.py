@@ -16,6 +16,7 @@ Fail-open на двух уровнях (задача 24, ревью раунда
 скелета.
 """
 
+import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -27,7 +28,9 @@ from stages import artifact
 # v6 — активационный бамп (2026-08-08): досье собиралось из route-артефактов
 # v1; после ROUTE_VERSION=2 (META/WHOSE по тексту без футера) кэшированное
 # досье устарело по входу. v5: алярмы карантина в артефакте досье.
-DOSSIER_VERSION = 11
+DOSSIER_VERSION = 12
+# v12 — ревью PR #23, вторая волна: сбой META второго прохода больше не
+# деградирует досье, добавлена проверка издателя отчётности.
 # v11 — ревью PR #23: второй проход не запускается при деградации первого;
 # набор документов в досье от этого зависит.
 # v10 — документы группового уровня, привязанные по наименованию заёмщика
@@ -130,6 +133,23 @@ def _route_or_quarantine(wd: Path, p: Path, targets: list[str], all_accounts: li
         }
 
 
+def _all_current(wd: Path, targets: list[str]) -> bool:
+    """Все ли досье на диске собраны ТЕКУЩЕЙ версией стадии.
+
+    Существования файла мало: artifact() сверяет ещё и версию, и при её росте
+    пересоберёт досье — а значит второй проход всё-таки нужен.
+    """
+    for acc in targets:
+        path = wd / "dossier" / f"{acc}.json"
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return False
+        if data.get("_meta", {}).get("stage_version") != DOSSIER_VERSION:
+            return False
+    return True
+
+
 def _attach_by_name(
     wd: Path,
     targets: list[str],
@@ -145,6 +165,12 @@ def _attach_by_name(
     Счёт без единого привязанного документа наименования не даёт — и это
     правильно: брать его было бы неоткуда, кроме как из самого кандидата.
     """
+    if targets and _all_current(wd, targets):
+        # Все досье уже лежат на диске в текущей версии — artifact() их и так
+        # вернёт готовыми, а проход успел бы прочитать полный текст сотни с
+        # лишним документов впустую (ревью PR #23, вторая волна). В окне это
+        # прямая цена рестарта, а рестарт — штатный сценарий ранбука.
+        return [], []
     if first_pass_degraded:
         # Второй проход целиком построен на результатах первого: наименование
         # считается по документам, которые первый проход привязал, а решение по
@@ -207,7 +233,20 @@ def _attach_by_name(
     for r in results:
         if r is None:
             continue
-        alarms.extend(r["alarms"])
+        # Сбой META ВТОРОГО прохода переименовывается намеренно (ревью PR #23,
+        # вторая волна). Второй проход зовёт META по каждому непривязанному
+        # документу — на публичном наборе их 122, на приватном будет свой
+        # хвост мусора, и один SchemaRejected среди них практически неизбежен.
+        # Под общим именем он ставил бы degraded=True и запрещал запись ВСЕХ
+        # двенадцати досье — то есть отменял бы рестарт в окне из-за документа,
+        # который и без того остаётся в карантине. Свой route_group-артефакт
+        # при этом всё равно не кэшируется, поэтому следующий прогон по нему
+        # перепытается; цена компромисса — досье может закрепиться без
+        # документа, который на повторе привязался бы, и это видно алярмом.
+        alarms.extend(
+            {**a, "kind": "group_meta_extraction_failed"} if a.get("kind") == "meta_extraction_failed" else a
+            for a in r["alarms"]
+        )
         if not r["quarantined"]:
             attached.append(r)
     return attached, alarms
