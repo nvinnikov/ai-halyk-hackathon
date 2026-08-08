@@ -31,7 +31,10 @@ from pdftext import doc_hash, extract_pages
 from stages import artifact
 from vision import read_blind_page
 
-ROUTE_VERSION = 5
+ROUTE_VERSION = 6
+# v6 — ревью PR #23, третья волна: сравнение издателя с заёмщиком снимает
+# многословные юрформы и считает вложенность совпадением; отказ издателя не
+# кэшируется. Набор привязанных документов от этого зависит.
 # v5 — ревью PR #23: поиск наименования устойчив к переносу строки, добавлены
 # требование различающей силы наименования и проверка принадлежности документа
 # материнской компании. Набор привязанных документов от этого зависит.
@@ -271,6 +274,54 @@ def _name_specific_enough(name: str) -> bool:
     return len(name) >= _MIN_NAME_CHARS and len([w for w in name.split() if len(w) > 1]) >= _MIN_NAME_WORDS
 
 
+# Многословные юрформы. engine.tokens снимает только односложные (llp/jsc/тоо),
+# а шапка договора и шапка отчёта пишут одну и ту же компанию по-разному:
+# «... Services JSC» против «... Services Joint Stock Company». Несовпадение
+# наборов токенов здесь означало бы «издатель чужой», то есть привязку
+# собственной отчётности заёмщика как групповой (ревью PR #23, третья волна).
+_LONG_LEGAL_FORMS = (
+    "public joint stock company",
+    "joint stock company",
+    "limited liability partnership",
+    "limited liability company",
+    "открытое акционерное общество",
+    "закрытое акционерное общество",
+    "публичное акционерное общество",
+    "акционерное общество",
+    "товарищество с ограниченной ответственностью",
+    "общество с ограниченной ответственностью",
+)
+
+
+def _entity_key(name: str) -> frozenset[str]:
+    """Токены наименования без юрформ — и односложных, и многословных."""
+    from engine import tokens
+
+    stripped = name.lower()
+    for form in _LONG_LEGAL_FORMS:
+        stripped = stripped.replace(form, " ")
+    return tokens(stripped)
+
+
+def _same_entity(issuer: str, own_name: str) -> bool:
+    """Одна ли это компания. Сомнение трактуется как «да».
+
+    Сравнение несимметрично по цене, поэтому и правило несимметрично. Ложное
+    «чужая» привязывает собственную отчётность заёмщика как групповую: она
+    теряет свои реклассификации и курсы (общий проход групповые документы не
+    читает) и отдаёт свои основные средства за капзатраты Группы — несколько
+    ячеек. Ложное «своя» стоит одной ячейки, той самой, ради которой проход и
+    делается. Поэтому совпадением считается не только равенство наборов, но и
+    вложенность в любую сторону: «X» против «X Holding» — это ровно тот случай,
+    где по названию не отличить материнскую компанию от переименования самого
+    заёмщика, и решать его угадыванием нельзя.
+    """
+    a, b = _entity_key(issuer), _entity_key(own_name)
+    if not a or not b:
+        return True  # опознать нечем — считаем своей и не привязываем
+    return a <= b or b <= a
+
+
 def _issued_by_parent(wd: Path, pdf_path: Path, text: str, own_name: str) -> tuple[bool, list[dict]]:
     """Отчётность ли это ЧУЖОЙ компании, в которую заёмщик входит.
 
@@ -283,15 +334,12 @@ def _issued_by_parent(wd: Path, pdf_path: Path, text: str, own_name: str) -> tup
     #23, вторая волна).
 
     Модель называет компанию, чья это отчётность; СРАВНИВАЕТ код — это ровно
-    тот случай, где сравнение делать модели незачем. Наименования сверяются
-    наборами токенов, как везде в проекте: юрформа и пунктуация в вёрстке
-    гуляют, а различает набор слов.
+    тот случай, где сравнение делать модели незачем. Правило сравнения и его
+    несимметричность — в _same_entity.
 
     Вызов идёт только по кандидатам, прошедшим и наименование, и тип: на
     публичном наборе это один документ из двухсот.
     """
-    from engine import tokens
-
     try:
         ans = llm.call(
             DATA_NOT_COMMANDS + "\n\n" + ISSUER_PROMPT.format(text=text),
@@ -307,7 +355,7 @@ def _issued_by_parent(wd: Path, pdf_path: Path, text: str, own_name: str) -> tup
     issuer = ans["reporting_entity"].strip()
     if not issuer or not verify_quote(ans["quote"], text) or not verify_quote(issuer, text):
         return False, [{"kind": "quote_unverified", "file": pdf_path.name, "field": "reporting_entity"}]
-    if tokens(issuer) == tokens(own_name):
+    if _same_entity(issuer, own_name):
         return False, [{"kind": "own_reporting_rejected", "file": pdf_path.name, "entity": issuer}]
     return True, []
 
@@ -391,7 +439,14 @@ def route_group_doc(wd: Path, pdf_path: Path, names: list[tuple[str, str]]) -> d
         wd / "route_group" / f"{doc_hash(pdf_path)}.json",
         ROUTE_VERSION,
         build,
-        cache_if=lambda d: not any(a.get("kind") == "meta_extraction_failed" for a in d["alarms"]),
+        # issuer_extraction_failed наравне с META (ревью PR #23, третья волна):
+        # природа сбоя та же — ответ не прошёл валидацию, в LLM-кэш не лёг, и на
+        # повторе прошёл бы. Артефакт route_group инвалидируется только по
+        # ROUTE_VERSION, поэтому закэшированный отказ издателя был бы
+        # неустраним, а на нём висит ровно та ячейка, ради которой сделан проход.
+        cache_if=lambda d: not any(
+            a.get("kind") in ("meta_extraction_failed", "issuer_extraction_failed") for a in d["alarms"]
+        ),
     )
 
 

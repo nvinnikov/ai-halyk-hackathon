@@ -261,3 +261,44 @@ def test_generic_borrower_name_rejected(fake, monkeypatch):
     art = route.borrower_name(wd, "ACC-1111", [Path("x.pdf")])
     assert art["name"] == ""
     assert any(a["kind"] == "borrower_name_too_generic" for a in art["alarms"])
+
+
+def test_issuer_compared_across_legal_form_spellings():
+    """Шапка договора и шапка отчёта пишут одну компанию по-разному: engine.tokens
+    снимает только односложные юрформы, и «... Services JSC» против «... Services
+    Joint Stock Company» разошлись бы наборами (ревью PR #23, третья волна)."""
+    assert route._same_entity("Alpha Terminal Joint Stock Company", "Alpha Terminal JSC")
+    assert route._same_entity(
+        "ТОО «Альфа Терминал»", "Альфа Терминал товарищество с ограниченной ответственностью"
+    )
+    # Вложенность — тоже совпадение: по названию не отличить материнскую
+    # компанию от переименования самого заёмщика, а цены ошибок несимметричны.
+    assert route._same_entity("Alpha Terminal Holding JSC", "Alpha Terminal JSC")
+    # Настоящая материнская компания различается словами, а не юрформой.
+    assert not route._same_entity("Parent Energy Holding JSC", "Alpha Terminal JSC")
+
+
+def test_issuer_failure_not_cached(fake, monkeypatch):
+    """Отказ издателя — тот же SchemaRejected: ответ не прошёл валидацию, в
+    LLM-кэш не лёг и на повторе прошёл бы. Артефакт route_group инвалидируется
+    только по ROUTE_VERSION, поэтому закэшированный отказ был бы неустраним."""
+    import llm as llm_mod
+
+    state, wd = fake
+    state["text"] = "Parent Holding JSC consolidated statements. Сегмент ведёт Alpha Terminal JSC."
+
+    def issuer_fails(prompt, schema, schema_version, **kw):
+        if schema is route.ISSUER_SCHEMA:
+            raise llm_mod.SchemaRejected("bad")
+        return {"doc_type": "financial_notes", "date": "2025-12-31", "edition": "final"}
+
+    monkeypatch.setattr(route.llm, "call", issuer_fails)
+    art = route.route_group_doc(wd, Path("x.pdf"), NAMES)
+    assert any(a["kind"] == "issuer_extraction_failed" for a in art["alarms"])
+    assert not (wd / "route_group" / "cafe00000000.json").exists()
+
+    # Причина устранена — привязка проходит и кэшируется.
+    monkeypatch.setattr(route.llm, "call", _group_meta_and_issuer("Parent Holding JSC"))
+    art2 = route.route_group_doc(wd, Path("x.pdf"), NAMES)
+    assert art2["account_id"] == "ACC-1111"
+    assert (wd / "route_group" / "cafe00000000.json").exists()

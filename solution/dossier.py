@@ -28,7 +28,8 @@ from stages import artifact
 # v6 — активационный бамп (2026-08-08): досье собиралось из route-артефактов
 # v1; после ROUTE_VERSION=2 (META/WHOSE по тексту без футера) кэшированное
 # досье устарело по входу. v5: алярмы карантина в артефакте досье.
-DOSSIER_VERSION = 12
+DOSSIER_VERSION = 13
+# v13 — ревью PR #23, третья волна: отказ издателя деградирует досье.
 # v12 — ревью PR #23, вторая волна: сбой META второго прохода больше не
 # деградирует досье, добавлена проверка издателя отчётности.
 # v11 — ревью PR #23: второй проход не запускается при деградации первого;
@@ -300,7 +301,18 @@ def build_dossiers(
     # borrower_name_failed / group_routing_failed — та же природа: транзиентный
     # сбой второго прохода означает, что досье собрано без документов
     # группового уровня, и закреплять такое на диске нельзя.
-    _degraded_kinds = _ROUTING_DEGRADED | {"borrower_name_failed", "group_routing_failed"}
+    # issuer_extraction_failed — деградация, в отличие от group_meta_extraction_failed
+    # (ревью PR #23, третья волна). Разница в объёме: META зовётся по каждому из
+    # сотни с лишним непривязанных документов, а издатель — только по тем, что
+    # прошли и наименование, и тип (на публичном наборе один документ из двухсот).
+    # Поэтому здесь блокировка кэша досье не отменяет рестарт, а спасает ровно ту
+    # ячейку, ради которой сделан проход: свой route_group-артефакт при этом
+    # алярме тоже не кэшируется, и следующий прогон перепытается.
+    _degraded_kinds = _ROUTING_DEGRADED | {
+        "borrower_name_failed",
+        "group_routing_failed",
+        "issuer_extraction_failed",
+    }
     degraded = any(
         a.get("kind") in _degraded_kinds
         for a in [*(a for q in quarantined for a in q.get("alarms", [])), *name_alarms]
