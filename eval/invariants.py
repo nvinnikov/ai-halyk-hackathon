@@ -12,6 +12,7 @@
 
 import json
 import math
+import os
 import re
 import sys
 from decimal import Decimal
@@ -418,6 +419,20 @@ def main(archive, facts_source: str = "expected") -> int:
     archive = Path(archive)
     ds_hash, input_dir = solve.extract_archive(archive)
     wd = solve.workdir(ds_hash)
+    # ХОЛОДНЫЙ workdir под LLM_OFFLINE — стоп (ревью PR #9, 15-я волна, 🔴):
+    # solve.main запёк бы в ОБЩИЙ work/<hash> деградированные артефакты
+    # (леджер без второго яруса категоризации, пустые досье/факты/спеки из
+    # CassetteMiss), а stages.artifact кэширует по версии, не по успешности —
+    # следующий боевой прогон молча переиспользовал бы яд. Инварианты — это
+    # проверка ПОСЛЕ прогона, не вместо него.
+    if os.environ.get("LLM_OFFLINE") == "1" and not (wd / "ledger.json").exists():
+        print(
+            "ALARM invariants_skipped_cold_workdir: work/<hash> не прогрет — "
+            "гоняй инварианты ПОСЛЕ боевого прогона, офлайн-запуск на холодном "
+            "архиве запёк бы деградированные артефакты",
+            flush=True,
+        )
+        return 0
     with isolated_solve_out(archive):
         answers = solve.main(archive, facts_source=facts_source)
     template = json.loads(solve.find_inputs(input_dir)["template"].read_text())

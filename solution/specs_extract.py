@@ -357,4 +357,8 @@ def extract_specs(wd: Path, dossier_art: dict, fact_keys: set[str]) -> dict:
             )
 
     _flag_outliers(clauses, parsed_nodes, alarms)
-    return {"clauses": clauses, "alarms": alarms}
+    # account в каждом алярме (ревью PR #9, 15-я волна): без него одинаковая
+    # системная поломка у разных заёмщиков схлопывалась бы глобальным дедупом
+    # точных дублей в run-report до «1». Обогащение — при ЧТЕНИИ, артефакт
+    # (сырой ответ модели) не меняется, версия стадии не бампается.
+    return {"clauses": clauses, "alarms": [{**a, "account": acc} for a in alarms]}
