@@ -7,15 +7,18 @@
 - `require-archive` (sanity) — только происхождение переменной. Sanity ничего
   не пишет, а предполётная проверка стоп-строки из ранбука устроена как
   `make sanity ARCHIVE=<публичный>`, и запрет по значению её бы заблокировал;
-- `require-private-archive` (run) — происхождение И значение. Run перезаписывает
-  отправляемый `out/submission.json`, и публичный архив здесь не бывает верным
-  ни при каком раскладе: публичный набор гоняется через `make solve`.
+- `require-private-archive` (run) — происхождение И содержимое. Run перезаписывает
+  отправляемый `out/submission.json`, и публичный набор здесь не бывает верным
+  ни при каком раскладе: он гоняется через `make solve`. Сравнение побайтовое,
+  а не по имени файла: имя публичного архива — это имя от организаторов, и
+  ничто не обещает, что приватный приедет под другим.
 
 Цели зовутся напрямую: зависимости от install у них нет, поэтому проверка не
 тянет `uv sync` и идёт мгновенно.
 """
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -105,7 +108,7 @@ def test_run_guard_blocks_public_archive_named_explicitly():
     оболочке с репетиции."""
     r = _make("require-private-archive", [f"ARCHIVE={PUBLIC_ARCHIVE}"])
     assert r.returncode != 0, "гейт run пропустил публичный архив"
-    assert "публичный архив" in r.stdout + r.stderr
+    assert "совпал с публичным" in r.stdout + r.stderr
 
 
 def test_run_guard_blocks_public_archive_from_environment():
@@ -113,14 +116,31 @@ def test_run_guard_blocks_public_archive_from_environment():
     assert r.returncode != 0, "гейт run пропустил публичный архив из окружения"
 
 
-def test_run_guard_blocks_public_archive_written_as_path():
+def test_run_guard_blocks_public_archive_written_as_path(tmp_path):
     """Форма из ранбука — `export ARCHIVE=/путь/к/…zip`, а не голое имя, так
     что протёкший с репетиции export с большей вероятностью будет путём
-    (ревью PR #18, круг 2). Сравнение обязано смотреть на базовое имя."""
-    for spelling in (f"./{PUBLIC_ARCHIVE}", f"/tmp/rehearsal/{PUBLIC_ARCHIVE}"):
+    (ревью PR #18, круг 2). Копия в другом каталоге и под другим именем — это
+    по-прежнему публичный набор, и сравнение содержимого это видит."""
+    copy = tmp_path / "rehearsal-leftover.zip"
+    shutil.copyfile(ROOT / PUBLIC_ARCHIVE, copy)
+    for spelling in (f"./{PUBLIC_ARCHIVE}", str(copy)):
         r = _make("require-private-archive", [f"ARCHIVE={spelling}"])
         assert r.returncode != 0, f"гейт run пропустил публичный архив как {spelling}"
-        assert "публичный архив" in r.stdout + r.stderr
+        assert "совпал с публичным" in r.stdout + r.stderr
+
+
+def test_run_guard_allows_private_archive_sharing_the_public_name(tmp_path):
+    """Ложный красный в окне дороже пропуска (ревью PR #18, круг 6).
+
+    `6a741640c31eb032062683.zip` — имя, которым организаторы раздали публичный
+    набор, и ничто не обещает, что приватный приедет под другим. Гейт по имени
+    отказал бы 9 августа на НАСТОЯЩЕМ архиве, да ещё и советом считать
+    публичный набор. Судить надо по содержимому.
+    """
+    private = tmp_path / PUBLIC_ARCHIVE
+    private.write_bytes("PK\x03\x04 это другой набор".encode())
+    r = _make("require-private-archive", [f"ARCHIVE={private}"])
+    assert r.returncode == 0, f"гейт отказал приватному архиву из-за имени: {r.stdout}{r.stderr}"
 
 
 def test_run_guard_allows_private_archive():

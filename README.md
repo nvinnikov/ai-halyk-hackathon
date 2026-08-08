@@ -88,8 +88,12 @@ make cassette-freeze                                        # дозаписат
 | `make check` | Всё вышеперечисленное — зеркало CI |
 | `make eval-offline` | Инварианты, греп-гейт и юниты без сети |
 | `make cassette-freeze` | Дозаписать `work/llm_cache/*.json` в `eval/cassette/` |
-| `make sanity` | Санитарные проверки прогона |
-| `make determinism` | Два прогона подряд, байт-диф `submission.json` |
+| `make sanity ARCHIVE=<архив>` | Санитарные проверки прогона |
+| `make determinism ARCHIVE=<архив>` | Два прогона подряд, байт-диф `submission.json` |
+
+`ARCHIVE` у `run`, `sanity` и `determinism` обязателен: все трое пишут или
+читают `out/submission.json`, и молчаливый дефолт на публичный зип стоил бы
+отправляемого файла. Публичный набор гоняется через `make solve`.
 
 ## CI
 
