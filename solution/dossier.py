@@ -24,7 +24,7 @@ from pdftext import doc_hash
 from route import full_text, route_doc
 from stages import artifact
 
-DOSSIER_VERSION = 4  # v4: TEXT_VERSION 2 снимает футер-номер страницы из full_text
+DOSSIER_VERSION = 5  # v5: алярмы карантина (routing_failed) пишутся в артефакт досье
 _EDITION_RANK = {"final": 0, "unmarked": 1, "draft": 2, "superseded": 3}
 # Редакционная фильтрация — только для перевыпускаемых целиком типов. Отчёты
 # и записки кумулятивны: каждый несёт своё документальное решение, и отброс
@@ -68,6 +68,11 @@ def _route_or_quarantine(wd: Path, p: Path, targets: list[str], all_accounts: li
     try:
         return route_doc(wd, p, targets, all_accounts)
     except Exception as exc:
+        # Видимость сразу (ревью PR #9, 9-я волна): route-артефакт при
+        # исключении не пишется, и без print сбой маршрутизации (в первую
+        # очередь BudgetExhausted) не оставлял следов ни в stdout, ни в
+        # run-report.
+        print(f"ALARM routing_failed {p.name}: {exc!r}", flush=True)
         try:
             h = doc_hash(p)
         except Exception:
@@ -141,6 +146,14 @@ def build_dossiers(
                         {"file": q["file"], "reason": q.get("quarantine_reason")}
                         for q in sorted(quarantined, key=lambda x: x["file"])
                     ],
+                    # Алярмы карантина (routing_failed и т.п.) — в артефакт
+                    # досье: их читают сканеры run-report/sanity/invariants
+                    # (ревью PR #9, 9-я волна — раньше алярм создавался и
+                    # нигде не потреблялся).
+                    "alarms": sorted(
+                        (a for q in quarantined for a in q.get("alarms", [])),
+                        key=lambda a: (a.get("file", ""), a.get("kind", "")),
+                    ),
                 }
             except Exception as exc:
                 # Сбой чтения текста документа (например, vision на слепой

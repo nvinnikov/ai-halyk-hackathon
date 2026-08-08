@@ -392,8 +392,16 @@ def _collect_report_alarms(wd: Path) -> list[dict]:
     for sub in ("route", "dossier", "facts", "specs"):
         d = wd / sub
         if d.is_dir():
+            seen_shared: set[str] = set()
             for p in sorted(d.glob("*.json")):
-                alarms += json.loads(p.read_text()).get("alarms", [])
+                for a in json.loads(p.read_text()).get("alarms", []):
+                    # routing_failed дублируется во всех пер-аккаунтных досье.
+                    if sub == "dossier" and a.get("kind") == "routing_failed":
+                        key = json.dumps(a, sort_keys=True, ensure_ascii=False)
+                        if key in seen_shared:
+                            continue
+                        seen_shared.add(key)
+                    alarms.append(a)
     return alarms
 
 

@@ -163,18 +163,16 @@ def forbidden_literals() -> list[str]:
     for scenario_specs in SPECS.values():
         for _covenant_id, spec in scenario_specs.items():
             # spec — кортеж: (metric_name, direction, threshold, [optional_dict])
-            threshold = spec[2]
-            # Исключаем веса, совпадающие с формулой скоринга
-            threshold_str = str(threshold)
-            if threshold_str not in _WEIGHT_SCORES:
-                forbidden.update(_extract_number_formats(threshold))
+            # Пороги-веса НЕ фильтруются на входе (ревью PR #9, 9-я волна:
+            # этот фильтр нейтрализовал узкое исключение по score.py в scan()
+            # и оставлял гейт слепым к трём реальным ковенантам) — коллизия
+            # с весами разрешается в scan() адресно.
+            forbidden.update(_extract_number_formats(spec[2]))
 
             # Опциональный словарь триггера (например, trigger_financing)
             if len(spec) > 3 and isinstance(spec[3], dict):
                 for trigger_val in spec[3].values():
-                    trigger_str = str(trigger_val)
-                    if trigger_str not in _WEIGHT_SCORES:
-                        forbidden.update(_extract_number_formats(trigger_val))
+                    forbidden.update(_extract_number_formats(trigger_val))
 
     # ID сценариев (по границам слова, чтобы PAGE1 не совпал с P1)
     forbidden.update(_SCENARIOS)

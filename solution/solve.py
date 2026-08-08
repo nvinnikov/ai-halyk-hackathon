@@ -570,7 +570,15 @@ def _spec_only_fallback(
         )
     except Exception as spec_exc:
         trace["spec_error"] = repr(spec_exc)
-        cell, alarms = fallback_cell(None, None, None, computed, clause=clause)
+        # 5.7 и здесь (ревью PR #9, 9-я волна): направление/порог невалидной
+        # спеки едут на ошибке (_extracted_cellspec) — как в run_cell.
+        cell, alarms = fallback_cell(
+            getattr(spec_exc, "spec_direction", None),
+            None,
+            getattr(spec_exc, "spec_limit", None),
+            computed,
+            clause=clause,
+        )
     trace.update(path="prior", tier=2, alarms=alarms)
     return cell, trace
 
@@ -695,8 +703,17 @@ def _alarm_counts(wd: Path) -> dict[str, int]:
     for sub_dir in ("route", "dossier", "facts", "specs"):
         d = wd / sub_dir
         if d.is_dir():
+            seen_shared: set[str] = set()
             for p in sorted(d.glob("*.json")):
-                alarms += json.loads(p.read_text()).get("alarms", [])
+                for a in json.loads(p.read_text()).get("alarms", []):
+                    # Карантинные алярмы (routing_failed) дублируются во всех
+                    # пер-аккаунтных артефактах досье — считаем один раз.
+                    if sub_dir == "dossier" and a.get("kind") == "routing_failed":
+                        skey = stable_json(a)
+                        if skey in seen_shared:
+                            continue
+                        seen_shared.add(skey)
+                    alarms.append(a)
     counts: dict[str, int] = {}
     for a in alarms:
         kind = _alarm_kind(a)
