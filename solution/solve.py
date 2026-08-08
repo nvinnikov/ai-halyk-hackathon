@@ -41,7 +41,7 @@ from scindex import INDEX_VERSION, build_index
 from specs_extract import extract_specs
 from stages import artifact
 from taxonomy import cell_other_alarm, coverage_report
-from templates import TEMPLATES, match_heading
+from templates import TEMPLATE_HEADINGS, TEMPLATES, match_heading
 from util import OUT, ROOT, q2, stable_json, workdir
 
 # Модули, чьи *_VERSION-константы run-report собирает целиком (раздел 3):
@@ -617,7 +617,16 @@ def _extracted_cellspec(
             pass
         return err, quote
     try:
-        template = match_heading(sp["title_key"]) or sp["template"]
+        matched = match_heading(sp["title_key"])
+        if matched is not None and sp["title_key"] not in TEMPLATE_HEADINGS:
+            # Нестрогий матч заголовка — подмена формулы, и она не имеет права
+            # быть молчаливой: заголовок сформулирован не так, как в библиотеке,
+            # и трейс должен показать, на какой шаблон его увело.
+            print(
+                f"ALARM heading_matched_loosely {scenario} {clause}: {sp['title_key']!r} → {matched}",
+                flush=True,
+            )
+        template = matched or sp["template"]
         metric_text = _metric_text_for({**sp, "template": template}, scenario, hide_templates)
         # Подмена шаблоном не имеет права вводить doc()-ключи, которых нет в
         # фактах (ревью PR #9, 13-я волна): _check валидировал ключи
