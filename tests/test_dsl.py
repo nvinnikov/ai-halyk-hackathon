@@ -53,6 +53,16 @@ def test_parse_doc_with_quoted_key_equals_bare():
     assert parse("doc('severance_liability')") == parse("doc(severance_liability)")
 
 
+def test_parse_quoted_num_literals_equal_bare():
+    # Симметрия прощения (ревью PR #11): модель, кавычащая даты и ключи,
+    # так же кавычит числа — quarter('1'), min_amount('500000'), const('3.0').
+    # Тип обязан совпасть с голой формой (Decimal), иначе signature()-матч
+    # с шаблонами разъедется по типу поля.
+    assert parse("agg(REVENUE, in, quarter('1'))") == parse("agg(REVENUE, in, quarter(1))")
+    assert parse("agg(ALL, out, min_amount('500000'))") == parse("agg(ALL, out, min_amount(500000))")
+    assert parse("const('3.0')") == parse("const(3.0)")
+
+
 def test_parse_quoted_garbage_is_still_error():
     # Прощение только когда содержимое строки соответствует форме ожидаемого
     # литерала: дата не в ISO-форме и ключ с пробелом остаются ошибкой.

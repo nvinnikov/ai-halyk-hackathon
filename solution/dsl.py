@@ -224,6 +224,7 @@ def _expr(x):
 
 _DATE_SHAPE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _NAME_SHAPE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_NUM_SHAPE = re.compile(r"-?\d+(?:\.\d+)?")  # та же форма, что у токена num
 
 
 def _lit(x, *kinds):
@@ -238,6 +239,11 @@ def _lit(x, *kinds):
             return s
         if "name" in kinds and _NAME_SHAPE.fullmatch(s):
             return s
+        # Симметрия для чисел (ревью PR #11): quarter('1'), min_amount('…'),
+        # const('…'). Тип — Decimal, как у голой num-формы из parse_arg,
+        # иначе Const/MinAmount разъедутся по типу поля и сломают signature().
+        if "num" in kinds and _NUM_SHAPE.fullmatch(s):
+            return Decimal(s)
     if not _is_lit(x, *kinds):
         raise DslError(f"ожидался литерал {kinds}, встретился {x!r}")
     return x[1]
