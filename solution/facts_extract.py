@@ -881,15 +881,14 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
     # кассеты, досье не закэшировалось, а факты без документа группового уровня
     # — закэшировались, и следующий ЖИВОЙ прогон честно взял их с диска.
     # Ровно то же случится в окне при перезапуске после сбоя сети.
-    _degraded_dossier = {
-        "routing_failed",
-        "meta_extraction_failed",
-        "borrower_name_failed",
-        "group_routing_failed",
-        "dossier_build_failed",
-        "name_pass_skipped_degraded_routing",
-    }
-    dossier_degraded = any(a.get("kind") in _degraded_dossier for a in dossier_art.get("alarms", []))
+    # Набор берётся из dossier, а не дублируется здесь: свой список уже разъехался
+    # с тамошним на issuer_extraction_failed (ревью PR #23, четвёртая волна) —
+    # факты закэшировались бы без документа группового уровня и пережили бы
+    # починку маршрутизации, то есть ячейка осталась бы на лестнице навсегда.
+    # Плоский импорт по месту: модули solution не пакет, dossier фактов не знает.
+    from dossier import DEGRADED_KINDS
+
+    dossier_degraded = any(a.get("kind") in DEGRADED_KINDS for a in dossier_art.get("alarms", []))
     return artifact(
         wd / "facts" / f"{acc}.json",
         FACTS_VERSION,

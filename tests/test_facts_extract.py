@@ -844,3 +844,26 @@ def test_facts_not_cached_when_dossier_degraded(tmp_path, monkeypatch):
     # Причина устранена — факты собираются и кэшируются как обычно.
     facts_extract.extract_facts(tmp_path, DOSSIER)
     assert (tmp_path / "facts" / "ACC-1.json").exists()
+
+
+def test_issuer_failure_blocks_facts_cache(tmp_path, monkeypatch):
+    """Отказ издателя — деградация досье, а значит и фактов. Без этого факты без
+    группового документа закэшировались бы и пережили починку маршрутизации:
+    досье пересобралось бы, а extract_facts вернул бы старый артефакт, и ячейка
+    осталась бы на лестнице навсегда (ревью PR #23, четвёртая волна)."""
+    degraded = {
+        **DOSSIER,
+        "alarms": [{"kind": "issuer_extraction_failed", "file": "group.pdf"}],
+    }
+    monkeypatch.setattr(facts_extract.llm, "call", facts_only(lambda *a, **k: empty()))
+    facts_extract.extract_facts(tmp_path, degraded)
+    assert not (tmp_path / "facts" / "ACC-1.json").exists()
+
+
+def test_degraded_kinds_have_single_source():
+    """Два списка одного набора уже разъезжались дважды. Стадия фактов обязана
+    читать набор досье, а не держать свою копию."""
+    import dossier
+
+    assert "issuer_extraction_failed" in dossier.DEGRADED_KINDS
+    assert dossier.ROUTING_DEGRADED <= dossier.DEGRADED_KINDS

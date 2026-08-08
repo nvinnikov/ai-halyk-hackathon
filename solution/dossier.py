@@ -65,6 +65,25 @@ CUMULATIVE_TYPES = frozenset({"audit_report", "treasury_memo", "financial_notes"
 # модель; enum редакции его сейчас не выражает.
 DRAFT_NOT_EFFECTIVE_TYPES = frozenset({"audit_report"})
 
+# Виды алярмов, при которых артефакт стадии НЕ кладётся на диск: все они —
+# транзиентные сбои (бюджет, сеть, промах кассеты, ответ не прошёл валидацию),
+# а не свойства архива. stages.artifact инвалидируется только по версии, поэтому
+# записанный при таком сбое результат пережил бы устранение причины.
+#
+# Набор публичный и живёт ЗДЕСЬ в одном экземпляре: его читает и facts_extract,
+# у которого своя стадия, но тот же вход. Дублирующий список там уже разъезжался
+# с этим — issuer_extraction_failed добавили в досье и забыли в фактах, и
+# отравленные факты пережили бы починку маршрутизации (ревью PR #23, четвёртая
+# волна). Одно место — одна правда.
+ROUTING_DEGRADED = frozenset({"routing_failed", "meta_extraction_failed"})
+DEGRADED_KINDS = ROUTING_DEGRADED | {
+    "borrower_name_failed",
+    "group_routing_failed",
+    "issuer_extraction_failed",
+    "dossier_build_failed",
+    "name_pass_skipped_degraded_routing",
+}
+
 
 def _is_effective(doc: dict, dtype: str) -> bool:
     """Несёт ли документ кумулятивного типа действующее решение."""
@@ -269,9 +288,8 @@ def build_dossiers(
 
     # Деградация ПЕРВОГО прохода считается до второго: второй построен на его
     # результатах целиком, и запускать его по неполному `routed` нельзя.
-    _ROUTING_DEGRADED = {"routing_failed", "meta_extraction_failed"}
     routing_degraded = any(
-        a.get("kind") in _ROUTING_DEGRADED for q in quarantined for a in q.get("alarms", [])
+        a.get("kind") in ROUTING_DEGRADED for q in quarantined for a in q.get("alarms", [])
     )
 
     # Второй проход по наименованию заёмщика — только по документам, которые
@@ -308,13 +326,8 @@ def build_dossiers(
     # Поэтому здесь блокировка кэша досье не отменяет рестарт, а спасает ровно ту
     # ячейку, ради которой сделан проход: свой route_group-артефакт при этом
     # алярме тоже не кэшируется, и следующий прогон перепытается.
-    _degraded_kinds = _ROUTING_DEGRADED | {
-        "borrower_name_failed",
-        "group_routing_failed",
-        "issuer_extraction_failed",
-    }
     degraded = any(
-        a.get("kind") in _degraded_kinds
+        a.get("kind") in DEGRADED_KINDS
         for a in [*(a for q in quarantined for a in q.get("alarms", [])), *name_alarms]
     )
 
