@@ -195,19 +195,26 @@ def _metric_categories(node) -> list[str]:
     return sorted({n.category for n in walk(node) if isinstance(n, Agg) and n.sign != "in"})
 
 
-def _metric_filters(*nodes) -> tuple[str, ...]:
-    """Имена фильтров Agg-узлов: алярм неразнесённых строк их не применяет,
-    поэтому перечисляет в трейсе — иначе severity читалась бы как точная."""
-    return tuple(
-        sorted(
-            type(f).__name__
-            for node in nodes
-            if node is not None
-            for n in walk(node)
-            if isinstance(n, Agg)
-            for f in n.filters
-        )
-    )
+def _metric_filters(*nodes) -> dict[str, tuple[str, ...]]:
+    """Имена фильтров по категориям Agg-узлов: алярм неразнесённых строк их
+    не применяет, поэтому перечисляет в трейсе — иначе severity читалась бы
+    как точная.
+
+    Разбивка по категориям, а не общий список: пометка «охват нефильтрован»
+    относится к конкретному слепому агрегату, и фильтр соседнего узла её не
+    оправдывает. В related_share_revenue числитель читает ALL с
+    counterparty_in, а слеп знаменатель agg(REVENUE, in) — без фильтров;
+    общий список пометил бы ячейку нефильтрованной и отправил её в конец
+    очереди разбора, прямо вопреки docstring taxonomy о законности такого
+    алярма."""
+    out: dict[str, set[str]] = {}
+    for node in nodes:
+        if node is None:
+            continue
+        for n in walk(node):
+            if isinstance(n, Agg):
+                out.setdefault(n.category, set()).update(type(f).__name__ for f in n.filters)
+    return {cat: tuple(sorted(names)) for cat, names in sorted(out.items()) if names}
 
 
 def _all_metric_categories(node) -> set[str]:
@@ -1123,7 +1130,7 @@ def main(
                             print(
                                 f"ALARM other_unassigned {scenario} {clause}: "
                                 f"blind={','.join(oa['blind'])} "
-                                f"severity={oa['severity'] or 'MAX(inputs=0)'} "
+                                f"severity={'MAX(inputs=0)' if oa['severity'] is None else oa['severity']} "
                                 f"other_sum={oa['other_sum']}",
                                 flush=True,
                             )

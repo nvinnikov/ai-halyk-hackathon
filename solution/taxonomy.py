@@ -92,7 +92,7 @@ def coverage_report(rows: list[dict], referenced: set[str] | None = None) -> dic
 
 
 def cell_other_alarm(
-    rows: list[dict], referenced: set[str], metric_filters: tuple[str, ...] = ()
+    rows: list[dict], referenced: set[str], metric_filters: dict[str, tuple[str, ...]] | None = None
 ) -> dict | None:
     """Потерянная строка глазами одной ячейки (5.3): что метрика не увидит.
 
@@ -142,7 +142,14 @@ def cell_other_alarm(
         except KeyError:
             continue
     inputs_sum = sum((abs(r["amt"]) for r in ordered if r["cat"] in blind_leaves), Decimal(0))
-    severity = str((other_sum / inputs_sum).quantize(Decimal("0.000001"))) if inputs_sum else None
+    # severity — число, а не строка: её единственное назначение — порядок
+    # разбора, а лексикографическая сортировка ставит двузначное отношение
+    # ниже однозначного, то есть роняет вниз ровно самый тяжёлый случай.
+    # Отношение больше единицы здесь не экзотика: inputs_sum считается только
+    # по слепым категориям ячейки, и почти полная потеря категории даёт
+    # значение сильно выше единицы. Суммы остаются строками — там важна
+    # точность Decimal, а не сравнимость.
+    severity = float(other_sum / inputs_sum) if inputs_sum else None
     out = {
         "blind": blind,
         "other_sum": str(other_sum),
@@ -150,10 +157,16 @@ def cell_other_alarm(
         "severity": severity,
         "txn_ids": [r["txn_id"] for r in other_rows],
     }
-    if metric_filters:
+    # Фильтры берутся только у слепых категорий: пометка относится к
+    # конкретному слепому агрегату, и фильтр соседнего узла её не оправдывает.
+    # У related_share_* слеп знаменатель agg(REVENUE, in) — без фильтров, а
+    # counterparty_in стоит на числителе, читающем ALL; общий список отправил
+    # бы законный алярм в конец очереди разбора.
+    ignored = sorted({f for cat in blind for f in (metric_filters or {}).get(cat, ())})
+    if ignored:
         # Метрика видит часть строк, алярм посчитан по всем: severity — верхняя
         # оценка охвата, а само срабатывание может относиться к строке, которую
         # метрика не читает. Разбирать такую ячейку — после нефильтрованных.
         out["coverage"] = "unfiltered"
-        out["ignored_filters"] = sorted(set(metric_filters))
+        out["ignored_filters"] = ignored
     return out

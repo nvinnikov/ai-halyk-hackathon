@@ -86,7 +86,7 @@ def test_alarm_when_blind_category_and_other_present():
     assert a["blind"] == ["REVENUE"]
     assert a["other_sum"] == "25"
     assert a["inputs_sum"] == "100"
-    assert a["severity"] == "0.250000"
+    assert a["severity"] == 0.25
     assert a["txn_ids"] == ["T-2"]
 
 
@@ -135,10 +135,31 @@ def test_unfiltered_coverage_marked_when_metric_has_filters():
     """Метрика с фильтрами видит часть строк, алярм считан по всем — severity
     верхняя оценка, и трейс обязан это сказать."""
     rows = [_row("T-1", "REVENUE", "100"), _row("T-2", "OTHER", "-25")]
-    a = cell_other_alarm(rows, {"REVENUE"}, ("Quarter", "CounterpartyIn", "Quarter"))
+    a = cell_other_alarm(rows, {"REVENUE"}, {"REVENUE": ("Quarter", "CounterpartyIn")})
     assert a is not None
     assert a["coverage"] == "unfiltered"
     assert a["ignored_filters"] == ["CounterpartyIn", "Quarter"]
+
+
+def test_filters_of_sighted_categories_do_not_mark_coverage():
+    """Фильтр на зрячем агрегате пометки не даёт.
+
+    related_share_revenue: числитель читает ALL (OTHER там посчитан) и несёт
+    counterparty_in, слеп знаменатель agg(REVENUE, in) — без фильтров. Общий
+    список фильтров отправил бы законный алярм в конец очереди разбора."""
+    rows = [_row("T-1", "REVENUE", "100"), _row("T-2", "OTHER", "-25")]
+    a = cell_other_alarm(rows, {"ALL", "REVENUE"}, {"ALL": ("CounterpartyIn",)})
+    assert a is not None
+    assert a["blind"] == ["REVENUE"]
+    assert "coverage" not in a and "ignored_filters" not in a
+
+
+def test_severity_sorts_numerically():
+    """severity — число: лексикографический порядок поставил бы 10.5 ниже 2.0,
+    то есть уронил бы вниз самый тяжёлый случай."""
+    heavy = cell_other_alarm([_row("T-1", "REVENUE", "10"), _row("T-2", "OTHER", "-105")], {"REVENUE"})
+    light = cell_other_alarm([_row("T-1", "REVENUE", "10"), _row("T-2", "OTHER", "-20")], {"REVENUE"})
+    assert heavy["severity"] > light["severity"]
 
 
 def test_no_coverage_note_when_metric_unfiltered():
