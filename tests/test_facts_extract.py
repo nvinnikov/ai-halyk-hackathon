@@ -456,6 +456,38 @@ def test_ownership_number_must_stand_alone_in_quote(tmp_path, monkeypatch):
     assert any(a["kind"] == "invalid_number" and a["field"] == "ownership_threshold" for a in facts["alarms"])
 
 
+def test_ownership_number_matches_by_value_not_by_spelling(tmp_path, monkeypatch):
+    """Модель нормализует число охотнее документа — это не повод отбрасывать факт.
+
+    Документ пишет «25.0%», модель возвращает «25»; документ пишет «31,40%»,
+    модель — «31.4». Сверять надо значение, а не запись: проверка по формам
+    умеет только снимать хвостовые нули, но не дописывать их под вёрстку
+    документа, и отказ здесь стоит дорого — порог без значения отключает
+    применение кодом целиком и возвращает набор к суждению модели.
+    """
+    text = (
+        "Организация Доля голосующих прав Ertis Capital, LLP 31,40% "
+        "Организации, в которых Группа владеет 25.0% и более голосующих прав, "
+        "признаются связанными сторонами."
+    )
+    dossier = {
+        "account_id": "ACC-1",
+        "scenario_id": "S1",
+        "docs": [{"file": "kyc.pdf", "doc_type": "kyc", "date": "2025-12-31", "text": text}],
+        "docs_rejected": [],
+        "quarantined": [],
+    }
+    own = ownership(
+        [("Ertis Capital, LLP", "31.4", "Ertis Capital, LLP 31,40%")],
+        threshold="25",
+        threshold_quote="Группа владеет 25.0% и более",
+    )
+    monkeypatch.setattr(facts_extract.llm, "call", _dispatch([], own))
+    facts = facts_extract.extract_facts(tmp_path, dossier)
+    assert facts["related_parties"] == ["Ertis Capital, LLP"]
+    assert not [a for a in facts["alarms"] if a["kind"] == "invalid_number"]
+
+
 def test_ownership_row_above_threshold_wins_over_row_below(tmp_path, monkeypatch):
     """Организация в таблице двумя строками остаётся связанной по большей доле.
 
