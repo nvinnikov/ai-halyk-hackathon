@@ -9,7 +9,9 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 3
+FACTS_VERSION = 5
+# v4 — DOSSIER_VERSION=8: правило недействующих редакций расширено на
+# черновики, набор документов снова изменился.
 # v3 — досье перестало отдавать замененные редакции кумулятивных типов
 # (DOSSIER_VERSION=7): набор документов на входе изменился, и артефакт фактов,
 # собранный по старому набору, нёс бы решения из замененного рабочего
