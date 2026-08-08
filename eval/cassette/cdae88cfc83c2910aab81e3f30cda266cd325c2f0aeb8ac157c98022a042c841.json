@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "6.1",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "4000000",
+    "metric": "add(agg(PAYROLL, out, period(2025-01-01,2025-12-31)), doc(severance_liability))",
+    "quote": "Заёмщик, Kyzylorda Drilling Services JSC, обязуется не допускать, чтобы Совокупные обязательства по персоналу по состоянию на 2025-12-31 превышали $4,000,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "6.2",
+    "confidence": 1.0,
+    "direction": "max",
+    "limit": "2100000",
+    "metric": "agg(CAPEX, out, period(2025-01-01,2025-12-31))",
+    "quote": "Заёмщик, Kyzylorda Drilling Services JSC, обязуется не допускать, чтобы совокупный объём расходов по статье «Капитальные затраты» за период с 2025-01-01 по 2025-12-31 превышал $2,100,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "6.3",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "0.04",
+    "metric": "ratio(agg(ALL, out, counterparty_in(related_parties), period(2025-01-01,2025-12-31)), agg(REVENUE, in, period(2025-01-01,2025-12-31)))",
+    "quote": "Заёмщик, Kyzylorda Drilling Services JSC, обязуется не допускать, чтобы совокупные Ограниченные платежи в пользу аффилированных лиц за период с 2025-01-01 по 2025-12-31 превышали 0.04x от выручки за тот же период.",
+    "trigger": null
+   }
+  ]
+ }
+}

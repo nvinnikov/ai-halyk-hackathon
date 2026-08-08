@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "Пункт 6.1",
+    "confidence": 0.95,
+    "direction": "min",
+    "limit": "2.0",
+    "metric": "ratio(sub(agg(REVENUE, in), agg(OPEX_TOTAL, out)), agg(INTEREST, out))",
+    "quote": "Заёмщик, Ekibastuz Energy JSC, обязуется не допускать снижения Коэффициента покрытия процентов ниже величины 2.00x за период с 2025-01-01 по 2025-12-31.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.2",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "$1,500,000.00",
+    "metric": "max(agg(PAYROLL, out), agg(UTILITIES, out))",
+    "quote": "Заёмщик, Ekibastuz Energy JSC, обязуется не допускать, чтобы какая-либо отдельная статья накладных расходов превышала $1,500,000.00 за период с 2025-01-01 по 2025-12-31.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.3",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "$500,000.00",
+    "metric": "agg(ALL, out, counterparty_in(related_parties))",
+    "quote": "За период с 2025-01-01 по 2025-12-31 совокупные платежи Заёмщика (Ekibastuz Energy JSC) в адрес аффилированных и связанных сторон не должны превышать $500,000.00.",
+    "trigger": null
+   }
+  ]
+ }
+}
