@@ -182,9 +182,14 @@ def _request(blocks: list, schema: dict, max_tokens: int, delay: float, attempts
                 ],
                 tool_choice={"type": "tool", "name": "emit"},
             )
-        except anthropic.BadRequestError as exc:
-            # 400 — не сетевая проблема; ретрай не чинит, сразу в фолбэк.
-            raise SchemaRejected(str(exc)) from exc
+        except anthropic.BadRequestError:
+            # 400 — конфигурация/биллинг (исчерпанный баланс, prompt too
+            # long), НЕ «модель не смогла»: пропускаем наружу как есть —
+            # потребители не ловят его как SchemaRejected и не запекают
+            # деградированный артефакт стадии (ревью PR #9, 18-я волна:
+            # ровно та дыра, что 14-я волна закрыла для gemini; инцидент
+            # facts_extraction_failed на 12 заёмщиках шёл через эту ветку).
+            raise
         except RETRYABLE as exc:
             last = exc
             if attempts_left > 0:

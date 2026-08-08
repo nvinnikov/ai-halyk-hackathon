@@ -371,7 +371,13 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
         facts["reclass"].sort(key=lambda rc: (str(rc["txn"]), str(rc["counterparty"])))
         return facts
 
-    return artifact(wd / "facts" / f"{acc}.json", FACTS_VERSION, build)
+    art = artifact(wd / "facts" / f"{acc}.json", FACTS_VERSION, build)
+    # account в каждом алярме — при ЧТЕНИИ, артефакт не меняется (ревью PR #9,
+    # 18-я волна, симметрично specs_extract 15-й): без него системная поломка
+    # у 12 заёмщиков схлопывалась бы глобальным дедупом точных дублей до «1».
+    if art.get("alarms"):
+        art = {**art, "alarms": [{**a, "account": acc} for a in art["alarms"]]}
+    return art
 
 
 def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) -> dict | None:

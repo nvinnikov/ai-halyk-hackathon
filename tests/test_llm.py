@@ -138,7 +138,11 @@ def test_budget_ceiling(monkeypatch):
 # --- Правки по ревью ---
 
 
-def test_bad_request_is_schema_rejected_no_retry_no_cache(monkeypatch):
+def test_bad_request_propagates_no_retry_no_cache(monkeypatch):
+    """Ревью PR #9 (18-я волна): 400 у anthropic — конфигурация/биллинг
+    (исчерпанный баланс, prompt too long), НЕ «модель не смогла»: наружу
+    как есть, без ретраев и без кэша — потребители не запекают
+    деградированный артефакт (симметрично GeminiConfigError)."""
     calls = []
 
     def fake_create(**kw):
@@ -146,7 +150,7 @@ def test_bad_request_is_schema_rejected_no_retry_no_cache(monkeypatch):
         raise bad_request_error()
 
     monkeypatch.setattr(llm, "_create", fake_create)
-    with pytest.raises(llm.SchemaRejected):
+    with pytest.raises(anthropic.BadRequestError):
         llm.call("p", SCHEMA, "v1")
     assert len(calls) == 1
     assert not list(llm.CACHE.glob("*.json"))
