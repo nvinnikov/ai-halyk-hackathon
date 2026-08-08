@@ -740,11 +740,25 @@ def _alarm_counts(wd: Path) -> dict[str, int]:
     if index_path.exists():
         alarms += json.loads(index_path.read_text()).get("alarms", [])
     trace_dir = wd / "trace"
+    seen_exact: set[str] = set()
+
+    def add_once(alarm) -> None:
+        # Один и тот же алярм-словарь живёт в нескольких местах (спековые —
+        # в borrower-трейсе И в артефакте specs; карантинные — во всех
+        # пер-аккаунтных досье): точный дубль считается один раз
+        # (ревью PR #9, 11-я и 14-я волны).
+        key = stable_json(alarm)
+        if key in seen_exact:
+            return
+        seen_exact.add(key)
+        alarms.append(alarm)
+
     if trace_dir.is_dir():
         seen_fx: set[tuple[str, str]] = set()
         for p in sorted(trace_dir.glob("*.json")):
             payload = json.loads(p.read_text())
-            alarms += payload.get("alarms", [])
+            for a in payload.get("alarms", []):
+                add_once(a)
             # fx-алярм — уровня заёмщика, но лежит в каждом из его ячейковых
             # трейсов: без дедупа run-report считал бы его трижды (ревью PR #9).
             scenario = p.stem.split(".", 1)[0]
@@ -756,19 +770,9 @@ def _alarm_counts(wd: Path) -> dict[str, int]:
     for sub_dir in ("route", "dossier", "facts", "specs"):
         d = wd / sub_dir
         if d.is_dir():
-            seen_shared: set[str] = set()
             for p in sorted(d.glob("*.json")):
                 for a in json.loads(p.read_text()).get("alarms", []):
-                    # ВСЕ алярмы досье — карантинного происхождения и дублируются
-                    # во всех пер-аккаунтных артефактах (ревью PR #9, 11-я волна:
-                    # routing_quarantine/meta_extraction_failed/ambiguous_routing
-                    # считались xN заёмщиков) — считаем один раз.
-                    if sub_dir == "dossier":
-                        skey = stable_json(a)
-                        if skey in seen_shared:
-                            continue
-                        seen_shared.add(skey)
-                    alarms.append(a)
+                    add_once(a)
     counts: dict[str, int] = {}
     for a in alarms:
         kind = _alarm_kind(a)

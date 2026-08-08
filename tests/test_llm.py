@@ -924,3 +924,18 @@ def test_gemini_live_smoke():
             os.environ["LLM_PROVIDER"] = old
     print("GEMINI SMOKE RESULT:", result)
     assert result["answer"] == 4
+
+
+def test_gemini_config_4xx_raises_config_error_not_schema_rejected(monkeypatch):
+    """Ревью PR #9 (14-я волна): 4xx-конфигурация (нет ключа/битый id модели/
+    биллинг) — НЕ «модель не смогла»: потребители ловят SchemaRejected и
+    запекали бы пустые артефакты; GeminiConfigError уходит во внешний
+    fail-open без записи, зеркально anthropic AuthenticationError."""
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setattr(
+        llm, "_gemini_create", lambda m, b: gemini_response(401, {"error": {"message": "no key"}})
+    )
+
+    with pytest.raises(llm.GeminiConfigError):
+        llm.call("p", SCHEMA, "v1")
+    assert not list(llm.CACHE.glob("*.json"))

@@ -91,6 +91,14 @@ class CassetteMiss(Exception):
     """LLM_OFFLINE=1, а ни кассета, ни work-кэш не содержат этот ключ."""
 
 
+class GeminiConfigError(Exception):
+    """4xx-конфигурация gemini (нет ключа, неверный id модели, биллинг):
+    это НЕ «модель не смогла» — исключение не должно ловиться как
+    SchemaRejected и запекать пустые артефакты стадий (ревью PR #9, 14-я
+    волна; anthropic-ветка в той же ситуации кидает свой AuthenticationError,
+    который тоже уходит во внешний fail-open без записи артефакта)."""
+
+
 class GeminiTransientError(Exception):
     """429/5xx у gemini после исчерпания ретраев (аналог RETRYABLE у anthropic)."""
 
@@ -414,8 +422,11 @@ def _request_gemini(blocks: list, schema: dict, max_tokens: int, delay: float, a
                 time.sleep(_gemini_retry_delay(resp, delay * 2**attempt_no))
             continue
         if resp.status_code >= 400:
-            # Не транзиентная ошибка (400/401/403/404 и т.п.) — ретрай не чинит.
-            raise SchemaRejected(f"gemini {resp.status_code}: {_safe_error_text(resp)}")
+            # Не транзиентная ошибка (400/401/403/404) — ретрай не чинит, и это
+            # КОНФИГУРАЦИЯ, а не ответ модели: GeminiConfigError уходит во
+            # внешний fail-open (карантин/лестница) без записи пустого
+            # артефакта — зеркально anthropic-ветке (14-я волна ревью).
+            raise GeminiConfigError(f"gemini {resp.status_code}: {_safe_error_text(resp)}")
 
         data = resp.json()
         candidates = data.get("candidates") or []

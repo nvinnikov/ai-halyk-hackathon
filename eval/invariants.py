@@ -389,20 +389,22 @@ def _collect_report_alarms(wd: Path) -> list[dict]:
         payload = json.loads(p.read_text())
         alarms += payload.get("alarms", [])
         alarms += payload.get("fx_alarms", [])
+    # Точный дубль (один словарь в нескольких местах: карантинные — во всех
+    # досье, спековые — в borrower-трейсе и артефакте) считается один раз.
+    seen_exact: set[str] = set()
+    deduped: list[dict] = []
     for sub in ("route", "dossier", "facts", "specs"):
         d = wd / sub
         if d.is_dir():
-            seen_shared: set[str] = set()
             for p in sorted(d.glob("*.json")):
-                for a in json.loads(p.read_text()).get("alarms", []):
-                    # Все алярмы досье дублируются во всех пер-аккаунтных артефактах.
-                    if sub == "dossier":
-                        key = json.dumps(a, sort_keys=True, ensure_ascii=False)
-                        if key in seen_shared:
-                            continue
-                        seen_shared.add(key)
-                    alarms.append(a)
-    return alarms
+                alarms += json.loads(p.read_text()).get("alarms", [])
+    for a in alarms:
+        key = json.dumps(a, sort_keys=True, ensure_ascii=False)
+        if key in seen_exact:
+            continue
+        seen_exact.add(key)
+        deduped.append(a)
+    return deduped
 
 
 def main(archive, facts_source: str = "expected") -> int:
