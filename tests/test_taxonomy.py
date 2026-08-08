@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from taxonomy import LEAVES, ROLLUPS, coverage_report, expand, is_category
+from taxonomy import LEAVES, ROLLUPS, cell_other_alarm, coverage_report, expand, is_category
 
 
 def test_leaves_and_rollups_disjoint():
@@ -60,3 +60,111 @@ def test_reclass_targets_are_leaves():
 
     targets = {rc["to"] for f in FACTS.values() for rc in f.get("reclass", [])}
     assert targets <= LEAVES
+
+
+def _row(txn: str, cat: str, amt: str) -> dict:
+    return {"txn_id": txn, "cat": cat, "amt": Decimal(amt)}
+
+
+def test_no_alarm_when_other_empty():
+    """Нет неразнесённых строк — нет и алярма."""
+    rows = [_row("T-1", "REVENUE", "100"), _row("T-2", "CAPEX", "-50")]
+    assert cell_other_alarm(rows, {"REVENUE"}) is None
+
+
+def test_no_alarm_when_metric_reads_all():
+    """ALL включает OTHER: неразнесённые строки метрика и так считает."""
+    rows = [_row("T-1", "REVENUE", "100"), _row("T-2", "OTHER", "-40")]
+    assert cell_other_alarm(rows, {"ALL"}) is None
+
+
+def test_alarm_when_blind_category_and_other_present():
+    """Метрика читает REVENUE, часть суммы осела в OTHER — потеря молчаливая."""
+    rows = [_row("T-1", "REVENUE", "100"), _row("T-2", "OTHER", "-25")]
+    a = cell_other_alarm(rows, {"REVENUE"})
+    assert a is not None
+    assert a["blind"] == ["REVENUE"]
+    assert a["other_sum"] == "25"
+    assert a["inputs_sum"] == "100"
+    assert a["severity"] == 0.25
+    assert a["txn_ids"] == ["T-2"]
+
+
+def test_rollup_expanded_to_leaves():
+    """Роллап разворачивается: OPEX_TOTAL слеп к OTHER так же, как его листья."""
+    rows = [_row("T-1", "PAYROLL", "-80"), _row("T-2", "RENT", "-20"), _row("T-3", "OTHER", "-10")]
+    a = cell_other_alarm(rows, {"OPEX_TOTAL"})
+    assert a is not None
+    assert a["inputs_sum"] == "100"  # PAYROLL + RENT, оба листья OPEX_TOTAL
+
+
+def test_severity_none_when_metric_inputs_empty():
+    """Метрика читает категорию, где строк нет вовсе: severity не считается,
+    но алярм есть — это максимальная тяжесть, а не её отсутствие."""
+    rows = [_row("T-1", "OTHER", "-10")]
+    a = cell_other_alarm(rows, {"CAPEX"})
+    assert a is not None
+    assert a["severity"] is None
+    assert a["inputs_sum"] == "0"
+
+
+def test_unknown_category_treated_as_blind():
+    """Незнакомая категория считается слепой: fail-open не должен молчать."""
+    rows = [_row("T-1", "OTHER", "-10"), _row("T-2", "REVENUE", "50")]
+    a = cell_other_alarm(rows, {"NOT_A_CATEGORY"})
+    assert a is not None
+    assert a["blind"] == ["NOT_A_CATEGORY"]
+
+
+def test_no_alarm_without_referenced():
+    """Категории метрики неизвестны — судить не о чем."""
+    assert cell_other_alarm([_row("T-1", "OTHER", "-10")], set()) is None
+
+
+def test_deterministic_output():
+    """Порядок blind и txn_ids не зависит от порядка входа."""
+    rows = [_row("T-9", "OTHER", "-1"), _row("T-1", "OTHER", "-2"), _row("T-5", "REVENUE", "10")]
+    a = cell_other_alarm(rows, {"REVENUE", "CAPEX"})
+    b = cell_other_alarm(list(reversed(rows)), {"CAPEX", "REVENUE"})
+    assert a == b
+    assert a["blind"] == ["CAPEX", "REVENUE"]
+    assert a["txn_ids"] == ["T-1", "T-9"]
+
+
+def test_unfiltered_coverage_marked_when_metric_has_filters():
+    """Метрика с фильтрами видит часть строк, алярм считан по всем — severity
+    верхняя оценка, и трейс обязан это сказать."""
+    rows = [_row("T-1", "REVENUE", "100"), _row("T-2", "OTHER", "-25")]
+    a = cell_other_alarm(rows, {"REVENUE"}, {"REVENUE": ("Quarter", "CounterpartyIn")})
+    assert a is not None
+    assert a["coverage"] == "unfiltered"
+    assert a["ignored_filters"] == ["CounterpartyIn", "Quarter"]
+
+
+def test_filters_of_sighted_categories_do_not_mark_coverage():
+    """Фильтр на зрячем агрегате пометки не даёт.
+
+    related_share_revenue: числитель читает ALL (OTHER там посчитан) и несёт
+    counterparty_in, слеп знаменатель agg(REVENUE, in) — без фильтров. Общий
+    список фильтров отправил бы законный алярм в конец очереди разбора."""
+    rows = [_row("T-1", "REVENUE", "100"), _row("T-2", "OTHER", "-25")]
+    a = cell_other_alarm(rows, {"ALL", "REVENUE"}, {"ALL": ("CounterpartyIn",)})
+    assert a is not None
+    assert a["blind"] == ["REVENUE"]
+    assert "coverage" not in a and "ignored_filters" not in a
+
+
+def test_severity_sorts_numerically():
+    """severity — число: лексикографический порядок поставил бы 10.5 ниже 2.0,
+    то есть уронил бы вниз самый тяжёлый случай."""
+    heavy = cell_other_alarm([_row("T-1", "REVENUE", "10"), _row("T-2", "OTHER", "-105")], {"REVENUE"})
+    light = cell_other_alarm([_row("T-1", "REVENUE", "10"), _row("T-2", "OTHER", "-20")], {"REVENUE"})
+    assert heavy["severity"] > light["severity"]
+
+
+def test_no_coverage_note_when_metric_unfiltered():
+    """Без фильтров охват полный — лишней пометки в трейсе быть не должно."""
+    rows = [_row("T-1", "REVENUE", "100"), _row("T-2", "OTHER", "-25")]
+    a = cell_other_alarm(rows, {"REVENUE"})
+    assert a is not None
+    assert "coverage" not in a and "ignored_filters" not in a

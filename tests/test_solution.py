@@ -104,6 +104,7 @@ def test_diagnostics_failure_does_not_kill_run(monkeypatch):
 
     monkeypatch.setattr(solve, "sign_divergence", boom)
     monkeypatch.setattr(solve, "_write_borrower_trace", boom)
+    monkeypatch.setattr(solve, "cell_other_alarm", boom)
     answers = solve.main(PUBLIC_ZIP, facts_source="expected")
     total = score(answers, GT, verbose=False)
     assert total >= BASELINE  # ячейки посчитаны, диагностика потеряна — не наоборот
@@ -152,6 +153,82 @@ def test_trace_written_per_cell(answers):
 
 def test_deterministic(answers):
     assert answers == solve.main(PUBLIC_ZIP, facts_source="expected")
+
+
+def _cell_traces() -> list[Path]:
+    """Трейсы ячеек публичного прогона. Каталог адресуется отпечатком архива,
+    иначе сюда попали бы трейсы мутированного прогона (задача 4)."""
+    from util import dataset_hash, workdir
+
+    return sorted((workdir(dataset_hash(PUBLIC_ZIP)) / "trace").glob("*.*.json"))
+
+
+def test_other_unassigned_absent_on_public_set():
+    """На публичном наборе OTHER пуст у всех целевых — алярма быть не должно.
+
+    Тест держит границу: срабатывание здесь означает, что категоризация
+    поехала, а не что алярм неверен.
+
+    Прогон свой, а не из фикстуры `answers`: трейсы лежат на диске и хранят
+    результат последнего вызова solve.main, кем бы он ни был сделан. Соседний
+    test_diagnostics_failure_does_not_kill_run подменяет cell_other_alarm на
+    падающую заглушку — после него в трейсах ни одного other_unassigned, и
+    проверка прошла бы вакуумно. Кэш стадий делает свой вызов дешёвым."""
+    solve.main(PUBLIC_ZIP, facts_source="expected")
+    traces = _cell_traces()
+    assert traces, "трейсы ячеек не найдены — прогон не состоялся"
+    with_alarm = [t.name for t in traces if json.loads(t.read_text()).get("other_unassigned") is not None]
+    assert with_alarm == [], f"неожиданный other_unassigned: {with_alarm}"
+
+
+def test_other_unassigned_written_when_rows_lost(monkeypatch):
+    """Строка, ушедшая в OTHER, обязана поднять алярм в трейсе ячейки."""
+    original = solve.load_rows
+
+    def lossy(scenario, all_rows, index, facts, donor_rates):
+        raw, rows, alarms = original(scenario, all_rows, index, facts, donor_rates)
+        # Первая строка выручки «не опозналась»: ровно тот промах, ради
+        # которого алярм и вводится.
+        for r in rows:
+            if r["cat"] == "REVENUE":
+                r["cat"] = "OTHER"
+                break
+        return raw, rows, alarms
+
+    monkeypatch.setattr(solve, "load_rows", lossy)
+    try:
+        solve.main(PUBLIC_ZIP, facts_source="expected")
+        hit = [
+            a
+            for a in (json.loads(t.read_text()).get("other_unassigned") for t in _cell_traces())
+            if a is not None
+        ]
+        assert hit, "потерянная строка REVENUE не подняла ни одного алярма"
+        assert all(a["other_sum"] != "0" for a in hit)
+        # И в общий alarms: только его читают _alarm_counts и
+        # invariants._collect_report_alarms, а в окне решают по run-report —
+        # верхнего ключа трейса и строки в stdout для этого мало.
+        in_alarms = [
+            a
+            for t in _cell_traces()
+            for a in json.loads(t.read_text()).get("alarms", [])
+            if a.get("kind") == "other_unassigned"
+        ]
+        assert in_alarms, "алярм не доехал до trace['alarms'] — run-report его не увидит"
+        assert all(a.get("scenario") and a.get("clause") for a in in_alarms), (
+            "без scenario/clause точный дедуп схлопнет срабатывания разных ячеек в одно"
+        )
+        # inputs_empty обязателен рядом с severity: severity=None означает
+        # максимальную тяжесть, и сортировка run-report по сырому null уронила
+        # бы такую ячейку вниз или упала бы с TypeError.
+        assert all("inputs_empty" in a for a in in_alarms), (
+            "нет признака inputs_empty — MAX-тяжесть в run-report неотличима от null"
+        )
+    finally:
+        # Трейсы на диске общие: испорченный прогон обязан быть переписан
+        # чистым, иначе соседний тест увидит чужой алярм.
+        monkeypatch.undo()
+        solve.main(PUBLIC_ZIP, facts_source="expected")
 
 
 # --- реквизиты и run-report (задача 31) ---------------------------------------

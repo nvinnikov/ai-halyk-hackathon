@@ -5,6 +5,8 @@
 Ответ валидируется против LEAVES; вне таксономии → OTHER.
 """
 
+import hashlib
+
 import llm
 from taxonomy import LEAVES
 
@@ -28,13 +30,20 @@ CAT_SCHEMA = {
     "additionalProperties": False,
 }
 
+# Формулировка CAPEX расширена по замеру на мутированных описаниях: прежнее
+# «покупка оборудования и капвложения» не покрывало передачу основных средств
+# дочерней компании, и модель уводила такие строки в FINANCING или REVENUE. На
+# публичном наборе дефект невиден — эти строки ловит правило первого яруса; на
+# незнакомых формулировках их принимает второй, и CAPEX стоит 5 ячеек плюс три
+# производные метрики.
 CAT_PROMPT = """Разнеси описания банковских транзакций по категориям. Категории
 (выбирай ровно одну из списка, OTHER — только если ничего не подходит):
 {taxonomy}
 
 REVENUE — поступления от продаж; PAYROLL — оплата труда; UTILITIES — коммунальные;
 RENT — аренда; TAX — налоги и сборы; INTEREST — проценты по займам; CAPEX — покупка
-оборудования и капвложения; INSURANCE — страхование; FINANCING — кредитные транши;
+оборудования, капвложения и передача основных средств внутри группы (в том числе
+дочерним компаниям); INSURANCE — страхование; FINANCING — кредитные транши;
 MARKETING — реклама и продвижение; TELECOM — связь; CONSULTING — консультационные
 услуги; OTHER_OPEX — прочие операционные расходы (обслуживание, ремонт, юр. услуги).
 
@@ -45,21 +54,38 @@ BATCH_SIZE = 50
 SCHEMA_VERSION = "1"
 
 
-def categorize_batch(descriptions: list[str]) -> tuple[dict[str, str], list[dict]]:
+def _ordered(descriptions: list[str], order: str) -> list[str]:
+    """Порядок описаний в пачке. Рабочий путь всегда sorted; остальные два
+    нужны замеру разброса (спека 5.2.1): другой порядок даёт другой промпт,
+    другой ключ кэша и, значит, независимый ответ модели при той же задаче."""
+    unique = sorted(set(descriptions))
+    if order == "sorted":
+        return unique
+    if order == "reverse":
+        return list(reversed(unique))
+    if order == "hash":
+        return sorted(unique, key=lambda d: hashlib.sha256(d.encode()).hexdigest())
+    raise ValueError(f"unknown order {order!r}")
+
+
+def categorize_batch(descriptions: list[str], order: str = "sorted") -> tuple[dict[str, str], list[dict]]:
     """Категоризирует список описаний через LLM пачками по 50.
 
     Параметры:
         descriptions: уникальные описания банковских операций
+        order: порядок описаний в пачке — "sorted" (рабочий путь), "reverse"
+            или "hash" (замер разброса, спека 5.2.1)
 
     Возвращает:
         (маппинг {description → category}, список алярмов)
         Если LLM предложит категорию вне LEAVES → остаётся OTHER + алярм category_rejected.
     """
+    # order валидируется до проверки на пустой ввод: иначе опечатка в имени
+    # перестановки (замер разброса, 5.2.1) на пустом списке пройдёт молча,
+    # а не пустой список — тихого провала здесь допускать нельзя.
+    unique = _ordered(descriptions, order)
     if not descriptions:
         return {}, []
-
-    # Дедупликация и сортировка для детерминизма
-    unique = sorted(set(descriptions))
 
     result = {}
     alarms = []

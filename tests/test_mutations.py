@@ -72,20 +72,45 @@ def test_predict_status_without_engine():
     assert predict_status(1.5, "min", 2.00) == "BREACH"
 
 
-@pytest.fixture(scope="module")
-def public_hash():
+def _public_wd() -> Path:
     from ledger import extract_archive
 
     ds_hash, _ = extract_archive(PUBLIC_ZIP)
-    wd = Path("work") / ds_hash
-    if not ((wd / "text").is_dir() and (wd / "route").is_dir()):
-        # Холодный CI: work/ пуст. Проверять только text/ мало — text/
-        # создаёт и sanity без LLM (extract_pages), а shift/fx-мутациям
-        # нужен route/ — продукт полного документного прогона. Гард по
-        # одному text/ ронял эти тесты на workdir, «прогретом» одной
-        # sanity. Все тесты фикстуры честно пропускаются, а не падают.
-        pytest.skip("публичный workdir не прогрет (нет text/ и route/)")
-    return ds_hash
+    return Path("work") / ds_hash
+
+
+# Прогрев у мутаций двухуровневый, и мерить его одним признаком нельзя.
+#
+# text/ строится постранично через pypdf, без единого вызова LLM: его
+# создаёт в том числе sanity (extract_pages), поэтому он есть
+# после любого локального прогона и отсутствует в холодном CI. route/ —
+# продукт документного конвейера, то есть требует ключа.
+#
+# build_renamed читает только text/vision (_preseed_text_vision), а
+# shift_threshold и build_fx ходят в route/ (_final_agreement_doc,
+# _treasury_accounts). Единый признак ошибается в обе стороны: по text/
+# просыпаются route-тесты и падают на пустом route/ («ожидался ровно один
+# действующий договор ..., найдено 0») — это ловилось на каждом втором
+# локальном прогоне; по route/ глохнут rename-тесты, которые как раз могли
+# бы идти без ключа. dossier/ здесь ни при чём — eval/mutations.py его не
+# читает вовсе.
+
+
+@pytest.fixture(scope="module")
+def public_hash():
+    """Прогрев уровня text/: достаточно для build_renamed."""
+    wd = _public_wd()
+    if not (wd / "text").is_dir():
+        pytest.skip("публичный workdir не прогрет: нужен text/")
+    return wd.name
+
+
+@pytest.fixture(scope="module")
+def public_hash_routed(public_hash):
+    """Прогрев уровня route/: нужен там, где читается маршрутизация."""
+    if not (_public_wd() / "route").is_dir():
+        pytest.skip("публичный workdir не прогрет: нужен route/")
+    return public_hash
 
 
 def test_build_renamed_produces_valid_archive_with_preseeded_text(public_hash):
@@ -126,26 +151,26 @@ def test_build_renamed_is_byte_deterministic_across_reruns(public_hash):
     assert h1 == h2
 
 
-def test_shift_threshold_is_byte_deterministic_across_reruns(public_hash):
+def test_shift_threshold_is_byte_deterministic_across_reruns(public_hash_routed):
     h1 = dataset_hash(shift_threshold(PUBLIC_ZIP, "B1", "6.1"))
     h2 = dataset_hash(shift_threshold(PUBLIC_ZIP, "B1", "6.1"))
     assert h1 == h2
 
 
-def test_build_fx_is_byte_deterministic_across_reruns(public_hash):
+def test_build_fx_is_byte_deterministic_across_reruns(public_hash_routed):
     h1 = dataset_hash(build_fx(PUBLIC_ZIP, n_rows=5))
     h2 = dataset_hash(build_fx(PUBLIC_ZIP, n_rows=5))
     assert h1 == h2
 
 
-def test_shift_threshold_produces_new_key_with_shifted_value(public_hash):
+def test_shift_threshold_produces_new_key_with_shifted_value(public_hash_routed):
     scenario, clause = "B1", "6.1"
     old = float(SPECS[scenario][clause][2])
     new = round(old * 0.72, 2)
 
     out_zip = shift_threshold(PUBLIC_ZIP, scenario, clause)
     mut_hash = dataset_hash(out_zip)
-    assert mut_hash != public_hash
+    assert mut_hash != public_hash_routed
 
     mut_wd = workdir(mut_hash)
     combined = ""
@@ -160,7 +185,7 @@ def test_shift_threshold_produces_new_key_with_shifted_value(public_hash):
     assert f"{old:.2f}x" not in combined or old == new
 
 
-def test_shift_threshold_guard_on_noop(public_hash, monkeypatch):
+def test_shift_threshold_guard_on_noop(public_hash_routed, monkeypatch):
     import expected_extraction
 
     # порог, которого нет в тексте договора ни в каком разумном формате
@@ -170,10 +195,10 @@ def test_shift_threshold_guard_on_noop(public_hash, monkeypatch):
         shift_threshold(PUBLIC_ZIP, "B1", "6.1")
 
 
-def test_build_fx_converts_rows_and_preseeds_rate_line(public_hash):
+def test_build_fx_converts_rows_and_preseeds_rate_line(public_hash_routed):
     out_zip = build_fx(PUBLIC_ZIP, n_rows=5)
     mut_hash = dataset_hash(out_zip)
-    assert mut_hash != public_hash
+    assert mut_hash != public_hash_routed
 
     import zipfile
 
@@ -191,7 +216,7 @@ def test_build_fx_converts_rows_and_preseeds_rate_line(public_hash):
     assert "1.16" in combined
 
 
-def test_build_fx_guard_on_no_eligible_rows(public_hash, monkeypatch):
+def test_build_fx_guard_on_no_eligible_rows(public_hash_routed, monkeypatch):
     import mutations
 
     monkeypatch.setattr(mutations, "_treasury_accounts", lambda pub_wd, s2a: {})

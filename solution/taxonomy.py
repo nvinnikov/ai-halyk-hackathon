@@ -1,7 +1,17 @@
 """Двухуровневая таксономия категорий (5.5): листья и явные роллапы.
 
-OTHER — корзина неразнесённого, не входит ни в один роллап: любая сумма
-в ней означает, что часть расхода потерялась и тихо завышает EBITDA.
+OTHER — корзина неразнесённого. В прикладные роллапы (OPEX_TOTAL) он не
+входит: любая сумма в нём означает, что часть расхода потерялась и тихо
+завышает EBITDA. Исключение — ALL, который по смыслу «все строки» и OTHER
+содержит.
+
+Отсюда agg(ALL, ...) неразнесённые строки считает, но спасает это только
+числитель метрик связанных сторон. Знаменатели слепы: related_share_revenue
+делит на agg(REVENUE, in), related_share_opex — на agg(OTHER_OPEX, out).
+Потерянная строка выручки завышает долю, и max-ковенант по ней уходит в
+ложный BREACH — знаменатель стоит статуса ровно так же, как числитель.
+Поэтому алярм cell_other_alarm на related_share_* законен и списывать его
+как ложный нельзя.
 """
 
 from decimal import Decimal
@@ -79,3 +89,84 @@ def coverage_report(rows: list[dict], referenced: set[str] | None = None) -> dic
         "other_share": float(other_share),
         "alarm": alarm,
     }
+
+
+def cell_other_alarm(
+    rows: list[dict], referenced: set[str], metric_filters: dict[str, tuple[str, ...]] | None = None
+) -> dict | None:
+    """Потерянная строка глазами одной ячейки (5.3): что метрика не увидит.
+
+    Слепа та категория, чьё развёртывание не содержит OTHER. Метрика,
+    читающая ALL, неразнесённые строки считает — для неё алярма нет.
+
+    Тяжесть меряется долей не от леджера заёмщика, а от того, что метрика
+    вообще видит: 18 млн в OTHER при EBITDA 2.3 млн — катастрофа, при
+    выручке 500 млн — шум. Порога у severity нет: алярм срабатывает при
+    любой ненулевой сумме, severity задаёт лишь порядок разбора.
+
+    Охват — по категории, но НЕ по фильтрам Agg-узлов: строки берутся все,
+    хотя метрика с quarter(4) или desc_contains видит лишь часть. Отсюда
+    два перекоса на таких ячейках — ложное срабатывание (потерянная строка
+    Q1 поднимает алярм на квартальной метрике) и мягкая severity (в
+    знаменателе годовая сумма вместо квартальной). Учесть фильтры точно
+    значит считать алярм поузлово с предикатом interp, то есть завести в
+    таксономию знание об AST; вместо этого metric_filters перечисляет
+    неучтённые фильтры в трейсе, чтобы severity не читали как точную.
+    """
+    if not referenced:
+        return None
+    blind = []
+    for name in sorted(referenced):
+        try:
+            leaves = expand(name)
+        except KeyError:
+            # Незнакомая категория (например, пришедшая от LLM) считается
+            # слепой: молчать здесь опаснее, чем лишний раз предупредить.
+            blind.append(name)
+            continue
+        if "OTHER" not in leaves:
+            blind.append(name)
+    if not blind:
+        return None
+
+    ordered = sorted(rows, key=lambda r: r["txn_id"])
+    other_rows = [r for r in ordered if r["cat"] == "OTHER"]
+    other_sum = sum((abs(r["amt"]) for r in other_rows), Decimal(0))
+    if other_sum == 0:
+        return None
+
+    blind_leaves: set[str] = set()
+    for name in blind:
+        try:
+            blind_leaves |= set(expand(name))
+        except KeyError:
+            continue
+    inputs_sum = sum((abs(r["amt"]) for r in ordered if r["cat"] in blind_leaves), Decimal(0))
+    # severity — число, а не строка: её единственное назначение — порядок
+    # разбора, а лексикографическая сортировка ставит двузначное отношение
+    # ниже однозначного, то есть роняет вниз ровно самый тяжёлый случай.
+    # Отношение больше единицы здесь не экзотика: inputs_sum считается только
+    # по слепым категориям ячейки, и почти полная потеря категории даёт
+    # значение сильно выше единицы. Суммы остаются строками — там важна
+    # точность Decimal, а не сравнимость.
+    severity = float(other_sum / inputs_sum) if inputs_sum else None
+    out = {
+        "blind": blind,
+        "other_sum": str(other_sum),
+        "inputs_sum": str(inputs_sum),
+        "severity": severity,
+        "txn_ids": [r["txn_id"] for r in other_rows],
+    }
+    # Фильтры берутся только у слепых категорий: пометка относится к
+    # конкретному слепому агрегату, и фильтр соседнего узла её не оправдывает.
+    # У related_share_* слеп знаменатель agg(REVENUE, in) — без фильтров, а
+    # counterparty_in стоит на числителе, читающем ALL; общий список отправил
+    # бы законный алярм в конец очереди разбора.
+    ignored = sorted({f for cat in blind for f in (metric_filters or {}).get(cat, ())})
+    if ignored:
+        # Метрика видит часть строк, алярм посчитан по всем: severity — верхняя
+        # оценка охвата, а само срабатывание может относиться к строке, которую
+        # метрика не читает. Разбирать такую ячейку — после нефильтрованных.
+        out["coverage"] = "unfiltered"
+        out["ignored_filters"] = ignored
+    return out

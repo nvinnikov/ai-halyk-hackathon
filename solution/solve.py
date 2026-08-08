@@ -42,7 +42,7 @@ from ledger import dirty_rows_of, extract_archive, find_inputs, load_ledger, row
 from scindex import INDEX_VERSION, build_index
 from specs_extract import extract_specs
 from stages import artifact
-from taxonomy import coverage_report
+from taxonomy import cell_other_alarm, coverage_report
 from templates import TEMPLATES, match_heading
 from util import OUT, ROOT, q2, stable_json, workdir
 
@@ -193,6 +193,34 @@ def _metric_categories(node) -> list[str]:
     METRIC_CATEGORIES: тот вёлся руками при формулах-лямбдах и уехал бы от
     формул при первой правке."""
     return sorted({n.category for n in walk(node) if isinstance(n, Agg) and n.sign != "in"})
+
+
+def _metric_filters(*nodes) -> dict[str, tuple[str, ...]]:
+    """Имена фильтров по категориям Agg-узлов: алярм неразнесённых строк их
+    не применяет, поэтому перечисляет в трейсе — иначе severity читалась бы
+    как точная.
+
+    Разбивка по категориям, а не общий список: пометка «охват нефильтрован»
+    относится к конкретному слепому агрегату, и фильтр соседнего узла её не
+    оправдывает. В related_share_revenue числитель читает ALL с
+    counterparty_in, а слеп знаменатель agg(REVENUE, in) — без фильтров;
+    общий список пометил бы ячейку нефильтрованной и отправил её в конец
+    очереди разбора, прямо вопреки docstring taxonomy о законности такого
+    алярма."""
+    out: dict[str, set[str]] = {}
+    for node in nodes:
+        if node is None:
+            continue
+        for n in walk(node):
+            if isinstance(n, Agg):
+                out.setdefault(n.category, set()).update(type(f).__name__ for f in n.filters)
+    return {cat: tuple(sorted(names)) for cat, names in sorted(out.items()) if names}
+
+
+def _all_metric_categories(node) -> set[str]:
+    """Все категории метрики, включая доходные: потерянная строка REVENUE —
+    главный риск категоризации, а _metric_categories отбрасывает sign == in."""
+    return {n.category for n in walk(node) if isinstance(n, Agg)}
 
 
 def _metric_inputs(node, raw: list, facts: dict) -> dict:
@@ -732,7 +760,14 @@ def _write_borrower_trace(
                 cs = legacy_spec_to_cellspec(SPECS[scenario][clause])
         except Exception:
             continue
-        referenced |= {n.category for n in walk(cs["metric_ast"]) if isinstance(n, Agg)}
+        # Триггер наравне с метрикой: несработавший триггер даёт безусловный
+        # COMPLIANT (evidence.compute), значит его категория — такой же путь к
+        # статусу. referenced уходит в coverage_report и решает эскалацию
+        # warn → critical; без триггера springing-ковенант, чьё условие читает
+        # OTHER_OPEX или OPEX_TOTAL, оставил бы заёмщицкий алярм на warn.
+        referenced |= _all_metric_categories(cs["metric_ast"])
+        if cs.get("trigger_ast") is not None:
+            referenced |= _all_metric_categories(cs["trigger_ast"])
     docs_used: list = []
     docs_rejected: list = []
     if facts_source == "extracted" and index is not None:
@@ -1048,6 +1083,66 @@ def main(
                             trace["sign_divergence"] = divergence
                     except Exception as exc:
                         trace["sign_divergence_error"] = repr(exc)
+                    # Неразнесённые строки глазами этой ячейки (5.3): диагностика,
+                    # вердикт не меняется. Падение обхода не стоит ячейки.
+                    #
+                    # Категории триггера учитываются наравне с категориями метрики:
+                    # несработавший триггер даёт COMPLIANT безусловно (evidence.compute),
+                    # поэтому потерянная строка в категории, которую читает только
+                    # триггер, молча переворачивает статус так же, как строка в метрике.
+                    try:
+                        alarm_categories = _all_metric_categories(cellspec_or_error["metric_ast"])
+                        if cellspec_or_error["trigger_ast"] is not None:
+                            alarm_categories |= _all_metric_categories(cellspec_or_error["trigger_ast"])
+                        oa = cell_other_alarm(
+                            rows,
+                            alarm_categories,
+                            _metric_filters(
+                                cellspec_or_error["metric_ast"], cellspec_or_error["trigger_ast"]
+                            ),
+                        )
+                        if oa is not None:
+                            trace["other_unassigned"] = oa
+                            # И в общий alarms: сканеры run-report
+                            # (_alarm_counts) и invariants._collect_report_alarms
+                            # читают только alarms/fx_alarms, а строка ALARM в
+                            # stdout тонет между fx и fallback. В окне решают по
+                            # run-report — тот же приём, что для
+                            # metric_substituted. scenario/clause внутрь
+                            # словаря: иначе точный дедуп схлопнул бы
+                            # одинаковые срабатывания разных ячеек в одно.
+                            trace.setdefault("alarms", []).append(
+                                {
+                                    "kind": "other_unassigned",
+                                    "scenario": scenario,
+                                    "clause": clause,
+                                    "blind": oa["blind"],
+                                    "severity": oa["severity"],
+                                    # severity=None (inputs_sum == 0) — это MAX,
+                                    # а не отсутствие тяжести. В stdout это уже
+                                    # учтено, но решают по run-report, и там
+                                    # сортировка по null уронила бы такую ячейку
+                                    # вниз или упала бы с TypeError. Флаг даёт
+                                    # сортируемый ключ: (not inputs_empty, severity).
+                                    "inputs_empty": oa["severity"] is None,
+                                    "other_sum": oa["other_sum"],
+                                }
+                            )
+                            # severity=None означает inputs_sum == 0: метрика не
+                            # видит НИ ОДНОЙ своей строки, весь объём осел в
+                            # OTHER. Это максимальная тяжесть, и печатать её
+                            # как None нельзя — разбор в окне идёт сортировкой
+                            # по severity, и такая ячейка встала бы ниже любой
+                            # с посчитанной долей.
+                            print(
+                                f"ALARM other_unassigned {scenario} {clause}: "
+                                f"blind={','.join(oa['blind'])} "
+                                f"severity={'MAX(inputs=0)' if oa['severity'] is None else oa['severity']} "
+                                f"other_sum={oa['other_sum']}",
+                                flush=True,
+                            )
+                    except Exception as exc:
+                        trace["other_unassigned_error"] = repr(exc)
                     if trace.get("tier") == 0:
                         computed.append((cellspec_or_error["direction"], cell["actual"]))
                     if cell["evidence_txn_id"] is not None:
