@@ -11,7 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import solve
-from dsl import parse
+from dsl import parse, signature
 from ledger import extract_archive, find_inputs, load_ledger, rows_of
 from scindex import INDEX_VERSION, build_index
 from stages import artifact
@@ -141,6 +141,23 @@ def test_extracted_cellspec_stashes_shadow_metric_on_divergence():
     assert cellspec["shadow_metric_text"] == "agg(TAX, out)"
 
 
+def test_shadow_set_when_signatures_agree_but_text_differs():
+    """Тень ставится по факту подмены, а не по diverged.
+
+    Регрессия на ревью PR #21, круг 2: signature() намеренно затирает знак
+    Agg, поэтому пара net/out расхождением не считается — а знак прямо
+    меняет actual. Раньше такая подмена шла молча; теперь тень есть, а от
+    шума защищает changed_answer внутри _shadow_compare.
+    """
+    heading = title_key("Максимальные расходы по категории")
+    sp = _spec(title_key=heading, template=None, metric="agg(CAPEX, net)")
+    cellspec, _quote = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == TEMPLATES["capex"]  # исполняется шаблон
+    assert cellspec["shadow_metric_text"] == "agg(CAPEX, net)"
+    # Сигнатуры равны — старое условие diverged тень бы не поставило.
+    assert signature(parse("agg(CAPEX, net)")) == signature(parse(TEMPLATES["capex"]))
+
+
 def test_extracted_cellspec_no_shadow_when_template_matches_extracted():
     # Формулы совпали — подменять нечего, тень не нужна: лишний проход по
     # леджеру ради заведомо равного значения не делаем.
@@ -234,39 +251,55 @@ def test_shadow_failure_is_caught_structurally_not_by_luck(monkeypatch):
 
 
 def test_family_mismatch_detects_dollars_against_ratio_limit():
-    # Доллары против «9.00x» — 189 тысяч раз, величины разной природы.
-    assert solve._family_mismatch(Decimal("1703882.44"), Decimal("9.00")) is True
+    # Доллары против «9.00x» на max-ковенанте — 189 тысяч раз, величины
+    # разной природы, и кратное превышение здесь абсурдно.
+    assert solve._family_mismatch(Decimal("1703882.44"), Decimal("9.00"), "max") is True
 
 
 def test_family_mismatch_silent_on_homogeneous_pair():
     # Самое дальнее расхождение однородной пары на публичном наборе — ±45%.
-    assert solve._family_mismatch(Decimal("8104772.36"), Decimal("6500000")) is False
-    assert solve._family_mismatch(Decimal("0.0411"), Decimal("0.04")) is False
+    assert solve._family_mismatch(Decimal("8104772.36"), Decimal("6500000"), "max") is False
+    assert solve._family_mismatch(Decimal("0.0411"), Decimal("0.04"), "max") is False
 
 
 def test_family_mismatch_never_fires_below_the_limit():
     """Значение много меньше порога — законный ответ, а не промах семьёй.
 
-    Регрессия на ревью PR #21: нижняя ветвь guard'а била по комфортному
-    соблюдению max-ковенанта, и разрыв там ничем не ограничен — пустая
-    категория даёт сколь угодно большой. Ни один из этих случаев (200x,
-    13 тысяч, 133 тысячи — последний вплотную к настоящему промаху в 189
-    тысяч) не имеет права поднимать guard.
+    Регрессия на ревью PR #21, круг 1: нижняя ветвь guard'а била по
+    комфортному соблюдению max-ковенанта, и разрыв там ничем не ограничен —
+    пустая категория даёт сколь угодно большой. Ни один из этих случаев
+    (200x, 13 тысяч, 133 тысячи — последний вплотную к настоящему промаху
+    в 189 тысяч) не имеет права поднимать guard.
     """
-    assert solve._family_mismatch(Decimal("0.0002"), Decimal("0.04")) is False
-    assert solve._family_mismatch(Decimal("150"), Decimal("2000000")) is False
-    assert solve._family_mismatch(Decimal("15"), Decimal("2000000")) is False
+    assert solve._family_mismatch(Decimal("0.0002"), Decimal("0.04"), "max") is False
+    assert solve._family_mismatch(Decimal("150"), Decimal("2000000"), "max") is False
+    assert solve._family_mismatch(Decimal("15"), Decimal("2000000"), "max") is False
     # Та же сторона у коэффициентного шаблона при долларовом пороге: ловить
     # её магнитудой нельзя, не задев строки выше.
-    assert solve._family_mismatch(Decimal("0.33"), Decimal("1800000")) is False
+    assert solve._family_mismatch(Decimal("0.33"), Decimal("1800000"), "max") is False
+
+
+def test_family_mismatch_never_fires_on_min_covenant():
+    """На min-ковенанте кратное превышение порога — соблюдение, не промах.
+
+    Регрессия на ревью PR #21, круг 2: аргумент, которым убрана нижняя
+    ветвь, симметрично применим к верхней на min. Покрытие процентов у
+    заёмщика с крошечными процентными расходами уходит за порог в тысячи
+    раз при совершенно верном шаблоне и верном значении — guard обязан
+    молчать, иначе он выбросит правильный actual.
+    """
+    assert solve._family_mismatch(Decimal("20000"), Decimal("2.00"), "min") is False
+    assert solve._family_mismatch(Decimal("2000"), Decimal("0.20"), "min") is False
+    # Направление не прочиталось — отличить абсурд от комфорта нечем.
+    assert solve._family_mismatch(Decimal("1703882.44"), Decimal("9.00"), None) is False
 
 
 def test_family_mismatch_never_fires_on_zero_or_unknown_limit():
     # Ноль — законный ответ («таких операций не было»), подменять его порогом
     # значило бы терять верную ячейку; порога нет — сравнивать не с чем.
-    assert solve._family_mismatch(Decimal("0"), Decimal("500000")) is False
-    assert solve._family_mismatch(Decimal("500000"), None) is False
-    assert solve._family_mismatch(Decimal("500000"), Decimal("0")) is False
+    assert solve._family_mismatch(Decimal("0"), Decimal("500000"), "max") is False
+    assert solve._family_mismatch(Decimal("500000"), None, "max") is False
+    assert solve._family_mismatch(Decimal("500000"), Decimal("0"), "max") is False
 
 
 def _invalid_spec_error(limit: str, direction: str = "max") -> ValueError:
@@ -287,6 +320,29 @@ def test_heuristic_tier_keeps_limit_as_actual_on_family_mismatch():
     assert cell["actual"] == 9.0
     kinds = [a["kind"] for a in trace["alarms"] if isinstance(a, dict)]
     assert "heuristic_family_mismatch" in kinds
+
+
+def test_family_mismatch_does_not_condition_the_prior(monkeypatch):
+    """Семья отвергнутого шаблона не имеет права выбирать ступень приора.
+
+    Регрессия на ревью PR #21, круг 2: family_of считается по AST того же
+    шаблона, который признан не той природы, и уходила в fallback_cell
+    ключом direction|family. На публичном наборе замаскировано — до этой
+    ступени prior_status не доходит, by_clause всегда попадает.
+    """
+    seen: dict = {}
+
+    def spy(direction, family, limit, computed, clause=None):
+        seen.update(direction=direction, family=family)
+        return {"status": "BREACH", "actual": 0.0, "evidence_txn_id": None}, ["fallback_used"]
+
+    monkeypatch.setattr(solve, "fallback_cell", spy)
+    rows = [_row("TXN-1", "CAPEX", "-1703882.44")]
+    solve.run_cell(
+        "SC-M", "6.1", rows, {}, _invalid_spec_error("9.00"), [], quote="капитальные затраты Группы"
+    )
+    assert seen["direction"] == "max"
+    assert seen["family"] is None  # не "absolute" от долларового шаблона
 
 
 def test_heuristic_tier_still_uses_computed_actual_when_families_agree():
