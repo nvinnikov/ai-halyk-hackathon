@@ -33,7 +33,7 @@ import evidence
 import facts_extract
 import llm
 from dossier import build_dossiers
-from dsl import Agg, DslError, Ratio, parse, walk
+from dsl import Agg, DslError, Ratio, parse, signature, walk
 from engine import agg, prepare_rows, select_rows, sign_divergence
 from facts_extract import extract_facts, resolve_doc_fact
 from fallbacks import fallback_cell, family_of, heuristic_template
@@ -502,16 +502,28 @@ def _extracted_cellspec(
             "limit": Decimal(sp["limit"]),
             "trigger_ast": parse(sp["trigger"]) if sp["trigger"] else None,
         }
-        # Заголовок не всегда кодирует категорию (ревью PR #9): если шаблон
-        # заменил извлечённый DSL на метрику с ДРУГИМ набором категорий,
-        # подмена остаётся (ruling: шаблон при матче исполняется), но обязана
-        # быть видимой — молча неверная ячейка на приватном наборе хуже шумной.
+        # Подмена извлечённого DSL шаблоном остаётся (ruling: шаблон при матче
+        # исполняется), но обязана быть видимой ЦЕЛИКОМ (ревью PR #9, 10-я
+        # волна): не только другой набор категорий, но и разница по
+        # quarter()/period()/знаку/форме агрегации — сигнатурное сравнение.
         if metric_text != sp["metric"]:
             div = _category_divergence(sp["metric"], metric_text)
             if div:
                 cellspec["match_alarms"] = [
                     {"kind": "heading_category_divergence", "extracted": div[0], "template": div[1]}
                 ]
+            else:
+                try:
+                    if signature(parse(sp["metric"])) != signature(parse(metric_text)):
+                        cellspec["match_alarms"] = [
+                            {
+                                "kind": "heading_signature_divergence",
+                                "extracted": sp["metric"],
+                                "template": metric_text,
+                            }
+                        ]
+                except DslError:
+                    pass  # сырой DSL не парсится — подмена и так единственный путь
         return cellspec, quote
     except (DslError, InvalidOperation, KeyError) as exc:
         return exc, quote
@@ -630,6 +642,12 @@ def _write_borrower_trace(
         except Exception:
             pass  # диагностика: досье могло не собраться — трейс не падает
     cov = coverage_report(rows, referenced)
+    # Алярмы извлечённых спек — в borrower-трейс: trace/*.json сканируется
+    # _alarm_counts, так пересчитанные при чтении алярмы (в артефакте specs
+    # лежат только extraction-time) доезжают до run-report (10-я волна).
+    spec_alarms = (
+        (specs_by_sc or {}).get(scenario, {}).get("alarms", []) if facts_source == "extracted" else []
+    )
     payload = {
         "scenario": scenario,
         "facts_source": facts_source,
@@ -637,6 +655,7 @@ def _write_borrower_trace(
         "docs_rejected": docs_rejected,
         "categories": {r["txn_id"]: r["cat"] for r in sorted(rows, key=lambda x: x["txn_id"])},
         "coverage": cov,
+        "alarms": spec_alarms,
     }
     d = wd / "trace"
     d.mkdir(parents=True, exist_ok=True)
@@ -835,6 +854,11 @@ def main(
                     # Суффикс-доматч — не тишина (ревью PR #9, 4-я волна):
                     # подмена номера пункта видима оператору и в трейсе ячейки.
                     print(f"ALARM clause_remapped {scenario}: {t_cl} -> {e_cl}", flush=True)
+            # Алярмы спек (invalid_spec/missing_doc_keys/limit_outlier/...) —
+            # в stdout: без этого они умирали в specs_by_sc непрочитанными
+            # (ревью PR #9, 10-я волна), а limit_outlier вообще не имел эффекта.
+            for alarm in specs_by_sc[scenario].get("alarms", []):
+                print(f"ALARM spec_{alarm.get('kind', 'other')} {scenario}: {alarm}", flush=True)
         try:
             # Внутри try: даже единственная точка чтения фактов не имеет права
             # уронить цикл — сценарий уйдёт лестницей, остальные посчитаются.

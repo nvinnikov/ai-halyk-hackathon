@@ -52,16 +52,22 @@ sanity: install
 
 # Без сети: инварианты (expected-режим по умолчанию) + греп-гейт + юниты.
 # LLM_OFFLINE=1 — защита от случайного промаха кассеты/кэша мимо сети.
+# ВАЖНО: инварианты гоняются в ОБОИХ режимах (ревью PR #9, 10-я волна) —
+# extracted ПОСЛЕДНИМ, чтобы trace/ остался от боевого режима (режимы делят
+# каталог трейсов, и check_fallback_rate обязан мерить extracted, а не
+# expected с tier==0 по построению).
 eval-offline: install
 	LLM_OFFLINE=1 uv run pytest -q
 	uv run python eval/grep_gate.py
 	LLM_OFFLINE=1 uv run python eval/invariants.py $(ARCHIVE)
+	LLM_OFFLINE=1 uv run python eval/invariants.py $(ARCHIVE) extracted
 
-# С ключом в окружении: extraction eval, мутации, LOBO — все ходят в LLM.
+# С ключом в окружении: extraction eval, мутации (включая fx), LOBO.
 eval-live: install
 	uv run python eval/extraction_eval.py $(ARCHIVE)
 	uv run python eval/mutations.py $(ARCHIVE) rename
 	uv run python eval/mutations.py $(ARCHIVE) shift
+	uv run python eval/mutations.py $(ARCHIVE) fx
 	uv run python eval/lobo.py $(ARCHIVE)
 
 # Заморозить кэш публичного extracted-прогона как кассету — регрессионный
