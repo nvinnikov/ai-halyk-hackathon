@@ -15,9 +15,19 @@ import re
 
 # Порядок важен: первое совпадение выигрывает.
 RULES = [
-    ("CAPEX", r"purchase of .*equipment|transfer of .*equipment to subsidiary"),
-    ("REVENUE", r"sales settlement"),
-    ("FINANCING", r"facility drawdown"),
+    # Оба порядка слов: «purchase of equipment» и «equipment purchase» — одна
+    # операция, писари договоров вольны в синтаксисе.
+    (
+        "CAPEX",
+        r"purchase of .*(?:equipment|machinery)|(?:equipment|machinery) purchase|"
+        r"transfer of .*equipment to subsidiary",
+    ),
+    ("REVENUE", r"sales settlement|revenue settlement|subscription revenue"),
+    (
+        "FINANCING",
+        r"facility drawdown|loan drawdown|drawdown tranche|"
+        r"principal repayment|promissory note proceeds",
+    ),
     ("INTEREST", r"\binterest\b|interest coupon"),
     ("PAYROLL", r"payroll"),
     ("INSURANCE", r"insurance|fidelity bond"),
@@ -34,7 +44,11 @@ RULES = [
     ("RENT", r"\brent\b|\blease\b|rental"),
     # Консультационные услуги — отдельная статья: аудиторы переклассифицируют
     # именно их, и в EBITDA как «Операционные расходы» они не входят.
-    ("CONSULTING", r"advisory engagement|management .*retainer|retainer fee"),
+    (
+        "CONSULTING",
+        r"advisory engagement|consulting engagement|advisory (?:services|on)|"
+        r"management .*retainer|retainer fee",
+    ),
     (
         "OTHER_OPEX",
         r"operating and maintenance|servicing and operating|servicing contract|"

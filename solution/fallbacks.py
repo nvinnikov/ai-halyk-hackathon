@@ -54,15 +54,22 @@ def _argmax(counts: dict) -> str:
 def prior_status(
     prior: dict, direction: str | None, family: str | None, clause: str | None = None
 ) -> tuple[str, bool]:
-    """Лестница приора: номер пункта → (направление, семья) → глобальная доля.
+    """Лестница приора: (направление, семья) → номер пункта → глобальная доля.
 
-    Пункт первым — по LOBO-замеру (порядок пунктов даёт лучший скор, чем
-    порядок семей). Порядок согласован с eval/prior.py."""
-    if clause and clause in prior.get("by_clause", {}):
-        return _argmax(prior["by_clause"][clause]), True
+    Пункт был первым по LOBO-замеру, но LOBO меряет перенос между заёмщиками
+    ОДНОГО набора, а ступень переносится между НАБОРАМИ: номер пункта — это
+    имя ячейки в шаблоне ответа, и другой набор договоров вправе положить под
+    тот же номер любой другой ковенант. (Направление, семья) привязаны к
+    существу метрики, а не к нумерации, поэтому при известной семье они
+    главнее; пункт остаётся ступенью ниже — для ячеек, о которых неизвестно
+    вообще ничего, он всё ещё информативнее глобальной доли. На публичном
+    наборе перестановка ничего не меняет (обе фолбэчные ячейки дают тот же
+    ответ — замерено офлайн-прогоном). Порядок согласован с eval/prior.py."""
     key = f"{direction}|{family}"
     if direction and family and key in prior["by"]:
         return _argmax(prior["by"][key]), True
+    if clause and clause in prior.get("by_clause", {}):
+        return _argmax(prior["by_clause"][clause]), True
     return _argmax(prior["global"]), False
 
 

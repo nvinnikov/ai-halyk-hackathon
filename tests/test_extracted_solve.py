@@ -158,6 +158,43 @@ def test_shadow_set_when_signatures_agree_but_text_differs():
     assert signature(parse("agg(CAPEX, net)")) == signature(parse(TEMPLATES["capex"]))
 
 
+def test_loose_match_on_more_general_heading_computes_extracted_formula():
+    """Пин приватного паттерна: заголовок БЕЗ уточняющего слова нестрого
+    матчится на более специфичный шаблон, но исполняется извлечённая формула.
+
+    «…капитальных затрат к EBITDA» (затраты самого заёмщика) уводит на
+    group_capex_to_ebitda, «…рентабельность по EBITDA» (без «скорректированная»)
+    — на adj_ebitda_margin. Обе подмены молча брали бы чужую метрику; их
+    останавливают два независимых механизма, и тест держит оба: недостающий
+    doc()-ключ шаблона откатывает без вето (вето — только у точного матча),
+    а при живом ключе нестрогий матч отвергается по расхождению формул."""
+    cases = [
+        (
+            "Максимальное отношение капитальных затрат к EBITDA",
+            "ratio(agg(CAPEX, out), sub(agg(REVENUE, in), agg(OTHER_OPEX, out)))",
+            "group_capex",
+            "loose_heading_rejected_on_divergence",  # категорийное расхождение
+        ),
+        (
+            "Минимальная рентабельность по EBITDA",
+            "ratio(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), agg(REVENUE, in))",
+            "ebitda_addbacks_material_total",
+            "loose_heading_rejected_on_divergence",  # сигнатурное расхождение
+        ),
+    ]
+    for heading, metric, doc_key, rejection in cases:
+        sp = _spec(title_key=title_key(heading), metric=metric)
+        # Ключа шаблона нет в фактах: откат по heading_doc_keys_missing,
+        # вето derived_doc_key_missing у нестрогого матча не срабатывает.
+        cellspec, _ = solve._extracted_cellspec(sp, "6.2", fact_keys=frozenset())
+        assert isinstance(cellspec, dict) and cellspec["metric_text"] == metric
+        # Ключ есть: шаблон доживает до сравнения формул и отвергается там.
+        cellspec, _ = solve._extracted_cellspec(sp, "6.2", fact_keys=frozenset({doc_key}))
+        assert isinstance(cellspec, dict) and cellspec["metric_text"] == metric
+        kinds = [a["kind"] for a in cellspec["match_alarms"]]
+        assert rejection in kinds and "heading_matched_loosely" in kinds
+
+
 def test_extracted_cellspec_no_shadow_when_template_matches_extracted():
     # Формулы совпали — подменять нечего, тень не нужна: лишний проход по
     # леджеру ради заведомо равного значения не делаем.

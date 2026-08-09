@@ -21,21 +21,22 @@ def test_prior_status_conditional_and_global():
     assert status in ("BREACH", "COMPLIANT") and conditional is False
 
 
-def test_prior_status_clause_first_then_family_then_global():
-    """Пункт → семья → глобальный (LOBO: 27/36 против 25/36 у семья→пункт
-    при AST-семьях): даже когда семья известна, пункт точнее — сдвиг 6.1/6.2
-    несёт сигнал, а absolute размазана."""
+def test_prior_status_family_first_then_clause_then_global():
+    """Семья → пункт → глобальный. Семья привязана к существу метрики и
+    переносится между наборами; номер пункта — к нумерации шаблона ответа,
+    и чужой набор кладёт под тот же номер другой ковенант. Пункт остаётся
+    ступенью для ячеек, о которых неизвестно ничего."""
     prior = {
         "by": {"max|absolute": {"BREACH": 9, "COMPLIANT": 1}},
         "by_clause": {"6.2": {"BREACH": 1, "COMPLIANT": 9}},
-        "global": {"BREACH": 9, "COMPLIANT": 1},
+        "global": {"BREACH": 1, "COMPLIANT": 9},
     }
     status, conditional = prior_status(prior, "max", "absolute", clause="6.2")
-    assert status == "COMPLIANT" and conditional is True  # пункт главнее семьи
-    status, _ = prior_status(prior, "max", "absolute", clause="9.9")
-    assert status == "BREACH"  # незнакомый пункт → семья
+    assert status == "BREACH" and conditional is True  # семья главнее пункта
+    status, conditional = prior_status(prior, None, None, clause="6.2")
+    assert status == "COMPLIANT" and conditional is True  # семьи нет → пункт
     status, conditional = prior_status(prior, None, None, clause="9.9")
-    assert status == "BREACH" and conditional is False  # ничего нет → глобальный
+    assert status == "COMPLIANT" and conditional is False  # ничего нет → глобальный
 
 
 def test_heuristic_template_keywords():
