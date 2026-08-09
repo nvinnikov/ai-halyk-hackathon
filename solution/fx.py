@@ -3,7 +3,11 @@
 Направление закодировано в имени поля: сумма в валюте умножается на
 usd_per_unit. Лестница фолбэка: свой курс → курс любого другого целевого
 заёмщика (тай-брейк: последний по дате документа, при равных — по
-возрастанию хеша) → строка исключается с алярмом. Подстановка 1.0 не
+возрастанию хеша) → ближайший по дате курс той же валюты из общего пула →
+строка исключается с алярмом. Ступень «ближайший по дате» — приближение с
+малой ограниченной ошибкой (дрейф курса за дни), тогда как исключение
+строки — уверенная ошибка на весь её вес в базе метрики; исключение
+остаётся только для валюты, у которой курсов нет вовсе. Подстановка 1.0 не
 является ступенью лестницы ни при каких условиях: неизвестный курс — это
 отсутствие суммы, а не сумма один к одному.
 
@@ -18,6 +22,7 @@ usd_per_unit. Лестница фолбэка: свой курс → курс л
 итоговую долларовую сумму операции, а не сумму в валюте платежа.
 """
 
+from datetime import date as _date
 from decimal import Decimal, InvalidOperation
 
 
@@ -78,6 +83,51 @@ def pick_rate(rates: list[dict], currency: str, date: str) -> dict | None:
     return picked
 
 
+def _days_apart(rate: dict, date: str) -> int | None:
+    """Расстояние в днях от даты операции до интервала курса; None — дата или
+    границы не разбираются (такой курс из кандидатов ближайшего выбывает)."""
+    try:
+        d = _date.fromisoformat(date)
+        frm = _date.fromisoformat(rate["effective_from"]) if rate.get("effective_from") else None
+        to = _date.fromisoformat(rate["effective_to"]) if rate.get("effective_to") else None
+    except ValueError:
+        return None
+    if frm is not None and d < frm:
+        return (frm - d).days
+    if to is not None and d > to:
+        return (d - to).days
+    return 0
+
+
+def pick_nearest(rates: list[dict], currency: str, date: str) -> dict | None:
+    """Ближайший по дате курс валюты — ступень после точного покрытия.
+
+    Тай-брейк при равном расстоянии — тот же, что у pick_rate: последний по
+    дате документа, при равных — по возрастанию хеша, потом по возрастанию
+    курса. conflict взводится, когда на минимальном расстоянии несколько
+    разных значений курса."""
+    fit = [
+        (dist, r)
+        for r in rates
+        if r.get("currency") == currency
+        and _value(r) is not None
+        and (dist := _days_apart(r, date)) is not None
+    ]
+    if not fit:
+        return None
+    fit.sort(key=lambda p: ((p[1].get("doc_hash") or ""), _value(p[1])))
+    fit.sort(key=lambda p: p[1].get("doc_date") or "", reverse=True)
+    fit.sort(key=lambda p: p[0])
+    best_dist, best = fit[0]
+    picked = dict(best)
+    at_min = [r for dist, r in fit if dist == best_dist]
+    picked["conflict"] = len({_value(r) for r in at_min}) > 1
+    picked["unbounded_interval"] = _unbounded(best)
+    picked["candidates"] = [_candidate(r) for r in at_min]
+    picked["distance_days"] = best_dist
+    return picked
+
+
 def _convert(row: dict, rate: dict) -> dict:
     rec = dict(row)
     rec["amt"] = row["amt"] * _value(rate)
@@ -116,11 +166,26 @@ def to_usd(rows: list[dict], own_rates: list[dict], donor_rates: list[dict]) -> 
         if rate is None:
             rate = pick_rate(donor_rates, r["currency"], r["date"])
             donor = rate is not None
+        nearest = False
+        if rate is None:
+            # Интервалы дату не накрыли — ближайший по дате курс из общего
+            # пула. Свой и донорский на равных: расстояние важнее источника.
+            rate = pick_nearest(own_rates + donor_rates, r["currency"], r["date"])
+            nearest = rate is not None
         if rate is None:
             alarms.append({"kind": "fx_uncovered_row", **common})
             continue
         if donor:
             alarms.append({"kind": "fx_donor_used", **common, "usd_per_unit": rate["usd_per_unit"]})
+        if nearest:
+            alarms.append(
+                {
+                    "kind": "fx_nearest_used",
+                    **common,
+                    "usd_per_unit": rate["usd_per_unit"],
+                    "distance_days": rate["distance_days"],
+                }
+            )
         if rate["conflict"]:
             # Полный список кандидатов — чтобы человек мог пересмотреть выбор,
             # не поднимая исходные документы.
@@ -132,7 +197,12 @@ def to_usd(rows: list[dict], own_rates: list[dict], donor_rates: list[dict]) -> 
 
 
 def coverage_alarms(rows: list[dict], own_rates: list[dict], donor_rates: list[dict]) -> list[dict]:
-    """Проверка покрытия до расчёта: непокрытая валюта бьёт по заёмщику целиком."""
+    """Проверка покрытия до расчёта: непокрытая валюта бьёт по заёмщику целиком.
+
+    Согласована с лестницей to_usd (ревью PR #26): пара, которую вытянет
+    ступень ближайшего курса, покрыта — иначе fx_uncovered лгал бы ровно там,
+    где ступень отработала. Алярм остаётся только у валюты, чьи строки
+    действительно выбывают (fx_uncovered_row)."""
     missing = sorted(
         {
             (r["currency"], r["date"])
@@ -141,6 +211,7 @@ def coverage_alarms(rows: list[dict], own_rates: list[dict], donor_rates: list[d
             and r["amt"] is not None
             and pick_rate(own_rates, r["currency"], r["date"]) is None
             and pick_rate(donor_rates, r["currency"], r["date"]) is None
+            and pick_nearest(own_rates + donor_rates, r["currency"], r["date"]) is None
         }
     )
     return [{"kind": "fx_uncovered", "currency": c, "date": d} for c, d in missing]

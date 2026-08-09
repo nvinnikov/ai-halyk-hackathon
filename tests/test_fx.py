@@ -104,20 +104,55 @@ def test_uncovered_row_excluded_with_alarm():
     assert any(a["kind"] == "fx_uncovered_row" for a in alarms)
 
 
-def test_rate_out_of_period_is_not_stretched():
-    """Курс с интервалом, не накрывающим дату, — не курс; 1.0 не подставляется."""
+def test_rate_out_of_period_falls_to_nearest_with_alarm():
+    """Интервал дату не накрыл — работает ступень ближайшего по дате курса:
+    дрейф курса за дни — малая ошибка, выброс строки — уверенная ошибка на
+    весь её вес. Молчаливого растяжения нет: алярм с расстоянием обязателен."""
     rows, alarms = to_usd(
         [row("T-1", "-100", "EUR", date="2025-08-01")],
         [rate(frm="2025-01-01", to="2025-06-30")],
         [],
     )
-    assert rows == []
-    assert [a["kind"] for a in alarms] == ["fx_uncovered_row"]
+    assert rows[0]["amt"] == Decimal("-116.00")
+    nearest = [a for a in alarms if a["kind"] == "fx_nearest_used"]
+    assert nearest and nearest[0]["distance_days"] == 32
+
+
+def test_nearest_picks_minimal_distance_from_common_pool():
+    # Донорский курс ближе своего — расстояние важнее источника.
+    rows, alarms = to_usd(
+        [row("T-1", "-100", "EUR", date="2025-08-01")],
+        [rate(usd="1.10", frm="2025-01-01", to="2025-03-31")],
+        [rate(usd="1.20", frm="2025-08-10", to="2025-12-31")],
+    )
+    assert rows[0]["amt"] == Decimal("-120.00")
+    assert [a["kind"] for a in alarms] == ["fx_nearest_used"]
+
+
+def test_nearest_is_deterministic_on_tie():
+    # Равное расстояние с двух сторон: побеждает поздний doc_date, при равных
+    # — меньший хеш; выбор не зависит от порядка на входе.
+    a = rate(usd="1.10", frm="2025-01-01", to="2025-07-01", ddate="2025-05-01", dhash="bb")
+    b = rate(usd="1.20", frm="2025-09-01", to="2025-12-31", ddate="2025-05-01", dhash="aa")
+    for rates in ([a, b], [b, a]):
+        rows, _ = to_usd([row("T-1", "-100", "EUR", date="2025-08-01")], list(rates), [])
+        assert rows[0]["amt"] == Decimal("-120.00")
 
 
 def test_coverage_check_before_compute():
     alarms = coverage_alarms([row("T-1", "-1", "KZT")], [], [])
     assert alarms and alarms[0]["kind"] == "fx_uncovered"
+
+
+def test_coverage_silent_when_nearest_covers():
+    # Согласованность с лестницей to_usd: пара, которую вытянет ступень
+    # ближайшего курса, не считается непокрытой.
+    alarms = coverage_alarms(
+        [row("T-1", "-1", "EUR", date="2025-08-01")],
+        [rate(frm="2025-01-01", to="2025-06-30")],
+        [],
+    )
+    assert alarms == []
 
 
 def test_coverage_silent_when_donor_covers():

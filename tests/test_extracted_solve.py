@@ -122,8 +122,10 @@ def test_extracted_cellspec_category_divergence_keeps_template_with_alarm():
     # шаблон всё равно исполняется (на публичном наборе такие расхождения —
     # ошибки извлечения синонимичных категорий, откат стоил −5.0 офлайн),
     # но расхождение обязано быть видно алярмом.
+    # Роллап, а не лист: лист теперь параметризует категорию (тест ниже),
+    # а синонимная путаница роллапов остаётся за шаблоном — как измерено.
     heading = title_key("Максимальные расходы по категории")
-    sp = _spec(title_key=heading, template=None, metric="agg(TAX, out)")
+    sp = _spec(title_key=heading, template=None, metric="agg(OPEX_TOTAL, out)")
     cellspec, _quote = solve._extracted_cellspec(sp, "6.1")
     assert isinstance(cellspec, dict)
     assert cellspec["metric_text"] == TEMPLATES["capex"]
@@ -136,9 +138,9 @@ def test_extracted_cellspec_stashes_shadow_metric_on_divergence():
     # тенью: без неё run_cell нечего сравнивать, и подмена снова становится
     # видимой только текстом формулы.
     heading = title_key("Максимальные расходы по категории")
-    sp = _spec(title_key=heading, template=None, metric="agg(TAX, out)")
+    sp = _spec(title_key=heading, template=None, metric="agg(OPEX_TOTAL, out)")
     cellspec, _quote = solve._extracted_cellspec(sp, "6.1")
-    assert cellspec["shadow_metric_text"] == "agg(TAX, out)"
+    assert cellspec["shadow_metric_text"] == "agg(OPEX_TOTAL, out)"
 
 
 def test_shadow_set_when_signatures_agree_but_text_differs():
@@ -156,6 +158,116 @@ def test_shadow_set_when_signatures_agree_but_text_differs():
     assert cellspec["shadow_metric_text"] == "agg(CAPEX, net)"
     # Сигнатуры равны — старое условие diverged тень бы не поставило.
     assert signature(parse("agg(CAPEX, net)")) == signature(parse(TEMPLATES["capex"]))
+
+
+def test_loose_match_on_more_general_heading_computes_extracted_formula():
+    """Пин приватного паттерна: заголовок БЕЗ уточняющего слова нестрого
+    матчится на более специфичный шаблон, но исполняется извлечённая формула.
+
+    «…капитальных затрат к EBITDA» (затраты самого заёмщика) уводит на
+    group_capex_to_ebitda, «…рентабельность по EBITDA» (без «скорректированная»)
+    — на adj_ebitda_margin. Обе подмены молча брали бы чужую метрику; их
+    останавливают два независимых механизма, и тест держит оба: недостающий
+    doc()-ключ шаблона откатывает без вето (вето — только у точного матча),
+    а при живом ключе нестрогий матч отвергается по расхождению формул."""
+    cases = [
+        (
+            "Максимальное отношение капитальных затрат к EBITDA",
+            "ratio(agg(CAPEX, out), sub(agg(REVENUE, in), agg(OTHER_OPEX, out)))",
+            "group_capex",
+            "loose_heading_rejected_on_divergence",  # категорийное расхождение
+        ),
+        (
+            "Минимальная рентабельность по EBITDA",
+            "ratio(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), agg(REVENUE, in))",
+            "ebitda_addbacks_material_total",
+            "loose_heading_rejected_on_divergence",  # сигнатурное расхождение
+        ),
+    ]
+    for heading, metric, doc_key, rejection in cases:
+        sp = _spec(title_key=title_key(heading), metric=metric)
+        # Ключа шаблона нет в фактах: откат по heading_doc_keys_missing,
+        # вето derived_doc_key_missing у нестрогого матча не срабатывает.
+        cellspec, _ = solve._extracted_cellspec(sp, "6.2", fact_keys=frozenset())
+        assert isinstance(cellspec, dict) and cellspec["metric_text"] == metric
+        # Ключ есть: шаблон доживает до сравнения формул и отвергается там.
+        cellspec, _ = solve._extracted_cellspec(sp, "6.2", fact_keys=frozenset({doc_key}))
+        assert isinstance(cellspec, dict) and cellspec["metric_text"] == metric
+        kinds = [a["kind"] for a in cellspec["match_alarms"]]
+        assert rejection in kinds and "heading_matched_loosely" in kinds
+
+
+def test_category_template_takes_leaf_category_from_extracted_formula():
+    """Шаблон «по категории»: категория — параметр пункта (боевой прогон:
+    четыре пункта про «Маркетинговые расходы» считались запечённым CAPEX).
+    Форму задаёт шаблон (знак его, фильтры не переносятся), категорию — тело
+    пункта через извлечённую формулу; только лист таксономии."""
+    heading = title_key("Максимальные расходы по категории")
+    sp = _spec(title_key=heading, metric="agg(MARKETING, out, period(2025-01-01, 2025-12-31))")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == "agg(MARKETING, out)"
+    kinds = [a["kind"] for a in cellspec["match_alarms"]]
+    assert "heading_category_parameterized" in kinds
+    # Роллап — не статья: остаётся мерянное поведение «шаблон чинит синонимы».
+    sp = _spec(title_key=heading, metric="agg(OPEX_TOTAL, out)")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == TEMPLATES["capex"]
+    # Не одиночный agg — форма другая, категория не извлекается.
+    sp = _spec(title_key=heading, metric="ratio(agg(MARKETING, out), agg(REVENUE, in))")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == TEMPLATES["capex"]
+    # Совпадающая категория — обычная подмена шаблоном, без параметризации.
+    sp = _spec(title_key=heading, metric="agg(CAPEX, out, min_amount(10))")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == TEMPLATES["capex"]
+    assert not any(a["kind"] == "heading_category_parameterized" for a in cellspec.get("match_alarms", []))
+    # OTHER — корзина неразнесённого, не статья (ревью PR #26): базой ковенанта
+    # не имеет права стать остаток нераспознанного, притом молча — после
+    # подмены категории совпали бы и divergence-алярм не поднялся бы.
+    sp = _spec(title_key=heading, metric="agg(OTHER, out)")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == TEMPLATES["capex"]
+    kinds = [a["kind"] for a in cellspec["match_alarms"]]
+    assert "heading_category_divergence" in kinds
+    assert "heading_category_parameterized" not in kinds
+
+
+def test_substituted_template_does_not_inherit_period_filter():
+    """Пин отката переноса периода (PR #26, регрессия S2 на боевом прогоне):
+    подмена шаблоном НЕ переносит period(...) извлечённой формулы. Единственная
+    строка за границей года в приватном леджере — та, которую AUP включает в
+    период по начислению; механический фильтр по дате давил документальное
+    решение. Подмена остаётся видимой сигнатурным расхождением и тенью."""
+    heading = title_key("Минимальная выручка по категории")
+    sp = _spec(
+        title_key=heading,
+        direction="min",
+        metric="agg(REVENUE, in, period(2025-01-01, 2025-12-31))",
+    )
+    cellspec, _ = solve._extracted_cellspec(sp, "6.2")
+    assert cellspec["metric_text"] == TEMPLATES["revenue"]  # шаблон без фильтра
+    kinds = [a["kind"] for a in cellspec["match_alarms"]]
+    assert "heading_signature_divergence" in kinds
+    assert cellspec["shadow_metric_text"] == sp["metric"]
+
+
+def test_resolve_echoes_limit_guard():
+    """Эхо порога — двойной признак (ревью PR #26): значение равно порогу
+    ячейки И цитата резолва взята из цитаты самого пункта. Законное равенство
+    (полис ровно на требуемую сумму) цитируется другим документом — не эхо."""
+    clause = "не допускать превышения величины $9,400,000.00 за период"
+    echo_q = "превышения величины $9,400,000.00"
+    other_q = "страховой полис на сумму $9,400,000.00 выдан"
+    assert solve._resolve_echoes_limit("9400000", "9400000", echo_q, clause)
+    assert solve._resolve_echoes_limit(9400000, "9400000.00", echo_q, clause)
+    assert solve._resolve_echoes_limit("-3.5", "3.5", "3.5", "порог 3.5")  # модуль
+    # Настоящий факт из другого документа: значение равно порогу, цитата чужая.
+    assert not solve._resolve_echoes_limit("9400000", "9400000", other_q, clause)
+    assert not solve._resolve_echoes_limit("9400001", "9400000", echo_q, clause)
+    assert not solve._resolve_echoes_limit("н/д", "9400000", echo_q, clause)
+    assert not solve._resolve_echoes_limit("100", None, echo_q, clause)
+    # Пустая цитата резолва страховочно считается эхом.
+    assert solve._resolve_echoes_limit("9400000", "9400000", "", clause)
 
 
 def test_extracted_cellspec_no_shadow_when_template_matches_extracted():

@@ -40,8 +40,8 @@ from ledger import dirty_rows_of, extract_archive, find_inputs, load_ledger, row
 from scindex import INDEX_VERSION, build_index
 from specs_extract import extract_specs
 from stages import artifact
-from taxonomy import cell_other_alarm, coverage_report
-from templates import TEMPLATE_HEADINGS, TEMPLATES, match_heading
+from taxonomy import LEAVES, cell_other_alarm, coverage_report
+from templates import CATEGORY_PARAMETERIZED, TEMPLATE_HEADINGS, TEMPLATES, match_heading
 from util import OUT, ROOT, q2, stable_json, workdir
 
 # Модули, чьи *_VERSION-константы run-report собирает целиком (раздел 3):
@@ -676,6 +676,25 @@ def _extracted_inputs(
                         # приоре на ровном месте (ревью PR #9, 26-я волна).
                         print(f"ALARM doc_fact_resolve_error {sc} {_cl} {key}: {exc!r}", flush=True)
                         resolved = None
+                    if resolved is not None and _resolve_echoes_limit(
+                        resolved["value"], sp.get("limit"), resolved.get("quote"), sp.get("quote")
+                    ):
+                        # Мерянный на group_capex паттерн, обобщённый на
+                        # произвольный ключ: адресный резолв просит число по
+                        # описанию из цитаты пункта, а цитата называет сам
+                        # порог — модель возвращает его. Такое «значение»
+                        # делает метрику равной порогу и даёт уверенный ложный
+                        # вердикт впритык; честнее лестница с эвристикой по
+                        # цитате. Признак эха двойной (ревью PR #26): не только
+                        # равенство порогу, но и цитата резолва, взятая из
+                        # цитаты самого пункта, — законное равенство (полис
+                        # ровно на требуемую сумму) цитируется другим
+                        # документом и гард не трогает.
+                        print(
+                            f"ALARM doc_fact_resolve_echoes_limit {sc} {_cl}: {key}",
+                            flush=True,
+                        )
+                        resolved = None
                     if resolved is not None:
                         facts["doc_facts"][key] = resolved["value"]
                         facts["doc_fact_quotes"][key] = resolved["quote"]
@@ -711,6 +730,27 @@ def _extracted_inputs(
             }
         specs_by_sc[sc] = spec_art
     return facts_by_sc, specs_by_sc
+
+
+def _resolve_echoes_limit(value, limit, resolved_quote=None, clause_quote=None) -> bool:
+    """Резолв вернул порог самой ячейки, процитировав сам пункт, — эхо.
+
+    Признака два, и нужны оба (ревью PR #26): равенство порогу по модулю
+    (порог в цитате печатается без знака) И цитата резолва, лежащая внутри
+    цитаты пункта. Настоящий факт, случайно равный порогу («страховое
+    покрытие не ниже X» с полисом ровно на X), цитируется другим документом
+    — вторая проверка его не тронет. Пустая цитата резолва до гарда не
+    доживает (verify_quote отбросил бы факт раньше), но страховочно
+    считается эхом. Неразбираемое значение или отсутствующий порог — не эхо."""
+    try:
+        if abs(Decimal(str(value))) != abs(Decimal(str(limit))):
+            return False
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+    if not resolved_quote:
+        return True
+    norm = lambda s: " ".join(str(s).split())  # noqa: E731
+    return norm(resolved_quote) in norm(clause_quote or "")
 
 
 def _clause_suffix(clause: str) -> str:
@@ -772,6 +812,35 @@ def _category_divergence(extracted_text: str, template_text: str) -> tuple[list,
     except DslError:
         return None
     return (a, b) if a != b else None
+
+
+def _parameterize_category(extracted_text: str, template_text: str) -> str | None:
+    """Категория извлечённой формулы в шаблоне «по категории» (или None).
+
+    Заголовок «расходы/выручка по категории» делает категорию параметром
+    пункта: на публичном наборе она всегда совпадала с запечённой в шаблон, на
+    чужом — статья называется в теле пункта, и шаблон обязан взять её оттуда
+    (боевой прогон: четыре пункта про «Маркетинговые расходы» считались как
+    CAPEX). Форму по-прежнему задаёт шаблон: знак его, фильтры извлечённой
+    формулы не переносятся. Берётся только ЛИСТ таксономии: роллап
+    (OPEX_TOTAL, ALL) — не статья, а мерянная синонимная путаница извлечения,
+    которую как раз чинит шаблон. Не одиночный agg — другая форма, категорию
+    из него не извлечь."""
+    try:
+        ext, tpl = parse(extracted_text), parse(template_text)
+    except DslError:
+        return None
+    if not isinstance(tpl, Agg) or tpl.filters or not isinstance(ext, Agg):
+        return None
+    if ext.category == tpl.category or ext.category not in LEAVES:
+        return None
+    if ext.category == "OTHER":
+        # OTHER — корзина неразнесённого, а не статья (ревью PR #26): пункт
+        # про статью вне таксономии дал бы базой ковенанта остаток
+        # нераспознанного, причём после подмены категории совпали бы и
+        # heading_category_divergence уже не поднялся бы.
+        return None
+    return f"agg({ext.category}, {tpl.sign})"
 
 
 def _extracted_cellspec(
@@ -853,11 +922,26 @@ def _extracted_cellspec(
                         pass
                     return err, quote
                 metric_text = sp["metric"]
+        # Перенос period(...) извлечённой формулы в шаблон здесь ПРОБОВАЛИ и
+        # откатили (PR #26, регрессия S2 на боевом прогоне): единственная
+        # строка за границей календарного года во всём приватном леджере —
+        # ровно та, которую AUP-отчёт включает в ковенантный период по методу
+        # начисления. Механический фильтр по дате задавил документальное
+        # решение и обнулил базу выручки. Исключения из периода выражаются
+        # ярусом фактов (excluded_txns), а не фильтром формулы.
+        match_alarms: list[dict] = []
+        # Категория — параметр для шаблонов «по категории». Только строгий
+        # матч: у нестрогого посылки «заголовок тот самый» нет, и его защита
+        # отказом по расхождению не ослабляется.
+        if metric_text != sp["metric"] and not loosely_matched and template in CATEGORY_PARAMETERIZED:
+            param = _parameterize_category(sp["metric"], metric_text)
+            if param is not None:
+                metric_text = param
+                match_alarms.append({"kind": "heading_category_parameterized", "metric": param})
         # Подмена извлечённого DSL шаблоном остаётся (ruling: шаблон при матче
         # исполняется), но обязана быть видимой ЦЕЛИКОМ (ревью PR #9, 10-я
         # волна): не только другой набор категорий, но и разница по
         # quarter()/знаку/форме агрегации — сигнатурное сравнение.
-        match_alarms: list[dict] = []
         diverged = False
         if metric_text != sp["metric"]:
             div = _category_divergence(sp["metric"], metric_text)
