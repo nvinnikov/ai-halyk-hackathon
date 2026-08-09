@@ -87,6 +87,25 @@ echo "  прогон занял $((($(date +%s) - start) / 60)) мин, код �
 
 # --- 3. Чтение run-report за вас ---------------------------------------------
 say "3/4 итоги прогона"
+# Сверка происхождения — до всякой статистики. Если прогон упал ДО записи своего
+# run-report, в out/ лежит отчёт ПРОШЛОГО прогона (на репетициях — публичного), и
+# statistics ниже описывала бы чужой результат. submit такое блокирует по
+# is_public_dataset, но под таймером блокировку пробивают через SUBMIT_FORCE=1 —
+# и отправляют публичный набор. Поэтому здесь громкий стоп, а не подсказка.
+want_hash=$(grep -m1 "^dataset_hash:" "$LOGDIR/sanity.log" | awk '{print $2}')
+got_hash=$(uv run python -c "
+import json
+from pathlib import Path
+p = Path('out/run-report.json')
+print(json.loads(p.read_text()).get('dataset_hash', '') if p.exists() else '')
+" 2>/dev/null)
+if [ -n "$want_hash" ] && [ "$want_hash" != "$got_hash" ]; then
+  echo "  dataset_hash архива: $want_hash"
+  echo "  dataset_hash в out/run-report.json: ${got_hash:-<нет файла>}"
+  die "прогон не оставил своего run-report — в out/ лежит отчёт ДРУГОГО прогона.
+       Снапшот НЕ снят намеренно: SUBMIT_FORCE=1 здесь отправил бы чужой результат.
+       Смотрите $LOGDIR/run.log, ищите причину падения, затем перезапустите ./go.sh."
+fi
 uv run python - "$LOGDIR" <<'PY' 2>&1 | tee "$LOGDIR/summary.txt"
 import json, sys
 from pathlib import Path
