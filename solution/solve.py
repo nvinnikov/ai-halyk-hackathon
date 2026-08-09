@@ -669,16 +669,20 @@ def _extracted_inputs(
                         # приоре на ровном месте (ревью PR #9, 26-я волна).
                         print(f"ALARM doc_fact_resolve_error {sc} {_cl} {key}: {exc!r}", flush=True)
                         resolved = None
-                    if resolved is not None and _resolve_echoes_limit(resolved["value"], sp.get("limit")):
+                    if resolved is not None and _resolve_echoes_limit(
+                        resolved["value"], sp.get("limit"), resolved.get("quote"), sp.get("quote")
+                    ):
                         # Мерянный на group_capex паттерн, обобщённый на
                         # произвольный ключ: адресный резолв просит число по
                         # описанию из цитаты пункта, а цитата называет сам
                         # порог — модель возвращает его. Такое «значение»
                         # делает метрику равной порогу и даёт уверенный ложный
                         # вердикт впритык; честнее лестница с эвристикой по
-                        # цитате. Цена ошибки асимметрична: у настоящего факта,
-                        # случайно равного порогу, actual на лестнице останется
-                        # тем же порогом — теряется максимум статус.
+                        # цитате. Признак эха двойной (ревью PR #26): не только
+                        # равенство порогу, но и цитата резолва, взятая из
+                        # цитаты самого пункта, — законное равенство (полис
+                        # ровно на требуемую сумму) цитируется другим
+                        # документом и гард не трогает.
                         print(
                             f"ALARM doc_fact_resolve_echoes_limit {sc} {_cl}: {key}",
                             flush=True,
@@ -721,16 +725,25 @@ def _extracted_inputs(
     return facts_by_sc, specs_by_sc
 
 
-def _resolve_echoes_limit(value, limit) -> bool:
-    """Резолвленное значение совпало с порогом самой ячейки — эхо цитаты.
+def _resolve_echoes_limit(value, limit, resolved_quote=None, clause_quote=None) -> bool:
+    """Резолв вернул порог самой ячейки, процитировав сам пункт, — эхо.
 
-    Сравнение точное и по модулю: порог в цитате печатается без знака.
-    Неразбираемое значение или отсутствующий порог — не эхо (False), их
-    судьбу решают другие проверки."""
+    Признака два, и нужны оба (ревью PR #26): равенство порогу по модулю
+    (порог в цитате печатается без знака) И цитата резолва, лежащая внутри
+    цитаты пункта. Настоящий факт, случайно равный порогу («страховое
+    покрытие не ниже X» с полисом ровно на X), цитируется другим документом
+    — вторая проверка его не тронет. Пустая цитата резолва до гарда не
+    доживает (verify_quote отбросил бы факт раньше), но страховочно
+    считается эхом. Неразбираемое значение или отсутствующий порог — не эхо."""
     try:
-        return abs(Decimal(str(value))) == abs(Decimal(str(limit)))
+        if abs(Decimal(str(value))) != abs(Decimal(str(limit))):
+            return False
     except (InvalidOperation, TypeError, ValueError):
         return False
+    if not resolved_quote:
+        return True
+    norm = lambda s: " ".join(str(s).split())  # noqa: E731
+    return norm(resolved_quote) in norm(clause_quote or "")
 
 
 def _clause_suffix(clause: str) -> str:
@@ -813,6 +826,12 @@ def _parameterize_category(extracted_text: str, template_text: str) -> str | Non
     if not isinstance(tpl, Agg) or tpl.filters or not isinstance(ext, Agg):
         return None
     if ext.category == tpl.category or ext.category not in LEAVES:
+        return None
+    if ext.category == "OTHER":
+        # OTHER — корзина неразнесённого, а не статья (ревью PR #26): пункт
+        # про статью вне таксономии дал бы базой ковенанта остаток
+        # нераспознанного, причём после подмены категории совпали бы и
+        # heading_category_divergence уже не поднялся бы.
         return None
     return f"agg({ext.category}, {tpl.sign})"
 
