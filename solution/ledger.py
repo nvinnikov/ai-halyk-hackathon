@@ -56,14 +56,60 @@ def extract_archive(archive: Path) -> tuple[str, Path]:
     return ds_hash, input_dir
 
 
+# Колонки, по которым леджер узнаётся среди прочих CSV пакета. Названия — из
+# официального формата задания, не из публичного файла: справочник курсов, лог
+# выгрузки или реестр документов их не несут.
+_LEDGER_COLUMNS = frozenset({"txn_id", "amount", "account_id"})
+
+
+def _looks_like_ledger(path: Path) -> int:
+    """Сколько обязательных колонок леджера в заголовке файла."""
+    try:
+        with path.open(encoding="utf-8-sig", errors="replace") as fh:
+            header = fh.readline()
+    except OSError:
+        return 0
+    names = {c.strip().strip('"').lower() for c in header.split(",")}
+    return len(_LEDGER_COLUMNS & names)
+
+
+def _pick_ledger(csvs: list[Path]) -> Path:
+    """Леджер среди нескольких CSV: по заголовку, при равенстве — крупнейший.
+
+    Ассерт здесь стоил бы ВСЕГО прогона (ревью перед окном): find_inputs
+    зовётся раньше записи скелета, а `run.sh` идёт под `set -e`, поэтому лишний
+    CSV в корне приватного пакета — справочник курсов, лог выгрузки — оставлял
+    бы `out/` с файлом прошлого прогона. Брифо требует ровно один CSV, но
+    полагаться на это нельзя: в публичном пакете второй CSV уже лежит, просто
+    в подкаталоге.
+
+    Выбор именно fail-open, а не «первый по алфавиту»: заголовок — свойство
+    формата задания, а алфавит случаен, и `fx_reference.csv` обошёл бы
+    `master_ledger_2025.csv`.
+    """
+    ranked = sorted(csvs, key=lambda p: (-_looks_like_ledger(p), -p.stat().st_size, p.name))
+    best = ranked[0]
+    if len(csvs) > 1:
+        print(
+            f"ALARM multiple_ledger_candidates: выбран {best.name} из "
+            f"{[p.name for p in csvs]} (колонок заголовка: {_looks_like_ledger(best)})",
+            flush=True,
+        )
+    if _looks_like_ledger(best) == 0:
+        # Ни один кандидат не похож на леджер — считать будет нечего, но прогон
+        # обязан дойти до записи скелета и объяснить причину в логе.
+        print(f"ALARM ledger_header_unrecognised: {best.name}", flush=True)
+    return best
+
+
 def find_inputs(input_dir: Path) -> dict:
     """Файлы датасета ищутся, а не зашиваются именами (раздел 9).
 
-    Брифо требует ровно один CSV, но публичный набор содержит два CSV:
-    один в root (ledger), второй в documents/ (логи). Логика выбора:
-    (1) если ровно один CSV в root — берём его;
-    (2) если нет — фолбэк на rglob, исключив файлы в каталогах с PDF;
-    (3) иначе (несколько CSV любом уровне) — AssertionError.
+    Брифо требует ровно один CSV, но публичный набор содержит два: один в root
+    (леджер), второй в documents/ (логи). Порядок поиска: CSV в root, при их
+    отсутствии — rglob мимо каталогов с PDF. Неоднозначность на любом шаге
+    решается _pick_ledger, а не исключением: эта функция зовётся до записи
+    скелета submission, и её падение обнуляет весь прогон.
     """
     templates = sorted(input_dir.rglob("submission_template.json"))
     assert len(templates) == 1, f"шаблонов найдено {len(templates)}"
@@ -71,26 +117,15 @@ def find_inputs(input_dir: Path) -> dict:
     pdfs = sorted(root.rglob("*.pdf"))
     pdf_dirs = {p.parent for p in pdfs}
 
-    # Попытка 1: CSV только в root
     csvs = sorted(root.glob("*.csv"))
-    if len(csvs) == 1:
-        return {
-            "root": root,
-            "template": templates[0],
-            "ledger_csv": csvs[0],
-            "pdfs": pdfs,
-        }
-    if len(csvs) > 1:
-        raise AssertionError(f"в root найдено {len(csvs)} CSV: {csvs}")
-
-    # Попытка 2: фолбэк — rglob исключив каталоги с PDF
-    all_csvs = sorted(root.rglob("*.csv"))
-    csvs = [c for c in all_csvs if c.parent not in pdf_dirs]
-    assert len(csvs) == 1, f"найдено {len(csvs)} CSV вне pdf-каталогов: {csvs}; все CSV: {all_csvs}"
+    if not csvs:
+        all_csvs = sorted(root.rglob("*.csv"))
+        csvs = [c for c in all_csvs if c.parent not in pdf_dirs] or all_csvs
+    assert csvs, "в пакете нет ни одного CSV"
     return {
         "root": root,
         "template": templates[0],
-        "ledger_csv": csvs[0],
+        "ledger_csv": _pick_ledger(csvs),
         "pdfs": pdfs,
     }
 

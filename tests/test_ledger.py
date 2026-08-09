@@ -105,8 +105,15 @@ def test_find_inputs_fallback_nested_csv(tmp_path, monkeypatch):
     assert "data" in str(inputs["ledger_csv"])
 
 
-def test_find_inputs_error_multiple_csv_in_root(tmp_path, monkeypatch):
-    """Ошибка: два CSV в root → AssertionError с перечнем."""
+def test_find_inputs_multiple_csv_in_root_picks_ledger(tmp_path, monkeypatch):
+    """Два CSV в root больше НЕ ошибка (ревью перед окном).
+
+    Раньше здесь был AssertionError, и он обнулял бы весь прогон: find_inputs
+    зовётся до записи скелета submission, а run.sh идёт под set -e. Лишний CSV в
+    корне приватного пакета (справочник курсов, лог выгрузки) — сценарий не
+    экзотический: в публичном пакете второй CSV уже лежит, просто в подкаталоге.
+    Теперь леджер выбирается по заголовку, а факт выбора виден алярмом.
+    """
     import util
 
     monkeypatch.setattr(util, "WORK", tmp_path)
@@ -118,8 +125,7 @@ def test_find_inputs_error_multiple_csv_in_root(tmp_path, monkeypatch):
         z.writestr("dataset/other.csv", "a,b\n1,2\n")
 
     ds_hash, input_dir = extract_archive(archive)
-    with pytest.raises(AssertionError, match="в root найдено 2 CSV"):
-        find_inputs(input_dir)
+    assert find_inputs(input_dir)["ledger_csv"].name == "ledger.csv"
 
 
 def test_dirty_rows_get_second_tier(monkeypatch, tmp_path):
@@ -194,3 +200,65 @@ def test_categorize_failure_not_cached(monkeypatch, tmp_path):
     art2 = ledger_mod.load_ledger(wd, root, target_scenarios=["S1"])
     assert art2["rows"][0]["cat"] == "CONSULTING"
     assert (wd / "ledger.json").exists()
+
+
+# --- выбор леджера среди нескольких CSV (ревью перед окном) --------------------
+
+
+def _pkg(tmp_path, *csvs: tuple[str, str]):
+    """Пакет датасета: шаблон, один PDF и заданные CSV в корне."""
+    root = tmp_path / "pkg"
+    (root / "documents").mkdir(parents=True)
+    (root / "submission_template.json").write_text('{"answers": {}}')
+    (root / "documents" / "a.pdf").write_bytes(b"%PDF-1.4\n")
+    for name, header in csvs:
+        (root / name).write_text(header + "\n1,2,3\n")
+    return tmp_path
+
+
+def test_extra_csv_in_root_does_not_raise(tmp_path):
+    """Ассерт здесь стоил бы ВСЕГО прогона: find_inputs зовётся раньше записи
+    скелета, а run.sh идёт под set -e. Лишний CSV в корне приватного пакета —
+    справочник курсов, лог выгрузки — обнулял бы окно."""
+    root = _pkg(
+        tmp_path,
+        ("fx_reference.csv", "currency,rate,note"),
+        ("master_ledger_2025.csv", "txn_id,date,account_id,counterparty,description,amount,currency"),
+    )
+    got = find_inputs(root)
+    assert got["ledger_csv"].name == "master_ledger_2025.csv"
+
+
+def test_ledger_picked_by_header_not_by_alphabet(tmp_path):
+    """Алфавит случаен и поставил бы справочник первым; заголовок — свойство
+    формата задания."""
+    root = _pkg(
+        tmp_path,
+        ("aaa_first_by_alphabet.csv", "currency,rate,note"),
+        ("zzz_last.csv", "txn_id,amount,account_id"),
+    )
+    assert find_inputs(root)["ledger_csv"].name == "zzz_last.csv"
+
+
+def test_ledger_ties_broken_by_size(tmp_path):
+    """Одинаковые заголовки — берём крупнейший: у леджера строк больше, чем у
+    выдержки из него."""
+    root = tmp_path / "pkg"
+    (root / "documents").mkdir(parents=True)
+    (root / "submission_template.json").write_text('{"answers": {}}')
+    (root / "documents" / "a.pdf").write_bytes(b"%PDF-1.4\n")
+    head = "txn_id,amount,account_id"
+    (root / "sample.csv").write_text(head + "\n1,2,3\n")
+    (root / "full.csv").write_text(head + "\n" + "1,2,3\n" * 500)
+    assert find_inputs(root)["ledger_csv"].name == "full.csv"
+
+
+def test_csv_only_outside_root_still_found(tmp_path):
+    """Прежний фолбэк на rglob сохранён: CSV может лежать не в корне."""
+    root = tmp_path / "pkg"
+    (root / "documents").mkdir(parents=True)
+    (root / "data").mkdir()
+    (root / "submission_template.json").write_text('{"answers": {}}')
+    (root / "documents" / "a.pdf").write_bytes(b"%PDF-1.4\n")
+    (root / "data" / "ledger.csv").write_text("txn_id,amount,account_id\n1,2,3\n")
+    assert find_inputs(root)["ledger_csv"].name == "ledger.csv"
