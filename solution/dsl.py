@@ -454,3 +454,52 @@ def signature(node) -> str:
 
 def uses_ledger(node) -> bool:
     return any(isinstance(n, Agg) for n in walk(node))
+
+
+def unparse(node) -> str:
+    """Текст по AST, обратный parse: parse(unparse(x)) == x.
+
+    Потребитель — нормализация EBITDA-подвыражений по определению из договора
+    (solve._apply_ebitda_reading): cellspec несёт и AST, и текст (текст читают
+    трейс и теневое сравнение), поэтому переписанный AST обязан уметь
+    вернуться в текст той же грамматики. Функция уже жила в ветке PR #26 для
+    переноса фильтров и была откачена вместе с ним как код без потребителя;
+    возвращена дословно."""
+    if isinstance(node, Agg):
+        tail = "".join(f", {unparse(f)}" for f in node.filters)
+        return f"agg({node.category}, {node.sign}{tail})"
+    if isinstance(node, Period):
+        return f"period({node.frm}, {node.to})"
+    if isinstance(node, Quarter):
+        return f"quarter({node.n})"
+    if isinstance(node, CounterpartyIn):
+        if isinstance(node.setname, str):
+            return f"counterparty_in({node.setname})"
+        # setname объявлен object (str | tuple); не-строка — только кортеж имён
+        names = node.setname if isinstance(node.setname, tuple) else ()
+        items = ", ".join(f"'{i}'" for i in names)
+        return f"counterparty_in([{items}])"
+    if isinstance(node, TxnIn):
+        items = ", ".join(f"'{i}'" for i in node.ids)
+        return f"txn_in([{items}])"
+    if isinstance(node, MinAmount):
+        return f"min_amount({node.x})"
+    if isinstance(node, DescContains):
+        return f"desc_contains('{node.s}')"
+    if isinstance(node, Doc):
+        return f"doc({node.key})"
+    if isinstance(node, Ratio):
+        return f"ratio({unparse(node.num)}, {unparse(node.den)})"
+    if isinstance(node, Sub):
+        return f"sub({unparse(node.a)}, {unparse(node.b)})"
+    if isinstance(node, Add):
+        return f"add({', '.join(unparse(a) for a in node.args)})"
+    if isinstance(node, MaxOf):
+        return f"max({', '.join(unparse(a) for a in node.args)})"
+    if isinstance(node, MinOf):
+        return f"min({', '.join(unparse(a) for a in node.args)})"
+    if isinstance(node, Const):
+        return f"const({node.value})"
+    if isinstance(node, Cmp):
+        return f"{node.op}({unparse(node.a)}, {unparse(node.b)})"
+    raise TypeError(f"не узел DSL: {node!r}")

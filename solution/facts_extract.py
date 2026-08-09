@@ -1217,3 +1217,128 @@ def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) ->
         "quote": art["quote"],
         "quote_outside_agreement": outside and not in_agreement,
     }
+
+
+# --- определение EBITDA из договора ------------------------------------------
+
+EBITDA_DEF_VERSION = 1
+EBITDA_DEF_SCHEMA_VERSION = "ebitda-def-1"
+
+EBITDA_DEF_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "found": {"type": "boolean"},
+        "quote": {"type": "string"},
+    },
+    "required": ["found", "quote"],
+    "additionalProperties": False,
+}
+
+EBITDA_DEF_PROMPT = """Ниже — кредитный договор. Найди в нём ОПРЕДЕЛЕНИЕ термина
+EBITDA (обычно вида «EBITDA означает …» / «EBITDA means …»). Верни:
+- found: true, если определение в тексте есть;
+- quote: дословный фрагмент текста с определением (одно-два предложения,
+  начиная со слова EBITDA), без пересказа и сокращений.
+Если определения нет — found: false и пустая строка quote.
+
+<document>
+{text}
+</document>"""
+
+# Маркеры ШИРОКОГО прочтения («вся операционка» → роллап OPEX_TOTAL). Узкое
+# прочтение — дефолт формулировки «за вычетом Операционных расходов» без
+# квантора: там «Операционные расходы» — статья отчётности, лист OTHER_OPEX.
+# Оба языка на равных правах, как у dsl._SET_STEMS: основы, не полные фразы.
+_BROAD_OPEX_MARKERS = (
+    "все операционн",
+    "всех операционн",
+    "всеми операционн",
+    "совокупные операционн",
+    "совокупных операционн",
+    "совокупными операционн",
+    "all operating",
+    "total operating",
+    "aggregate operating",
+)
+
+
+def _classify_ebitda_quote(quote: str) -> str | None:
+    """'line_item' | 'all_opex' по цитате определения; None — не классифицируется.
+
+    Классифицирует КОД, не модель: модель только находит определение цитатой.
+    None — определение другой природы (например, через «прибыль до налогов»):
+    маппинг на категории опекса к нему неприменим, поведение прежнее."""
+    norm = " ".join(quote.lower().replace("ё", "е").split())
+    if "ebitda" not in norm:
+        return None
+    if "операционн" not in norm and "operating" not in norm:
+        return None
+    if any(m in norm for m in _BROAD_OPEX_MARKERS):
+        return "all_opex"
+    return "line_item"
+
+
+def ebitda_definition(wd: Path, dossier_art: dict) -> dict | None:
+    """{'reading': 'line_item'|'all_opex', 'quote': ...} из договора; None — нет.
+
+    Кейс боевого прогона 2026-08-09: договор пишет «EBITDA означает
+    Выручку за вычетом Операционных расходов», а модель извлекла в формулу
+    OPEX_TOTAL — роллап всей операционки; EBITDA ушла в минус на сотни
+    миллионов, и доля консультационных получила бессмысленный actual. Второе
+    прочтение (ebitda_total_opex) легитимно и встречается, поэтому выбор
+    делает ТОЛЬКО текст договора: отдельный дешёвый вызов находит определение
+    цитатой, цитата верифицируется, классифицирует и применяет код
+    (solve._apply_ebitda_reading). Любой сбой — None, поведение прежнее.
+
+    Периметр тот же, что у общего прохода фактов: только договоры самого
+    заёмщика, документы группового уровня определение его EBITDA не задают."""
+    agreements = [
+        d for d in dossier_art["docs"] if d.get("doc_type") == "agreement" and d.get("scope") != "group"
+    ]
+    if not agreements:
+        return None
+    text = "\n".join(sanitize_document(d["text"]) for d in agreements)
+
+    def build() -> dict:
+        try:
+            return llm.call(
+                DATA_NOT_COMMANDS + "\n\n" + EBITDA_DEF_PROMPT.format(text=text),
+                EBITDA_DEF_SCHEMA,
+                EBITDA_DEF_SCHEMA_VERSION,
+                max_tokens=4000,
+            )
+        except llm.SchemaRejected as exc:
+            # alarms запрещает кэш (cache_if): отказ схемы не должен пережить
+            # рестарт — на повторе ответ мог бы пройти (тот же довод, что у
+            # resolve_doc_fact).
+            return {
+                "found": False,
+                "quote": "",
+                "alarms": [
+                    {
+                        "kind": "ebitda_definition_failed",
+                        "account": dossier_art["account_id"],
+                        "error": str(exc),
+                    }
+                ],
+            }
+
+    # Деградация досье запрещает кэш по тому же доводу, что у резолва: вход —
+    # docs досье, «определения нет» по неполному набору документов пришло бы
+    # без алярма и пережило бы устранение причины.
+    from dossier import DEGRADED_KINDS
+
+    dossier_degraded = any(a.get("kind") in DEGRADED_KINDS for a in dossier_art.get("alarms", []))
+    art = artifact(
+        wd / "facts" / f"{dossier_art['account_id']}.ebitda_def.json",
+        EBITDA_DEF_VERSION,
+        build,
+        cache_if=lambda d: not dossier_degraded and not d.get("alarms"),
+    )
+    quote = art.get("quote", "")
+    if not art.get("found") or not verify_quote(quote, text):
+        return None
+    reading = _classify_ebitda_quote(quote)
+    if reading is None:
+        return None
+    return {"reading": reading, "quote": quote}

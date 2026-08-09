@@ -264,6 +264,65 @@ def test_substituted_template_does_not_inherit_period_filter():
     assert cellspec["shadow_metric_text"] == sp["metric"]
 
 
+def test_ebitda_reading_rewrites_extracted_formula():
+    """Определение EBITDA из договора главнее извлечённой формулы (кейс J3 6.2
+    боевого прогона): модель взяла роллап OPEX_TOTAL при договорном «за вычетом
+    Операционных расходов» — EBITDA в минус на сотни миллионов. Переписывается
+    только EBITDA-подвыражение, фильтры и знак узла сохраняются, подмена видна
+    алярмом и тенью."""
+    metric = (
+        "ratio(agg(CONSULTING, out, period(2025-01-01, 2025-12-31)), "
+        "sub(agg(REVENUE, in, period(2025-01-01, 2025-12-31)), "
+        "agg(OPEX_TOTAL, out, period(2025-01-01, 2025-12-31))))"
+    )
+    sp = _spec(metric=metric, limit="0.20")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.2", ebitda_reading="line_item")
+    assert "OTHER_OPEX" in cellspec["metric_text"] and "OPEX_TOTAL" not in cellspec["metric_text"]
+    assert "period(2025-01-01, 2025-12-31)" in cellspec["metric_text"]  # фильтры целы
+    alarm = next(a for a in cellspec["match_alarms"] if a["kind"] == "ebitda_definition_applied")
+    assert alarm["reading"] == "line_item" and alarm["target"] == "metric"
+    assert cellspec["shadow_metric_text"] == metric  # подмена видна тени
+
+
+def test_ebitda_reading_rewrites_template_and_trigger():
+    # Определение главнее и канона шаблонов: _EBITDA зашивает OTHER_OPEX, а
+    # договор вправе выбрать второе прочтение (ebitda_total_opex).
+    heading = title_key("Минимальный коэффициент покрытия процентов")
+    sp = _spec(
+        title_key=heading,
+        direction="min",
+        metric="ratio(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), agg(INTEREST, out))",
+        trigger="gt(ratio(agg(FINANCING, in), sub(agg(REVENUE, in), agg(OTHER_OPEX, out))), const(3.0))",
+    )
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1", ebitda_reading="all_opex")
+    assert "OPEX_TOTAL" in cellspec["metric_text"]
+    targets = {a["target"] for a in cellspec["match_alarms"] if a["kind"] == "ebitda_definition_applied"}
+    assert targets == {"metric", "trigger"}
+    # Триггер переписан в AST, не только в тексте алярма.
+    from dsl import Agg as _Agg
+    from dsl import walk as _walk
+
+    trig_cats = {n.category for n in _walk(cellspec["trigger_ast"]) if isinstance(n, _Agg)}
+    assert "OPEX_TOTAL" in trig_cats and "OTHER_OPEX" not in trig_cats
+
+
+def test_ebitda_reading_noop_when_matching_or_absent():
+    metric = "ratio(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), agg(INTEREST, out))"
+    sp = _spec(metric=metric, direction="min")
+    # Совпадающее прочтение — переписывать нечего, алярма нет.
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1", ebitda_reading="line_item")
+    assert cellspec["metric_text"] == metric
+    assert not any(a["kind"] == "ebitda_definition_applied" for a in cellspec.get("match_alarms", []))
+    # Нет определения — поведение прежнее (fail-open).
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == metric
+    # Голый роллап вне EBITDA-подвыражения не трогается: «доля в операционных
+    # расходах» оперирует своей статьёй независимо от определения EBITDA.
+    sp = _spec(metric="ratio(agg(CONSULTING, out), agg(OPEX_TOTAL, out))")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1", ebitda_reading="line_item")
+    assert cellspec["metric_text"] == "ratio(agg(CONSULTING, out), agg(OPEX_TOTAL, out))"
+
+
 def test_resolve_echoes_limit_guard():
     """Эхо порога — двойной признак: значение равно порогу ячейки И источник
     цитаты не оправдывает факт. Прежний признак «цитата резолва внутри цитаты
