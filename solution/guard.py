@@ -71,6 +71,14 @@ def verify_quote(quote: str, source: str) -> bool:
     Защита от выдумок сохраняется: каждый фрагмент обязан быть настоящим
     текстом документа и стоять на своём месте.
 
+    Второй проход — без пробелов вовсе. Вёрстка PDF рвёт слова («У словием» —
+    буквица первого слова абзаца, боевой прогон 2026-08-09: две валидные
+    спеки ушли на лестницу), модель цитирует слово целым, и пробельный матч
+    честно не находит подстроку. Доказательная сила проверки — в
+    последовательности содержательных символов документа, пробелы её не
+    несут: выдуманный текст не совпадёт и без них. Порядок проходов несущий:
+    всё, что верифицировалось раньше, верифицируется тем же путём.
+
     Args:
         quote: Цитата для проверки.
         source: Исходный текст.
@@ -98,7 +106,14 @@ def verify_quote(quote: str, source: str) -> bool:
     if elided and any(len(f) < _MIN_FRAGMENT for f in fragments):
         return False
 
-    return _fits(src, fragments, 0, anchored=False)
+    if _fits(src, fragments, 0, anchored=False):
+        return True
+    # Пробельно-нечувствительный повтор: те же фрагменты (резка по многоточию
+    # уже сделана по пробельной форме), те же правила порядка и окна.
+    despaced = [f.replace(" ", "") for f in fragments]
+    if elided and any(len(f) < _MIN_FRAGMENT for f in despaced):
+        return False
+    return _fits(src.replace(" ", ""), despaced, 0, anchored=False)
 
 
 def _fits(src: str, fragments: list[str], pos: int, anchored: bool) -> bool:
