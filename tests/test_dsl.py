@@ -209,3 +209,25 @@ def test_signature_ignores_sign():
 def test_uses_ledger():
     assert uses_ledger(parse("agg(REVENUE, in)"))
     assert not uses_ledger(parse("ratio(doc(a), doc(b))"))
+
+
+def test_bare_filter_list_in_agg_tail():
+    """Голый список фильтров — та же форма, что filters=[...], только без имени поля.
+
+    Живой паттерн приватного прогона: модель печатает хвост agg как
+    `[period(...), counterparty_in(...)]`, и грамматика роняла всю спеку
+    ковенанта на разборе первого же фильтра. Строгость при этом сохраняется:
+    список фильтров легален только в хвосте agg, а список СТРОК внутри
+    counterparty_in остаётся списком имён — они различаются содержимым, а не
+    местом (фильтр всегда вызов, имя со скобкой).
+    """
+    bare = parse("agg(ALL, out, [period(2025-01-01, 2025-12-31), counterparty_in(related_parties)])")
+    assert bare == parse("agg(ALL, out, period(2025-01-01, 2025-12-31), counterparty_in(related_parties))")
+    assert parse("agg(ALL, out, counterparty_in(['Foo LLP']))").filters[0].setname == ("Foo LLP",)
+    for bad in (
+        "counterparty_in([period(2025-01-01, 2025-12-31)])",
+        "ratio(agg(CAPEX, out), [period(2025-01-01, 2025-12-31)])",
+        "agg(ALL, out, [period(2025-01-01, 2025-12-31)], extra)",
+    ):
+        with pytest.raises(DslError):
+            parse(bad)

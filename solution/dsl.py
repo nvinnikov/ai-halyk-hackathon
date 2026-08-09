@@ -240,6 +240,22 @@ class _Parser:
             self.i += 1
             return ("str", v[1:-1])
         if k == "lbr":
+            # Голый список фильтров в хвосте agg: agg(ALL, out, [period(...),
+            # counterparty_in(...)]) — та же терпимость, что у filters=[...]:
+            # модель печатает поле AST то с именем, то без. От списка строк
+            # отличается содержимым (фильтр — всегда вызов, имя со скобкой),
+            # позиционный гейт тот же, иначе counterparty_in([period(...)])
+            # стал бы легальным.
+            nxt = self.toks[self.i + 1] if self.i + 1 < len(self.toks) else ("", "")
+            nxt2 = self.toks[self.i + 2] if self.i + 2 < len(self.toks) else ("", "")
+            if in_agg and pos >= 2 and nxt[0] == "name" and nxt2[0] == "lpar":
+                self.take("lbr")
+                items = [self.parse_call(allow_filter=True)]
+                while self.peek()[0] == "comma":
+                    self.take("comma")
+                    items.append(self.parse_call(allow_filter=True))
+                self.take("rbr")
+                return ("filters_list", tuple(items))
             self.take("lbr")
             items = [self.take("str")[1:-1]]
             while self.peek()[0] == "comma":
