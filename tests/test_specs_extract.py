@@ -347,3 +347,41 @@ def test_trigger_doc_key_present_keeps_trigger(tmp_path, monkeypatch):
     art = specs_extract.extract_specs(tmp_path, make_dossier(covenant()["quote"]), {"financing_threshold"})
     sp = art["clauses"]["6.1"]
     assert sp["valid"] is True and sp["trigger"] is not None
+
+
+def test_limit_in_clause_span_definition_outside_quote():
+    """Боевой прогон 2026-08-09: «...не допускать превышения Разрешённой
+    величины», а «Разрешённая величина означает 5 процентов...» стоит в том же
+    пункте двумя предложениями ниже цитаты. Порог обязан быть напечатан в
+    теле ТОГО ЖЕ пункта; чужой пункт — по-прежнему провал."""
+    text = (
+        "Пункт 6.2 Прочее. Не более 5 процентов чего-то другого. "
+        "Пункт 6.3 Максимальные расходы. Заёмщик обязуется не допускать превышения "
+        "Разрешённой величины. Разрешённая величина означает 5 процентов "
+        "Консолидированных капитальных затрат Группы. "
+        "Статья 7 — Ограничительные обязательства. Прочий текст."
+    )
+    assert specs_extract._limit_in_clause_span("0.05", text, "6.3")
+    # В пункте 6.1 порога нет вовсе — провал.
+    assert not specs_extract._limit_in_clause_span(
+        "0.05", "Пункт 6.1 Иное. Текст без числа. Пункт 6.2 Х.", "6.1"
+    )
+    # Заголовок пункта не найден — провал, не скан всего договора.
+    assert not specs_extract._limit_in_clause_span("0.05", text, "9.9")
+
+
+def test_check_accepts_limit_defined_in_clause_body():
+    """_check: порог вне цитаты, но в теле пункта — спека валидна, путь помечен
+    limit_matched_in_clause; порога нет и в теле пункта — прежний
+    limit_not_in_quote."""
+    quote = "Заёмщик обязуется не допускать превышения Разрешённой величины."
+    text = (
+        "Пункт 6.3 Максимальные расходы. " + quote + " Разрешённая величина означает "
+        "5 процентов Консолидированных капитальных затрат Группы. Статья 7 — Прочее."
+    )
+    sp = covenant(clause="6.3", quote=quote, limit="0.05", metric="agg(RENT, out)", direction="max")
+    checked, _ = specs_extract._check(sp, set(), text)
+    assert checked["valid"] and checked.get("limit_matched_in_clause") is True
+    sp2 = covenant(clause="6.3", quote=quote, limit="0.09", metric="agg(RENT, out)", direction="max")
+    checked2, _ = specs_extract._check(sp2, set(), text)
+    assert not checked2["valid"] and "limit_not_in_quote" in checked2["errors"]
