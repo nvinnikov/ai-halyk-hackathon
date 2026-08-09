@@ -230,6 +230,19 @@ def test_category_template_takes_leaf_category_from_extracted_formula():
     kinds = [a["kind"] for a in cellspec["match_alarms"]]
     assert "heading_category_divergence" in kinds
     assert "heading_category_parameterized" not in kinds
+    # Несовместимый знак (ревью пост-мержа PR #26): доходный лист под
+    # расходным шаблоном дал бы agg(REVENUE, out) — уверенный ноль мимо обоих
+    # divergence-алярмов (категории совпали бы, signature() затирает знак).
+    sp = _spec(title_key=heading, metric="agg(REVENUE, in)")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == TEMPLATES["capex"]
+    kinds = [a["kind"] for a in cellspec["match_alarms"]]
+    assert "heading_category_divergence" in kinds
+    assert "heading_category_parameterized" not in kinds
+    # net совместим с любым шаблонным знаком — как в сигнатурном матче.
+    sp = _spec(title_key=heading, metric="agg(MARKETING, net)")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == "agg(MARKETING, out)"
 
 
 def test_substituted_template_does_not_inherit_period_filter():
@@ -251,23 +264,82 @@ def test_substituted_template_does_not_inherit_period_filter():
     assert cellspec["shadow_metric_text"] == sp["metric"]
 
 
+def test_ebitda_reading_rewrites_extracted_formula():
+    """Определение EBITDA из договора главнее извлечённой формулы (кейс J3 6.2
+    боевого прогона): модель взяла роллап OPEX_TOTAL при договорном «за вычетом
+    Операционных расходов» — EBITDA в минус на сотни миллионов. Переписывается
+    только EBITDA-подвыражение, фильтры и знак узла сохраняются, подмена видна
+    алярмом и тенью."""
+    metric = (
+        "ratio(agg(CONSULTING, out, period(2025-01-01, 2025-12-31)), "
+        "sub(agg(REVENUE, in, period(2025-01-01, 2025-12-31)), "
+        "agg(OPEX_TOTAL, out, period(2025-01-01, 2025-12-31))))"
+    )
+    sp = _spec(metric=metric, limit="0.20")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.2", ebitda_reading="line_item")
+    assert "OTHER_OPEX" in cellspec["metric_text"] and "OPEX_TOTAL" not in cellspec["metric_text"]
+    assert "period(2025-01-01, 2025-12-31)" in cellspec["metric_text"]  # фильтры целы
+    alarm = next(a for a in cellspec["match_alarms"] if a["kind"] == "ebitda_definition_applied")
+    assert alarm["reading"] == "line_item" and alarm["target"] == "metric"
+    assert cellspec["shadow_metric_text"] == metric  # подмена видна тени
+
+
+def test_ebitda_reading_rewrites_template_and_trigger():
+    # Определение главнее и канона шаблонов: _EBITDA зашивает OTHER_OPEX, а
+    # договор вправе выбрать второе прочтение (ebitda_total_opex).
+    heading = title_key("Минимальный коэффициент покрытия процентов")
+    sp = _spec(
+        title_key=heading,
+        direction="min",
+        metric="ratio(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), agg(INTEREST, out))",
+        trigger="gt(ratio(agg(FINANCING, in), sub(agg(REVENUE, in), agg(OTHER_OPEX, out))), const(3.0))",
+    )
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1", ebitda_reading="all_opex")
+    assert "OPEX_TOTAL" in cellspec["metric_text"]
+    targets = {a["target"] for a in cellspec["match_alarms"] if a["kind"] == "ebitda_definition_applied"}
+    assert targets == {"metric", "trigger"}
+    # Триггер переписан в AST, не только в тексте алярма.
+    from dsl import Agg as _Agg
+    from dsl import walk as _walk
+
+    trig_cats = {n.category for n in _walk(cellspec["trigger_ast"]) if isinstance(n, _Agg)}
+    assert "OPEX_TOTAL" in trig_cats and "OTHER_OPEX" not in trig_cats
+
+
+def test_ebitda_reading_noop_when_matching_or_absent():
+    metric = "ratio(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), agg(INTEREST, out))"
+    sp = _spec(metric=metric, direction="min")
+    # Совпадающее прочтение — переписывать нечего, алярма нет.
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1", ebitda_reading="line_item")
+    assert cellspec["metric_text"] == metric
+    assert not any(a["kind"] == "ebitda_definition_applied" for a in cellspec.get("match_alarms", []))
+    # Нет определения — поведение прежнее (fail-open).
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == metric
+    # Голый роллап вне EBITDA-подвыражения не трогается: «доля в операционных
+    # расходах» оперирует своей статьёй независимо от определения EBITDA.
+    sp = _spec(metric="ratio(agg(CONSULTING, out), agg(OPEX_TOTAL, out))")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1", ebitda_reading="line_item")
+    assert cellspec["metric_text"] == "ratio(agg(CONSULTING, out), agg(OPEX_TOTAL, out))"
+
+
 def test_resolve_echoes_limit_guard():
-    """Эхо порога — двойной признак (ревью PR #26): значение равно порогу
-    ячейки И цитата резолва взята из цитаты самого пункта. Законное равенство
-    (полис ровно на требуемую сумму) цитируется другим документом — не эхо."""
-    clause = "не допускать превышения величины $9,400,000.00 за период"
-    echo_q = "превышения величины $9,400,000.00"
-    other_q = "страховой полис на сумму $9,400,000.00 выдан"
-    assert solve._resolve_echoes_limit("9400000", "9400000", echo_q, clause)
-    assert solve._resolve_echoes_limit(9400000, "9400000.00", echo_q, clause)
-    assert solve._resolve_echoes_limit("-3.5", "3.5", "3.5", "порог 3.5")  # модуль
-    # Настоящий факт из другого документа: значение равно порогу, цитата чужая.
-    assert not solve._resolve_echoes_limit("9400000", "9400000", other_q, clause)
-    assert not solve._resolve_echoes_limit("9400001", "9400000", echo_q, clause)
-    assert not solve._resolve_echoes_limit("н/д", "9400000", echo_q, clause)
-    assert not solve._resolve_echoes_limit("100", None, echo_q, clause)
-    # Пустая цитата резолва страховочно считается эхом.
-    assert solve._resolve_echoes_limit("9400000", "9400000", "", clause)
+    """Эхо порога — двойной признак: значение равно порогу ячейки И источник
+    цитаты не оправдывает факт. Прежний признак «цитата резолва внутри цитаты
+    пункта» (ревью PR #26) вырождался на коротких цитатах: «$9,400,000.00» из
+    полиса — подстрока цитаты пункта. Теперь оправдание по источнику
+    (quote_outside_agreement от resolve_doc_fact): цитата, живущая вне
+    договора и не живущая в договоре, — настоящий факт."""
+    # Значение равно порогу, источник не оправдан (договор/неоднозначно) — эхо.
+    assert solve._resolve_echoes_limit("9400000", "9400000", False)
+    assert solve._resolve_echoes_limit(9400000, "9400000.00", False)
+    assert solve._resolve_echoes_limit("-3.5", "3.5", False)  # модуль: порог без знака
+    # Цитата атрибутирована вне договора — законное равенство, не эхо.
+    assert not solve._resolve_echoes_limit("9400000", "9400000", True)
+    # Значение не равно порогу — не эхо независимо от источника.
+    assert not solve._resolve_echoes_limit("9400001", "9400000", False)
+    assert not solve._resolve_echoes_limit("н/д", "9400000", False)
+    assert not solve._resolve_echoes_limit("100", None, False)
 
 
 def test_extracted_cellspec_no_shadow_when_template_matches_extracted():

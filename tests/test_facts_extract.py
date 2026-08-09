@@ -209,7 +209,39 @@ def test_resolve_doc_fact(tmp_path, monkeypatch):
 
     monkeypatch.setattr(facts_extract.llm, "call", facts_only(fake_call))
     got = facts_extract.resolve_doc_fact(tmp_path, DOSSIER, "group_capex", "CapEx Группы")
-    assert got == {"value": "9450000.00", "quote": "консолидированный CapEx $9,450,000.00"}
+    # Цитата живёт в записке казначейства, договора в досье нет — источник
+    # оправдывает факт перед эхо-гардом.
+    assert got == {
+        "value": "9450000.00",
+        "quote": "консолидированный CapEx $9,450,000.00",
+        "quote_outside_agreement": True,
+    }
+
+
+def test_resolve_doc_fact_quote_from_agreement_is_not_exonerated(tmp_path, monkeypatch):
+    """Атрибуция источника (ревью пост-мержа PR #26): цитата, верифицируемая в
+    тексте ДОГОВОРА, оправдания не получает — эхо-гард вправе счесть её эхом
+    порога. Оправдание — только положительная улика: цитата вне договора и ни
+    в одном договоре."""
+    dossier = {
+        **DOSSIER,
+        "docs": DOSSIER["docs"]
+        + [
+            {
+                "file": "agreement.pdf",
+                "doc_type": "agreement",
+                "date": "2025-01-01",
+                "text": "договор: покрытие не менее $9,450,000.00 обязательно",
+            }
+        ],
+    }
+
+    def fake_call(prompt, schema, schema_version, **kw):
+        return {"found": True, "value": "9450000.00", "quote": "не менее $9,450,000.00"}
+
+    monkeypatch.setattr(facts_extract.llm, "call", facts_only(fake_call))
+    got = facts_extract.resolve_doc_fact(tmp_path, dossier, "cov_floor", "минимальное покрытие")
+    assert got is not None and got["quote_outside_agreement"] is False
 
 
 def test_resolve_doc_fact_number_must_be_in_quote(tmp_path, monkeypatch):
@@ -264,7 +296,11 @@ def test_resolve_doc_fact_negative_value_matches_unsigned_quote(tmp_path, monkey
 
     monkeypatch.setattr(facts_extract.llm, "call", facts_only(fake_call))
     got = facts_extract.resolve_doc_fact(tmp_path, DOSSIER, "group_capex3", "CapEx Группы")
-    assert got == {"value": "-9450000.00", "quote": "консолидированный CapEx $9,450,000.00"}
+    assert got == {
+        "value": "-9450000.00",
+        "quote": "консолидированный CapEx $9,450,000.00",
+        "quote_outside_agreement": True,
+    }
 
 
 def test_empty_dossier_facts_alarmed_and_not_cached(tmp_path, monkeypatch):
@@ -1077,3 +1113,90 @@ def test_group_capex_incomplete_movement_is_named(tmp_path, monkeypatch):
     assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
     alarm = next(a for a in facts["alarms"] if a["kind"] == "group_capex_movement_incomplete")
     assert alarm["fields"] == ["opening"]
+
+
+# --- определение EBITDA из договора ------------------------------------------
+
+_EBITDA_DEF_NARROW = "EBITDA означает Выручку за вычетом Операционных расходов, как раскрыто в примечаниях."
+_EBITDA_DEF_BROAD = "EBITDA означает выручку за вычетом всех операционных расходов за период."
+
+
+def _agreement_dossier(definition: str) -> dict:
+    return {
+        "account_id": "ACC-1",
+        "scenario_id": "S1",
+        "docs": [
+            {
+                "file": "agreement.pdf",
+                "doc_type": "agreement",
+                "date": "2025-01-01",
+                "text": f"Кредитный договор. {definition} Прочие условия.",
+            }
+        ],
+        "docs_rejected": [],
+        "quarantined": [],
+        "alarms": [],
+    }
+
+
+def _def_call(found: bool, quote: str):
+    def call(prompt, schema, schema_version, **kw):
+        assert schema_version == facts_extract.EBITDA_DEF_SCHEMA_VERSION
+        return {"found": found, "quote": quote}
+
+    return call
+
+
+def test_ebitda_definition_classified_by_code():
+    """Классифицирует КОД по цитате, модель только находит определение: статья
+    без квантора — line_item, квантор всеобщности — all_opex, определение
+    другой природы или не про метрику — None."""
+    assert facts_extract._classify_ebitda_quote(_EBITDA_DEF_NARROW) == "line_item"
+    assert facts_extract._classify_ebitda_quote(_EBITDA_DEF_BROAD) == "all_opex"
+    assert (
+        facts_extract._classify_ebitda_quote("EBITDA means Revenue less total operating costs") == "all_opex"
+    )
+    assert facts_extract._classify_ebitda_quote("EBITDA means profit before tax and depreciation") is None
+    assert facts_extract._classify_ebitda_quote("операционные расходы без определения метрики") is None
+
+
+def test_ebitda_definition_line_item(tmp_path, monkeypatch):
+    monkeypatch.setattr(facts_extract.llm, "call", _def_call(True, _EBITDA_DEF_NARROW))
+    got = facts_extract.ebitda_definition(tmp_path, _agreement_dossier(_EBITDA_DEF_NARROW))
+    assert got == {"reading": "line_item", "quote": _EBITDA_DEF_NARROW}
+
+
+def test_ebitda_definition_broad(tmp_path, monkeypatch):
+    monkeypatch.setattr(facts_extract.llm, "call", _def_call(True, _EBITDA_DEF_BROAD))
+    got = facts_extract.ebitda_definition(tmp_path, _agreement_dossier(_EBITDA_DEF_BROAD))
+    assert got is not None and got["reading"] == "all_opex"
+
+
+def test_ebitda_definition_unverified_quote_is_dropped(tmp_path, monkeypatch):
+    # Цитата не из договора — факта нет (контракт guard, как у всех потребителей).
+    monkeypatch.setattr(
+        facts_extract.llm, "call", _def_call(True, "EBITDA означает что-то выдуманное про операционные")
+    )
+    assert facts_extract.ebitda_definition(tmp_path, _agreement_dossier(_EBITDA_DEF_NARROW)) is None
+
+
+def test_ebitda_definition_without_agreement_is_none(tmp_path, monkeypatch):
+    def boom(*a, **kw):
+        raise AssertionError("вызова быть не должно: договора в досье нет")
+
+    monkeypatch.setattr(facts_extract.llm, "call", boom)
+    assert facts_extract.ebitda_definition(tmp_path, DOSSIER) is None
+
+
+def test_ebitda_definition_schema_failure_not_cached(tmp_path, monkeypatch):
+    def rejected(prompt, schema, schema_version, **kw):
+        raise facts_extract.llm.SchemaRejected("bad")
+
+    monkeypatch.setattr(facts_extract.llm, "call", rejected)
+    dossier = _agreement_dossier(_EBITDA_DEF_NARROW)
+    assert facts_extract.ebitda_definition(tmp_path, dossier) is None
+    # Отказ не закреплён артефактом: на повторе (после устранения причины)
+    # вызов уйдёт заново, а не вернёт found=false с диска.
+    assert not (tmp_path / "facts" / "ACC-1.ebitda_def.json").exists()
+    monkeypatch.setattr(facts_extract.llm, "call", _def_call(True, _EBITDA_DEF_NARROW))
+    assert facts_extract.ebitda_definition(tmp_path, dossier) is not None

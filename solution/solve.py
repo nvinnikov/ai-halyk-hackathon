@@ -14,6 +14,7 @@ legacy_spec_to_cellspec, регрессия/eval), "extracted" (дефолт, з
 документный конвейер: досье → факты → спеки, LLM трогает только чтение,
 арифметика ковенанта — DSL и код."""
 
+import dataclasses
 import hashlib
 import importlib
 import json
@@ -31,7 +32,7 @@ import evidence
 import facts_extract
 import llm
 from dossier import build_dossiers
-from dsl import Agg, Doc, DslError, Ratio, parse, signature, walk
+from dsl import Agg, Doc, DslError, Ratio, Sub, parse, signature, unparse, walk
 from engine import agg, prepare_rows, select_rows, sign_divergence
 from facts_extract import extract_facts, resolve_doc_fact
 from fallbacks import fallback_cell, family_of, heuristic_template
@@ -677,7 +678,9 @@ def _extracted_inputs(
                         print(f"ALARM doc_fact_resolve_error {sc} {_cl} {key}: {exc!r}", flush=True)
                         resolved = None
                     if resolved is not None and _resolve_echoes_limit(
-                        resolved["value"], sp.get("limit"), resolved.get("quote"), sp.get("quote")
+                        resolved["value"],
+                        sp.get("limit"),
+                        resolved.get("quote_outside_agreement", False),
                     ):
                         # Мерянный на group_capex паттерн, обобщённый на
                         # произвольный ключ: адресный резолв просит число по
@@ -685,11 +688,10 @@ def _extracted_inputs(
                         # порог — модель возвращает его. Такое «значение»
                         # делает метрику равной порогу и даёт уверенный ложный
                         # вердикт впритык; честнее лестница с эвристикой по
-                        # цитате. Признак эха двойной (ревью PR #26): не только
-                        # равенство порогу, но и цитата резолва, взятая из
-                        # цитаты самого пункта, — законное равенство (полис
-                        # ровно на требуемую сумму) цитируется другим
-                        # документом и гард не трогает.
+                        # цитате. Признак эха двойной: равенство порогу И
+                        # источник цитаты (resolve_doc_fact атрибутирует её по
+                        # документам досье) — законное равенство из полиса,
+                        # процитированное вне договора, гард не трогает.
                         print(
                             f"ALARM doc_fact_resolve_echoes_limit {sc} {_cl}: {key}",
                             flush=True,
@@ -712,6 +714,20 @@ def _extracted_inputs(
                 "clauses": {},
                 "alarms": [{"kind": "specs_failed", "scenario": sc, "error": repr(exc)}],
             }
+        # Определение EBITDA — отдельным fail-open рубежом: его сбой (в том
+        # числе CassetteMiss в офлайне — на публичной кассете этого вызова нет)
+        # не имеет права уронить уже извлечённые спеки в specs_failed. Нет
+        # определения — ключа нет, формулы не переписываются, поведение прежнее.
+        if spec_art.get("clauses"):
+            try:
+                ebitda_def = facts_extract.ebitda_definition(wd, dossiers[acc])
+            except Exception as exc:
+                print(f"ALARM ebitda_definition_error {sc}: {exc!r}", flush=True)
+                ebitda_def = None
+            if ebitda_def is not None:
+                # Копия, не мутация: spec_art может быть только что записанным
+                # артефактом, дописывать в его словарь — играть с диском.
+                spec_art = {**spec_art, "ebitda_reading": ebitda_def}
         try:
             facts_by_sc[sc] = _with_doc_facts(facts)
         except Exception as exc:
@@ -732,25 +748,26 @@ def _extracted_inputs(
     return facts_by_sc, specs_by_sc
 
 
-def _resolve_echoes_limit(value, limit, resolved_quote=None, clause_quote=None) -> bool:
-    """Резолв вернул порог самой ячейки, процитировав сам пункт, — эхо.
+def _resolve_echoes_limit(value, limit, quote_outside_agreement: bool = False) -> bool:
+    """Резолв вернул порог самой ячейки, взяв его из текста договора, — эхо.
 
-    Признака два, и нужны оба (ревью PR #26): равенство порогу по модулю
-    (порог в цитате печатается без знака) И цитата резолва, лежащая внутри
-    цитаты пункта. Настоящий факт, случайно равный порогу («страховое
-    покрытие не ниже X» с полисом ровно на X), цитируется другим документом
-    — вторая проверка его не тронет. Пустая цитата резолва до гарда не
-    доживает (verify_quote отбросил бы факт раньше), но страховочно
-    считается эхом. Неразбираемое значение или отсутствующий порог — не эхо."""
+    Признака два, и нужны оба: равенство порогу по модулю (порог в цитате
+    печатается без знака) И отсутствие оправдания по источнику цитаты.
+    Прежний второй признак — вхождение цитаты резолва в цитату пункта (ревью
+    PR #26) — вырождался на коротких цитатах: цитата-число из полиса — это
+    подстрока цитаты пункта, и гард бил законное равенство. Теперь источник
+    определяет resolve_doc_fact пословной верификацией по каждому документу
+    досье: цитата, живущая вне договора и не живущая ни в одном договоре, —
+    настоящий факт, не эхо (полис ровно на требуемую сумму). Неоднозначный
+    источник (голое число в обоих текстах, сшитая цитата) остаётся эхом —
+    цена этой ошибки ограничена статусом, обратная — уверенным вердиктом
+    впритык. Неразбираемое значение или отсутствующий порог — не эхо."""
     try:
         if abs(Decimal(str(value))) != abs(Decimal(str(limit))):
             return False
     except (InvalidOperation, TypeError, ValueError):
         return False
-    if not resolved_quote:
-        return True
-    norm = lambda s: " ".join(str(s).split())  # noqa: E731
-    return norm(resolved_quote) in norm(clause_quote or "")
+    return not quote_outside_agreement
 
 
 def _clause_suffix(clause: str) -> str:
@@ -840,7 +857,62 @@ def _parameterize_category(extracted_text: str, template_text: str) -> str | Non
         # нераспознанного, причём после подмены категории совпали бы и
         # heading_category_divergence уже не поднялся бы.
         return None
+    if ext.sign not in (tpl.sign, "net"):
+        # Несовместимый знак (ревью пост-мержа PR #26): доходный лист под
+        # расходным шаблоном — agg(REVENUE, in) под «расходами по категории» —
+        # дал бы agg(REVENUE, out), то есть уверенный ноль на max-ковенанте,
+        # причём мимо обоих divergence-алярмов: категории после подмены
+        # совпадают, а signature() затирает знак. net совместим с любым
+        # шаблонным знаком — как в сигнатурном матче. Отказ — прежний путь:
+        # шаблон + heading_category_divergence + тень.
+        return None
     return f"agg({ext.category}, {tpl.sign})"
+
+
+def _apply_ebitda_reading(text: str, reading: str) -> str | None:
+    """Текст формулы с категорией опекса по определению EBITDA из договора;
+    None — переписывать нечего (или текст не парсится).
+
+    Определение договора главнее и извлечённой формулы, и канона шаблонов:
+    «EBITDA означает Выручку за вычетом Операционных расходов» — это статья
+    (лист OTHER_OPEX), «за вычетом всех операционных расходов» — роллап
+    OPEX_TOTAL (ebitda_total_opex — второе легитимное прочтение). Переписывается
+    ТОЛЬКО EBITDA-подвыражение — sub(выручка, опекс), — а не всякий agg опекса:
+    ковенант «доля консультационных в операционных расходах» оперирует своей
+    статьёй независимо от определения EBITDA. Знак и фильтры узла сохраняются."""
+    target = "OTHER_OPEX" if reading == "line_item" else "OPEX_TOTAL"
+    wrong = "OPEX_TOTAL" if target == "OTHER_OPEX" else "OTHER_OPEX"
+    try:
+        ast = parse(text)
+    except DslError:
+        return None
+
+    changed = False
+
+    def rewrite(node):
+        nonlocal changed
+        if isinstance(node, Sub) and isinstance(node.a, Agg) and isinstance(node.b, Agg):
+            if node.a.category == "REVENUE" and node.b.category == wrong:
+                changed = True
+                return Sub(a=node.a, b=dataclasses.replace(node.b, category=target))
+            return node
+        if not hasattr(node, "__dataclass_fields__"):
+            return node
+        updates = {}
+        for name in node.__dataclass_fields__:
+            value = getattr(node, name)
+            if isinstance(value, tuple):
+                rebuilt = tuple(rewrite(c) if hasattr(c, "__dataclass_fields__") else c for c in value)
+                if rebuilt != value:
+                    updates[name] = rebuilt
+            elif hasattr(value, "__dataclass_fields__"):
+                rebuilt = rewrite(value)
+                if rebuilt != value:
+                    updates[name] = rebuilt
+        return dataclasses.replace(node, **updates) if updates else node
+
+    rewritten = rewrite(ast)
+    return unparse(rewritten) if changed else None
 
 
 def _extracted_cellspec(
@@ -849,6 +921,7 @@ def _extracted_cellspec(
     scenario: str = "",
     hide_templates: frozenset = frozenset(),
     fact_keys: frozenset | None = None,
+    ebitda_reading: str | None = None,
 ) -> tuple[object, str]:
     """Cellspec-или-ошибка + цитата пункта из извлечённой спеки (правка 3).
 
@@ -998,12 +1071,38 @@ def _extracted_cellspec(
                     }
                 )
                 metric_text = sp["metric"]
+        # Определение EBITDA из договора применяется к ФИНАЛЬНОМУ тексту —
+        # после всех подмен: оно главнее и извлечённой формулы (кейс боевого
+        # прогона: модель взяла роллап при договорном «за вычетом Операционных
+        # расходов»), и канона шаблонов (_EBITDA зашивает OTHER_OPEX, а договор
+        # вправе выбрать второе прочтение). Сбой извлечения определения выше
+        # по стеку — reading просто не приходит, поведение прежнее.
+        trigger_text = sp["trigger"]
+        if ebitda_reading:
+            for label, current in (("metric", metric_text), ("trigger", trigger_text)):
+                if not current:
+                    continue
+                rewritten = _apply_ebitda_reading(current, ebitda_reading)
+                if rewritten is None:
+                    continue
+                if label == "metric":
+                    metric_text = rewritten
+                else:
+                    trigger_text = rewritten
+                match_alarms.append(
+                    {
+                        "kind": "ebitda_definition_applied",
+                        "reading": ebitda_reading,
+                        "target": label,
+                        "text": rewritten,
+                    }
+                )
         cellspec = {
             "metric_ast": parse(metric_text),
             "metric_text": metric_text,
             "direction": sp["direction"],
             "limit": Decimal(sp["limit"]),
-            "trigger_ast": parse(sp["trigger"]) if sp["trigger"] else None,
+            "trigger_ast": parse(trigger_text) if trigger_text else None,
         }
         if match_alarms:
             cellspec["match_alarms"] = match_alarms
@@ -1487,6 +1586,7 @@ def main(
                             scenario,
                             hide_templates,
                             fact_keys=frozenset(facts.get("doc_facts", {})),
+                            ebitda_reading=(specs_by_sc[scenario].get("ebitda_reading") or {}).get("reading"),
                         )
                     else:
                         cellspec_or_error = legacy_spec_to_cellspec(_expected_specs()[scenario][clause])
