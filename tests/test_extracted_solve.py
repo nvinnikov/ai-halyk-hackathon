@@ -230,6 +230,19 @@ def test_category_template_takes_leaf_category_from_extracted_formula():
     kinds = [a["kind"] for a in cellspec["match_alarms"]]
     assert "heading_category_divergence" in kinds
     assert "heading_category_parameterized" not in kinds
+    # Несовместимый знак (ревью пост-мержа PR #26): доходный лист под
+    # расходным шаблоном дал бы agg(REVENUE, out) — уверенный ноль мимо обоих
+    # divergence-алярмов (категории совпали бы, signature() затирает знак).
+    sp = _spec(title_key=heading, metric="agg(REVENUE, in)")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == TEMPLATES["capex"]
+    kinds = [a["kind"] for a in cellspec["match_alarms"]]
+    assert "heading_category_divergence" in kinds
+    assert "heading_category_parameterized" not in kinds
+    # net совместим с любым шаблонным знаком — как в сигнатурном матче.
+    sp = _spec(title_key=heading, metric="agg(MARKETING, net)")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == "agg(MARKETING, out)"
 
 
 def test_substituted_template_does_not_inherit_period_filter():
@@ -252,22 +265,22 @@ def test_substituted_template_does_not_inherit_period_filter():
 
 
 def test_resolve_echoes_limit_guard():
-    """Эхо порога — двойной признак (ревью PR #26): значение равно порогу
-    ячейки И цитата резолва взята из цитаты самого пункта. Законное равенство
-    (полис ровно на требуемую сумму) цитируется другим документом — не эхо."""
-    clause = "не допускать превышения величины $9,400,000.00 за период"
-    echo_q = "превышения величины $9,400,000.00"
-    other_q = "страховой полис на сумму $9,400,000.00 выдан"
-    assert solve._resolve_echoes_limit("9400000", "9400000", echo_q, clause)
-    assert solve._resolve_echoes_limit(9400000, "9400000.00", echo_q, clause)
-    assert solve._resolve_echoes_limit("-3.5", "3.5", "3.5", "порог 3.5")  # модуль
-    # Настоящий факт из другого документа: значение равно порогу, цитата чужая.
-    assert not solve._resolve_echoes_limit("9400000", "9400000", other_q, clause)
-    assert not solve._resolve_echoes_limit("9400001", "9400000", echo_q, clause)
-    assert not solve._resolve_echoes_limit("н/д", "9400000", echo_q, clause)
-    assert not solve._resolve_echoes_limit("100", None, echo_q, clause)
-    # Пустая цитата резолва страховочно считается эхом.
-    assert solve._resolve_echoes_limit("9400000", "9400000", "", clause)
+    """Эхо порога — двойной признак: значение равно порогу ячейки И источник
+    цитаты не оправдывает факт. Прежний признак «цитата резолва внутри цитаты
+    пункта» (ревью PR #26) вырождался на коротких цитатах: «$9,400,000.00» из
+    полиса — подстрока цитаты пункта. Теперь оправдание по источнику
+    (quote_outside_agreement от resolve_doc_fact): цитата, живущая вне
+    договора и не живущая в договоре, — настоящий факт."""
+    # Значение равно порогу, источник не оправдан (договор/неоднозначно) — эхо.
+    assert solve._resolve_echoes_limit("9400000", "9400000", False)
+    assert solve._resolve_echoes_limit(9400000, "9400000.00", False)
+    assert solve._resolve_echoes_limit("-3.5", "3.5", False)  # модуль: порог без знака
+    # Цитата атрибутирована вне договора — законное равенство, не эхо.
+    assert not solve._resolve_echoes_limit("9400000", "9400000", True)
+    # Значение не равно порогу — не эхо независимо от источника.
+    assert not solve._resolve_echoes_limit("9400001", "9400000", False)
+    assert not solve._resolve_echoes_limit("н/д", "9400000", False)
+    assert not solve._resolve_echoes_limit("100", None, False)
 
 
 def test_extracted_cellspec_no_shadow_when_template_matches_extracted():

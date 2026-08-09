@@ -209,7 +209,39 @@ def test_resolve_doc_fact(tmp_path, monkeypatch):
 
     monkeypatch.setattr(facts_extract.llm, "call", facts_only(fake_call))
     got = facts_extract.resolve_doc_fact(tmp_path, DOSSIER, "group_capex", "CapEx Группы")
-    assert got == {"value": "9450000.00", "quote": "консолидированный CapEx $9,450,000.00"}
+    # Цитата живёт в записке казначейства, договора в досье нет — источник
+    # оправдывает факт перед эхо-гардом.
+    assert got == {
+        "value": "9450000.00",
+        "quote": "консолидированный CapEx $9,450,000.00",
+        "quote_outside_agreement": True,
+    }
+
+
+def test_resolve_doc_fact_quote_from_agreement_is_not_exonerated(tmp_path, monkeypatch):
+    """Атрибуция источника (ревью пост-мержа PR #26): цитата, верифицируемая в
+    тексте ДОГОВОРА, оправдания не получает — эхо-гард вправе счесть её эхом
+    порога. Оправдание — только положительная улика: цитата вне договора и ни
+    в одном договоре."""
+    dossier = {
+        **DOSSIER,
+        "docs": DOSSIER["docs"]
+        + [
+            {
+                "file": "agreement.pdf",
+                "doc_type": "agreement",
+                "date": "2025-01-01",
+                "text": "договор: покрытие не менее $9,450,000.00 обязательно",
+            }
+        ],
+    }
+
+    def fake_call(prompt, schema, schema_version, **kw):
+        return {"found": True, "value": "9450000.00", "quote": "не менее $9,450,000.00"}
+
+    monkeypatch.setattr(facts_extract.llm, "call", facts_only(fake_call))
+    got = facts_extract.resolve_doc_fact(tmp_path, dossier, "cov_floor", "минимальное покрытие")
+    assert got is not None and got["quote_outside_agreement"] is False
 
 
 def test_resolve_doc_fact_number_must_be_in_quote(tmp_path, monkeypatch):
@@ -264,7 +296,11 @@ def test_resolve_doc_fact_negative_value_matches_unsigned_quote(tmp_path, monkey
 
     monkeypatch.setattr(facts_extract.llm, "call", facts_only(fake_call))
     got = facts_extract.resolve_doc_fact(tmp_path, DOSSIER, "group_capex3", "CapEx Группы")
-    assert got == {"value": "-9450000.00", "quote": "консолидированный CapEx $9,450,000.00"}
+    assert got == {
+        "value": "-9450000.00",
+        "quote": "консолидированный CapEx $9,450,000.00",
+        "quote_outside_agreement": True,
+    }
 
 
 def test_empty_dossier_facts_alarmed_and_not_cached(tmp_path, monkeypatch):
