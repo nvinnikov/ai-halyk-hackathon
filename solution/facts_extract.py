@@ -1199,4 +1199,21 @@ def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) ->
         unsigned = str(art["value"]).lstrip("-")
     if not _limit_in_quote(unsigned, art["quote"]):
         return None  # число не из цитаты — факта нет
-    return {"value": art["value"], "quote": art["quote"]}
+    # Атрибуция источника для эхо-гарда (ревью пост-мержа PR #26): эхо порога —
+    # это число, взятое из текста ДОГОВОРА (обычно прямо из цитаты пункта), а
+    # законное равенство порогу живёт в другом документе — полис ровно на
+    # требуемую сумму. Оправдание только положительной уликой: цитата
+    # верифицируется вне договора И не верифицируется ни в одном договоре.
+    # Голое число, живущее в обоих текстах, и цитата, сшитая из нескольких
+    # документов (пословная верификация проваливается везде), остаются под
+    # подозрением: цена ошибки в эту сторону ограничена статусом (actual на
+    # лестнице — тот же порог), обратная — уверенный вердикт впритык.
+    # Считается здесь, а не в build(): артефакт резолва не меняется, кэш живёт.
+    per_doc = [(d["doc_type"], verify_quote(art["quote"], sanitize_document(d["text"]))) for d in own_docs]
+    in_agreement = any(ok for doc_type, ok in per_doc if doc_type == "agreement")
+    outside = any(ok for doc_type, ok in per_doc if doc_type != "agreement")
+    return {
+        "value": art["value"],
+        "quote": art["quote"],
+        "quote_outside_agreement": outside and not in_agreement,
+    }
