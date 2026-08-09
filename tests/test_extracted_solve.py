@@ -11,7 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import solve
-from dsl import parse, signature
+from dsl import Agg, Period, parse, signature, walk
 from ledger import extract_archive, find_inputs, load_ledger, rows_of
 from scindex import INDEX_VERSION, build_index
 from stages import artifact
@@ -193,6 +193,86 @@ def test_loose_match_on_more_general_heading_computes_extracted_formula():
         assert isinstance(cellspec, dict) and cellspec["metric_text"] == metric
         kinds = [a["kind"] for a in cellspec["match_alarms"]]
         assert rejection in kinds and "heading_matched_loosely" in kinds
+
+
+def test_template_substitution_carries_period_filter():
+    """Подмена шаблоном переносит period(...) извлечённой формулы: шаблон
+    задаёт форму метрики, договор — период наблюдения. Строка вне периода
+    (2026 год в леджере 2025-го) не имеет права молча вернуться в базу."""
+    heading = title_key("Минимальная выручка по категории")
+    sp = _spec(
+        title_key=heading,
+        direction="min",
+        metric="agg(REVENUE, in, period(2025-01-01, 2025-12-31))",
+    )
+    cellspec, _ = solve._extracted_cellspec(sp, "6.2")
+    assert cellspec["metric_text"] == "agg(REVENUE, in, period(2025-01-01, 2025-12-31))"
+    kinds = [a["kind"] for a in cellspec["match_alarms"]]
+    assert "heading_time_filters_carried" in kinds
+    # Перенос снял единственное расхождение — сигнатурного алярма нет.
+    assert "heading_signature_divergence" not in kinds
+    # Перенос сошёлся с извлечённой формулой байт в байт — подмены не
+    # осталось, тени сравнивать нечего.
+    assert "shadow_metric_text" not in cellspec
+
+
+def test_template_substitution_period_transfer_edge_cases():
+    # Фильтр не на всех agg — перенос неоднозначен, шаблон остаётся как есть.
+    heading = title_key("Минимальное покрытие расходов на персонал и коммунальные услуги выручкой")
+    sp = _spec(
+        title_key=heading,
+        direction="min",
+        metric=(
+            "ratio(agg(REVENUE, in, period(2025-01-01, 2025-12-31)), "
+            "add(agg(PAYROLL, out), agg(UTILITIES, out)))"
+        ),
+    )
+    cellspec, _ = solve._extracted_cellspec(sp, "6.2")
+    assert cellspec["metric_text"] == TEMPLATES["revenue_cover_payroll_utilities"]
+    # Вид фильтра, уже занятый шаблоном, не дублируется: quarter у revenue_q4.
+    heading = title_key("Минимальная выручка за четвёртый квартал")
+    sp = _spec(title_key=heading, direction="min", metric="agg(REVENUE, in, quarter(4))")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.2")
+    assert cellspec["metric_text"] == TEMPLATES["revenue_q4"]
+    assert "match_alarms" not in cellspec or not any(
+        a["kind"] == "heading_time_filters_carried" for a in cellspec["match_alarms"]
+    )
+    # Единый период на ВСЕХ agg сложной формулы переносится во все agg шаблона.
+    heading = title_key("Минимальный коэффициент покрытия процентов")
+    sp = _spec(
+        title_key=heading,
+        direction="min",
+        metric=(
+            "ratio(sub(agg(REVENUE, in, period(2025-01-01, 2025-12-31)), "
+            "agg(OTHER_OPEX, out, period(2025-01-01, 2025-12-31))), "
+            "agg(INTEREST, out, period(2025-01-01, 2025-12-31)))"
+        ),
+    )
+    cellspec, _ = solve._extracted_cellspec(sp, "6.2")
+    aggs = [n for n in walk(cellspec["metric_ast"]) if isinstance(n, Agg)]
+    assert aggs and all(any(isinstance(f, Period) for f in a.filters) for a in aggs)
+
+
+def test_loose_match_does_not_carry_filters():
+    # Нестрогий матч отвергается по расхождению до всякого переноса — перенос
+    # не имеет права сузить расхождение и тем самым протащить чужой шаблон.
+    heading = title_key("Минимальная рентабельность по EBITDA")
+    sp = _spec(
+        title_key=heading,
+        direction="min",
+        metric=(
+            "ratio(sub(agg(REVENUE, in, period(2025-01-01, 2025-12-31)), "
+            "agg(OTHER_OPEX, out, period(2025-01-01, 2025-12-31))), "
+            "agg(REVENUE, in, period(2025-01-01, 2025-12-31)))"
+        ),
+    )
+    cellspec, _ = solve._extracted_cellspec(
+        sp, "6.3", fact_keys=frozenset({"ebitda_addbacks_material_total"})
+    )
+    assert cellspec["metric_text"] == sp["metric"]
+    kinds = [a["kind"] for a in cellspec["match_alarms"]]
+    assert "loose_heading_rejected_on_divergence" in kinds
+    assert "heading_time_filters_carried" not in kinds
 
 
 def test_extracted_cellspec_no_shadow_when_template_matches_extracted():
