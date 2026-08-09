@@ -1066,3 +1066,14 @@ def test_group_capex_unnamed_scale_is_alarmed(tmp_path, monkeypatch):
     facts = facts_extract.extract_facts(tmp_path, GROUP_DOSSIER)
     assert facts["doc_facts"][facts_extract.GROUP_CAPEX_KEY] == "21847362.55"
     assert any(a["kind"] == "group_capex_scale_unnamed" for a in facts["alarms"])
+
+
+def test_group_capex_incomplete_movement_is_named(tmp_path, monkeypatch):
+    """Пустые числа примечания давали отказ без следа: в run-report было видно
+    только group_doc_attached, то есть «документ привязан и прочитан». Теперь
+    видно, что он привязан и НЕ прочитан (ревью PR #23, 11-я волна)."""
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(ppe(opening_value="", opening_quote="")))
+    facts = facts_extract.extract_facts(tmp_path, GROUP_DOSSIER)
+    assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
+    alarm = next(a for a in facts["alarms"] if a["kind"] == "group_capex_movement_incomplete")
+    assert alarm["fields"] == ["opening"]

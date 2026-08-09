@@ -11,7 +11,9 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 14
+FACTS_VERSION = 15
+# v15 — ревью PR #23, одиннадцатая волна: непрочитанное примечание видно
+# алярмом, а не только отсутствием ключа.
 # v14 — ревью PR #23, десятая волна: неназванный масштаб виден алярмом.
 # v13 — ревью PR #23, девятая волна: неназванная валюта видна алярмом,
 # неразобранное число не роняет решение о масштабе целиком.
@@ -756,6 +758,30 @@ def _group_capex(facts: dict, raw: dict, doc: dict, text: str) -> tuple[Decimal,
     closing = number(raw["closing_value"], raw["closing_quote"], "group_capex_closing")
     depreciation = number(raw["depreciation"], raw["depreciation_quote"], "group_capex_depreciation")
     if opening is None or closing is None or depreciation is None:
+        # Единственный отказ этой функции, у которого раньше не было имени
+        # (ревью PR #23, одиннадцатая волна). number() молчит на ПУСТОМ поле —
+        # для additions это законно («числа в тексте нет», дальше тождество), а
+        # здесь означает, что примечание не прочитано, и ячейка уходит на
+        # лестницу. Без алярма в run-report такой случай читался как «документ
+        # привязан и прочитан нормально»: виден только group_doc_attached.
+        # На приватном наборе это самая вероятная ветка — у чужой материнской
+        # компании примечание свёрстано по-своему, и не найтись может именно
+        # стоимость на начало периода.
+        facts["alarms"].append(
+            {
+                "kind": "group_capex_movement_incomplete",
+                "file": doc["file"],
+                "fields": [
+                    field
+                    for field, value in (
+                        ("opening", opening),
+                        ("closing", closing),
+                        ("depreciation", depreciation),
+                    )
+                    if value is None
+                ],
+            }
+        )
         return None
     additions = (closing - opening + abs(depreciation)) * scale
     return (additions, raw["closing_quote"]) if signed_ok(additions) else None
