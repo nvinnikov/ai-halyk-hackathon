@@ -568,6 +568,13 @@ def scenario_inputs(archive: Path, scenario: str, facts_source: str = "expected"
     archive = Path(archive)
     ds_hash, input_dir = extract_archive(archive)
     wd = workdir(ds_hash)
+    # Голый вызов намеренно (ревью PR #25): рубеж со записью скелета живёт
+    # только в main. Здесь он не защищает, а рискует — эта функция никогда не
+    # является входом run.sh, её зовут парити-тест, контрфактуалы и
+    # eval/invariants.py, причём последний оборачивает в isolated_solve_out
+    # только solve.main. Запись отсюда шла бы в БОЕВОЙ out/ и заменяла бы
+    # посчитанный submission пустым скелетом — ровно то, ради чего изоляция и
+    # ставилась.
     inputs = find_inputs(input_dir)
     template = json.loads(inputs["template"].read_text())
     targets = sorted(template["answers"])
@@ -1276,7 +1283,26 @@ def main(
 
     # Скелет — как можно раньше: без шаблона нельзя построить даже его, всё
     # остальное (леджер, индекс, расчёт) уже падает поверх валидного файла.
-    inputs = find_inputs(input_dir)
+    try:
+        inputs = find_inputs(input_dir)
+    except Exception as exc:
+        # Последний рубеж перед скелетом (ревью перед окном). find_inputs зовётся
+        # раньше первой записи, и любое её исключение под `set -e` в run.sh
+        # оставляло бы out/ с файлом ПРОШЛОГО прогона — на репетициях публичного.
+        # Неоднозначность CSV здесь уже не падает (ledger._pick_ledger), но
+        # остаются другие входы: ноль шаблонов, два шаблона, битая распаковка.
+        # Свой пустой скелет честнее чужих готовых ответов, поэтому пробуем
+        # записать его по любому найденному шаблону и только потом падаем.
+        print(f"ALARM find_inputs_failed: {exc!r}", flush=True)
+        found = sorted(input_dir.rglob("submission_template.json"))
+        if found:
+            try:
+                tpl = json.loads(found[0].read_text())
+                dump_submission({**submission_meta(), "answers": skeleton(tpl["answers"])}, tpl["answers"])
+                print(f"ALARM skeleton_written_after_failure: {found[0].name}", flush=True)
+            except Exception as inner:
+                print(f"ALARM skeleton_write_failed: {inner!r}", flush=True)
+        raise
     template = json.loads(inputs["template"].read_text())
     answers: dict = skeleton(template["answers"])
     sub = {**submission_meta(), "answers": answers}  # answers — та же ссылка, правки видны в sub
