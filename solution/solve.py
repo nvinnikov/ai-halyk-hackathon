@@ -18,6 +18,7 @@ import hashlib
 import importlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -31,9 +32,9 @@ import evidence
 import facts_extract
 import llm
 from dossier import build_dossiers
-from dsl import Agg, Doc, DslError, Ratio, parse, signature, walk
+from dsl import Agg, Doc, DslError, Ratio, parse, signature, validate, walk
 from engine import agg, prepare_rows, select_rows, sign_divergence
-from facts_extract import extract_facts, resolve_doc_fact
+from facts_extract import extract_facts, resolve_doc_fact, resolve_doc_metric
 from fallbacks import fallback_cell, family_of, heuristic_template
 from fx import coverage_alarms, to_usd
 from ledger import dirty_rows_of, extract_archive, find_inputs, load_ledger, rows_of
@@ -41,7 +42,13 @@ from scindex import INDEX_VERSION, build_index
 from specs_extract import extract_specs
 from stages import artifact
 from taxonomy import LEAVES, cell_other_alarm, coverage_report
-from templates import CATEGORY_PARAMETERIZED, TEMPLATE_HEADINGS, TEMPLATES, match_heading
+from templates import (
+    CATEGORY_PARAMETERIZED,
+    TEMPLATE_HEADINGS,
+    TEMPLATES,
+    match_heading,
+    match_signature,
+)
 from util import OUT, ROOT, q2, stable_json, workdir
 
 # Модули, чьи *_VERSION-константы run-report собирает целиком (раздел 3):
@@ -707,6 +714,13 @@ def _extracted_inputs(
             # _check при каждом чтении (задача 23), повторного похода к
             # модели не требует.
             spec_art = extract_specs(wd, dossiers[acc], set(_with_doc_facts(facts)["doc_facts"]))
+            # Ярус после числового резолва: ключи, так и не нашедшиеся числом,
+            # пробуются формулой по леджеру. Подстановка живёт в памяти прогона
+            # и полностью детерминирована LLM-кэшем — артефакт спек на диске
+            # не мутируется.
+            spec_art = _resolve_ledger_doc_metrics(
+                wd, dossiers[acc], spec_art, set(_with_doc_facts(facts)["doc_facts"]), sc
+            )
         except Exception as exc:
             print(f"ALARM specs_failed {sc}: {exc!r}", flush=True)
             spec_art = {
@@ -731,6 +745,68 @@ def _extracted_inputs(
             }
         specs_by_sc[sc] = spec_art
     return facts_by_sc, specs_by_sc
+
+
+def _resolve_ledger_doc_metrics(wd, dossier_art: dict, spec_art: dict, fact_keys: set, scenario: str) -> dict:
+    """Формульный резолв невалидных спек: doc-ключ метрики → агрегат леджера.
+
+    Второй ярус после числового резолва (resolve_doc_fact): величина вроде
+    «выплат тела долга» не названа числом ни в одном документе, потому что
+    это агрегат по леджеру. Модель по цитате пункта выписывает формулу DSL
+    (facts_extract.resolve_doc_metric валидирует её грамматикой, таксономией
+    и запретом констант — эхо порога исключено синтаксически), а здесь
+    doc(<ключ>) в метрике заменяется этим выражением текстуально: doc-вызов
+    атомарен, замена вызова вызовом сохраняет грамматику. Ключ, не найденный
+    в тексте метрики (иная форма записи), — отказ, не риск.
+
+    Работает только по спекам, невалидным ИСКЛЮЧИТЕЛЬНО из-за недостающих
+    doc-ключей: прочие ошибки (quote_unverified, limit_not_in_quote) означают,
+    что метрике нельзя верить целиком, и чинить её точечно нечестно. Любой
+    отказ на любом шаге — прежнее поведение, лестница; починенная спека
+    объявляется поимённо (doc_key_resolved_as_formula)."""
+    clauses = dict(spec_art.get("clauses", {}))
+    changed = False
+    for cl, sp in sorted(clauses.items()):
+        if sp.get("valid") or sp.get("errors") or not sp.get("missing_doc_keys"):
+            continue
+        metric = sp["metric"]
+        resolved_all = True
+        for key in sorted(sp["missing_doc_keys"]):
+            try:
+                expr = resolve_doc_metric(wd, dossier_art, key, sp.get("quote", ""))
+            except Exception as exc:
+                print(f"ALARM doc_metric_resolve_error {scenario} {cl} {key}: {exc!r}", flush=True)
+                expr = None
+            if expr is None:
+                resolved_all = False
+                break
+            substituted = re.sub(rf"doc\(\s*'?{re.escape(key)}'?\s*\)", expr, metric)
+            if substituted == metric:
+                resolved_all = False
+                break
+            metric = substituted
+        if not resolved_all:
+            continue
+        try:
+            node = parse(metric)
+        except DslError:
+            continue
+        still_missing = sorted({n.key for n in walk(node) if isinstance(n, Doc)} - set(fact_keys))
+        if still_missing or [e for e in validate(node, set(fact_keys)) if "doc-ключ" not in e]:
+            continue
+        print(
+            f"ALARM doc_key_resolved_as_formula {scenario} {cl}: {sorted(sp['missing_doc_keys'])}",
+            flush=True,
+        )
+        clauses[cl] = {
+            **sp,
+            "metric": metric,
+            "missing_doc_keys": [],
+            "valid": True,
+            "template": match_signature(node),
+        }
+        changed = True
+    return {**spec_art, "clauses": clauses} if changed else spec_art
 
 
 def _resolve_echoes_limit(value, limit, quote_outside_agreement: bool = False) -> bool:

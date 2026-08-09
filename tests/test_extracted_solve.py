@@ -264,6 +264,50 @@ def test_substituted_template_does_not_inherit_period_filter():
     assert cellspec["shadow_metric_text"] == sp["metric"]
 
 
+def test_ledger_doc_metric_substitution_repairs_invalid_spec(monkeypatch):
+    """Леджерный doc-ключ (боевой кейс: principal_payments в знаменателе DSCR)
+    — второй ярус резолва: формула вместо числа. Спека, невалидная только
+    из-за недостающего ключа, чинится подстановкой и считается ярусом 0."""
+    monkeypatch.setattr(solve, "resolve_doc_metric", lambda *a: "agg(FINANCING, out)")
+    sp = _spec(
+        valid=False,
+        missing_doc_keys=["principal_payments"],
+        metric=(
+            "ratio(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), "
+            "add(agg(INTEREST, out), doc('principal_payments')))"
+        ),
+        direction="min",
+        limit="1.25",
+    )
+    art = {"clauses": {"6.1": sp}, "alarms": []}
+    out = solve._resolve_ledger_doc_metrics(Path("."), {"account_id": "A", "alarms": []}, art, set(), "SC")
+    fixed = out["clauses"]["6.1"]
+    assert fixed["valid"] and fixed["missing_doc_keys"] == []
+    assert "doc(" not in fixed["metric"] and "agg(FINANCING, out)" in fixed["metric"]
+    parse(fixed["metric"])  # результат обязан разбираться грамматикой
+
+
+def test_ledger_doc_metric_substitution_refuses_partial_and_dirty(monkeypatch):
+    # Спека с ДРУГИМИ ошибками не трогается: метрике нельзя верить целиком.
+    monkeypatch.setattr(solve, "resolve_doc_metric", lambda *a: "agg(FINANCING, out)")
+    dirty = _spec(valid=False, errors=["quote_unverified"], missing_doc_keys=["k"], metric="doc(k)")
+    art = {"clauses": {"6.1": dirty}, "alarms": []}
+    out = solve._resolve_ledger_doc_metrics(Path("."), {"account_id": "A", "alarms": []}, art, set(), "SC")
+    assert out["clauses"]["6.1"]["valid"] is False
+    # Отказ резолва — прежнее поведение, лестница.
+    monkeypatch.setattr(solve, "resolve_doc_metric", lambda *a: None)
+    sp = _spec(valid=False, missing_doc_keys=["k"], metric="doc(k)")
+    art = {"clauses": {"6.1": sp}, "alarms": []}
+    out = solve._resolve_ledger_doc_metrics(Path("."), {"account_id": "A", "alarms": []}, art, set(), "SC")
+    assert out["clauses"]["6.1"]["valid"] is False
+    # Ключ, не найденный в тексте метрики (иная форма записи), — отказ, не риск.
+    monkeypatch.setattr(solve, "resolve_doc_metric", lambda *a: "agg(FINANCING, out)")
+    sp = _spec(valid=False, missing_doc_keys=["other_name"], metric="doc(k)")
+    art = {"clauses": {"6.1": sp}, "alarms": []}
+    out = solve._resolve_ledger_doc_metrics(Path("."), {"account_id": "A", "alarms": []}, art, set(), "SC")
+    assert out["clauses"]["6.1"]["valid"] is False
+
+
 def test_resolve_echoes_limit_guard():
     """Эхо порога — двойной признак: значение равно порогу ячейки И источник
     цитаты не оправдывает факт. Прежний признак «цитата резолва внутри цитаты
