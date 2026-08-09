@@ -221,6 +221,15 @@ def test_category_template_takes_leaf_category_from_extracted_formula():
     cellspec, _ = solve._extracted_cellspec(sp, "6.1")
     assert cellspec["metric_text"] == TEMPLATES["capex"]
     assert not any(a["kind"] == "heading_category_parameterized" for a in cellspec.get("match_alarms", []))
+    # OTHER — корзина неразнесённого, не статья (ревью PR #26): базой ковенанта
+    # не имеет права стать остаток нераспознанного, притом молча — после
+    # подмены категории совпали бы и divergence-алярм не поднялся бы.
+    sp = _spec(title_key=heading, metric="agg(OTHER, out)")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == TEMPLATES["capex"]
+    kinds = [a["kind"] for a in cellspec["match_alarms"]]
+    assert "heading_category_divergence" in kinds
+    assert "heading_category_parameterized" not in kinds
 
 
 def test_substituted_template_does_not_inherit_period_filter():
@@ -243,15 +252,22 @@ def test_substituted_template_does_not_inherit_period_filter():
 
 
 def test_resolve_echoes_limit_guard():
-    """Резолв, вернувший порог самой ячейки, — эхо цитаты пункта, а не факт
-    (мерянный на group_capex паттерн, обобщённый на произвольный ключ).
-    Сравнение точное и по модулю; мусор и отсутствующий порог — не эхо."""
-    assert solve._resolve_echoes_limit("9400000", "9400000")
-    assert solve._resolve_echoes_limit(9400000, "9400000.00")
-    assert solve._resolve_echoes_limit("-3.5", "3.5")  # модуль: порог без знака
-    assert not solve._resolve_echoes_limit("9400001", "9400000")
-    assert not solve._resolve_echoes_limit("н/д", "9400000")
-    assert not solve._resolve_echoes_limit("100", None)
+    """Эхо порога — двойной признак (ревью PR #26): значение равно порогу
+    ячейки И цитата резолва взята из цитаты самого пункта. Законное равенство
+    (полис ровно на требуемую сумму) цитируется другим документом — не эхо."""
+    clause = "не допускать превышения величины $9,400,000.00 за период"
+    echo_q = "превышения величины $9,400,000.00"
+    other_q = "страховой полис на сумму $9,400,000.00 выдан"
+    assert solve._resolve_echoes_limit("9400000", "9400000", echo_q, clause)
+    assert solve._resolve_echoes_limit(9400000, "9400000.00", echo_q, clause)
+    assert solve._resolve_echoes_limit("-3.5", "3.5", "3.5", "порог 3.5")  # модуль
+    # Настоящий факт из другого документа: значение равно порогу, цитата чужая.
+    assert not solve._resolve_echoes_limit("9400000", "9400000", other_q, clause)
+    assert not solve._resolve_echoes_limit("9400001", "9400000", echo_q, clause)
+    assert not solve._resolve_echoes_limit("н/д", "9400000", echo_q, clause)
+    assert not solve._resolve_echoes_limit("100", None, echo_q, clause)
+    # Пустая цитата резолва страховочно считается эхом.
+    assert solve._resolve_echoes_limit("9400000", "9400000", "", clause)
 
 
 def test_extracted_cellspec_no_shadow_when_template_matches_extracted():
