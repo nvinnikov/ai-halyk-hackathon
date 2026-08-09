@@ -20,6 +20,7 @@ from dsl import (
     MaxOf,
     MinAmount,
     MinOf,
+    Mul,
     Period,
     Quarter,
     Ratio,
@@ -101,6 +102,9 @@ def evaluate(node, ctx: Ctx) -> EvalResult:
     if isinstance(node, Sub):
         a, b = evaluate(node.a, ctx), evaluate(node.b, ctx)
         return EvalResult(a.value - b.value, a.flags | b.flags)
+    if isinstance(node, Mul):
+        a, b = evaluate(node.a, ctx), evaluate(node.b, ctx)
+        return EvalResult(a.value * b.value, a.flags | b.flags)
     if isinstance(node, Add | MaxOf | MinOf):
         parts = [evaluate(a, ctx) for a in node.args]
         merged = frozenset().union(*(p.flags for p in parts))
