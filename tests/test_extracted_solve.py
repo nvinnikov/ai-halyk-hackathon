@@ -275,6 +275,18 @@ def test_loose_match_does_not_carry_filters():
     assert "heading_time_filters_carried" not in kinds
 
 
+def test_resolve_echoes_limit_guard():
+    """Резолв, вернувший порог самой ячейки, — эхо цитаты пункта, а не факт
+    (мерянный на group_capex паттерн, обобщённый на произвольный ключ).
+    Сравнение точное и по модулю; мусор и отсутствующий порог — не эхо."""
+    assert solve._resolve_echoes_limit("9400000", "9400000")
+    assert solve._resolve_echoes_limit(9400000, "9400000.00")
+    assert solve._resolve_echoes_limit("-3.5", "3.5")  # модуль: порог без знака
+    assert not solve._resolve_echoes_limit("9400001", "9400000")
+    assert not solve._resolve_echoes_limit("н/д", "9400000")
+    assert not solve._resolve_echoes_limit("100", None)
+
+
 def test_extracted_cellspec_no_shadow_when_template_matches_extracted():
     # Формулы совпали — подменять нечего, тень не нужна: лишний проход по
     # леджеру ради заведомо равного значения не делаем.

@@ -670,6 +670,21 @@ def _extracted_inputs(
                         # приоре на ровном месте (ревью PR #9, 26-я волна).
                         print(f"ALARM doc_fact_resolve_error {sc} {_cl} {key}: {exc!r}", flush=True)
                         resolved = None
+                    if resolved is not None and _resolve_echoes_limit(resolved["value"], sp.get("limit")):
+                        # Мерянный на group_capex паттерн, обобщённый на
+                        # произвольный ключ: адресный резолв просит число по
+                        # описанию из цитаты пункта, а цитата называет сам
+                        # порог — модель возвращает его. Такое «значение»
+                        # делает метрику равной порогу и даёт уверенный ложный
+                        # вердикт впритык; честнее лестница с эвристикой по
+                        # цитате. Цена ошибки асимметрична: у настоящего факта,
+                        # случайно равного порогу, actual на лестнице останется
+                        # тем же порогом — теряется максимум статус.
+                        print(
+                            f"ALARM doc_fact_resolve_echoes_limit {sc} {_cl}: {key}",
+                            flush=True,
+                        )
+                        resolved = None
                     if resolved is not None:
                         facts["doc_facts"][key] = resolved["value"]
                         facts["doc_fact_quotes"][key] = resolved["quote"]
@@ -705,6 +720,18 @@ def _extracted_inputs(
             }
         specs_by_sc[sc] = spec_art
     return facts_by_sc, specs_by_sc
+
+
+def _resolve_echoes_limit(value, limit) -> bool:
+    """Резолвленное значение совпало с порогом самой ячейки — эхо цитаты.
+
+    Сравнение точное и по модулю: порог в цитате печатается без знака.
+    Неразбираемое значение или отсутствующий порог — не эхо (False), их
+    судьбу решают другие проверки."""
+    try:
+        return abs(Decimal(str(value))) == abs(Decimal(str(limit)))
+    except (InvalidOperation, TypeError, ValueError):
+        return False
 
 
 def _clause_suffix(clause: str) -> str:
