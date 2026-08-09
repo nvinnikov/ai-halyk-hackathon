@@ -174,6 +174,20 @@ def diff_facts(got: dict, want: dict) -> list[str]:
         if g is None or abs(Decimal(str(g)) - Decimal(str(want["severance_liability"]))) > Decimal("0.01"):
             out.append(f"doc_facts.severance_liability: got {g} != want {want['severance_liability']}")
 
+    # Эталонные doc_facts целиком, а не поимённо: иначе каждый новый ключ
+    # эталона появляется без измерения — так и вышло с group_capex, который
+    # приехал в эталон вместе с целым новым LLM-проходом и не мерился ничем
+    # (ревью PR #23, вторая волна). severance_liability выше оставлен своим
+    # блоком: он живёт в want плоским ключом, а не внутри doc_facts.
+    for key, wanted in sorted(want.get("doc_facts", {}).items()):
+        g = got.get("doc_facts", {}).get(key)
+        try:
+            ok = g is not None and abs(Decimal(str(g)) - Decimal(str(wanted))) <= Decimal("0.01")
+        except (ValueError, TypeError, InvalidOperation):
+            ok = str(g) == str(wanted)
+        if not ok:
+            out.append(f"doc_facts.{key}: got {g} != want {wanted}")
+
     return out
 
 

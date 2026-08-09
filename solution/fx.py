@@ -89,6 +89,12 @@ def _convert(row: dict, rate: dict) -> dict:
     return rec
 
 
+# Валюта расчёта. Контракт задачи задаёт её через usd_per_unit: строки леджера
+# нормализуются сюда, и любое число, приезжающее в метрику из документа, обязано
+# быть в ней же (ревью PR #23, пятая волна).
+BASE_CURRENCY = "USD"
+
+
 def to_usd(rows: list[dict], own_rates: list[dict], donor_rates: list[dict]) -> tuple[list[dict], list[dict]]:
     """Строки заёмщика в USD плюс алярмы; непокрытая строка выбывает из расчёта."""
     out, alarms = [], []

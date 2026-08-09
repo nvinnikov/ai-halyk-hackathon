@@ -104,9 +104,19 @@ def _(rows, f):
     return (ebitda(rows) + addbacks) / revenue(rows)
 
 
-@metric("group_capex_to_ebitda")
+@metric("group_capex_to_ebitda")  # капитальные затраты ГРУППЫ / EBITDA заёмщика
 def _(rows, f):
-    return totals(rows)["CAPEX"] / ebitda(rows)
+    # Числителя нет в леджере: он берётся из консолидированной отчётности
+    # материнской компании — леджер знает только затраты самого заёмщика.
+    #
+    # Паритет по этой метрике вырожден, и это надо знать, читая тест: числитель
+    # — документальный факт, другого независимого источника у него нет, поэтому
+    # обе стороны читают один ключ и сверяется только форма отношения. Настоящая
+    # проверка числителя живёт в тестах _group_capex (арифметика по примечанию) и
+    # в eval/extraction_eval (эталон против извлечённого).
+    capex = f.get("doc_facts", {}).get("group_capex")
+    assert capex is not None, "нет doc_facts.group_capex — эталон извлечения не содержит числителя"
+    return Decimal(str(capex)) / ebitda(rows)
 
 
 @metric("tax_utility_to_ebitda")

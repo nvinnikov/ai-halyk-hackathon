@@ -16,18 +16,27 @@ Fail-open на двух уровнях (задача 24, ревью раунда
 скелета.
 """
 
+import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from pdftext import doc_hash
-from route import full_text, route_doc
+from route import borrower_name, full_text, route_doc, route_group_doc
 from stages import artifact
 
 # v6 — активационный бамп (2026-08-08): досье собиралось из route-артефактов
 # v1; после ROUTE_VERSION=2 (META/WHOSE по тексту без футера) кэшированное
 # досье устарело по входу. v5: алярмы карантина в артефакте досье.
-DOSSIER_VERSION = 9
+DOSSIER_VERSION = 13
+# v13 — ревью PR #23, третья волна: отказ издателя деградирует досье.
+# v12 — ревью PR #23, вторая волна: сбой META второго прохода больше не
+# деградирует досье, добавлена проверка издателя отчётности.
+# v11 — ревью PR #23: второй проход не запускается при деградации первого;
+# набор документов в досье от этого зависит.
+# v10 — документы группового уровня, привязанные по наименованию заёмщика
+# (route.route_group_doc), приходят в досье отдельной областью видимости
+# (scope="group"): набор документов на входе фактов изменился.
 # v7 — кумулятивные типы больше не отдают замененные редакции: рабочий
 # документ с маркером «заменён окончательным отчётом» вносил в досье
 # предварительную реклассификацию операции и искажал две ячейки заёмщика.
@@ -55,6 +64,25 @@ CUMULATIVE_TYPES = frozenset({"audit_report", "treasury_memo", "financial_notes"
 # Настоящий признак виден только в тексте, и место ему в route, где текст читает
 # модель; enum редакции его сейчас не выражает.
 DRAFT_NOT_EFFECTIVE_TYPES = frozenset({"audit_report"})
+
+# Виды алярмов, при которых артефакт стадии НЕ кладётся на диск: все они —
+# транзиентные сбои (бюджет, сеть, промах кассеты, ответ не прошёл валидацию),
+# а не свойства архива. stages.artifact инвалидируется только по версии, поэтому
+# записанный при таком сбое результат пережил бы устранение причины.
+#
+# Набор публичный и живёт ЗДЕСЬ в одном экземпляре: его читает и facts_extract,
+# у которого своя стадия, но тот же вход. Дублирующий список там уже разъезжался
+# с этим — issuer_extraction_failed добавили в досье и забыли в фактах, и
+# отравленные факты пережили бы починку маршрутизации (ревью PR #23, четвёртая
+# волна). Одно место — одна правда.
+ROUTING_DEGRADED = frozenset({"routing_failed", "meta_extraction_failed"})
+DEGRADED_KINDS = ROUTING_DEGRADED | {
+    "borrower_name_failed",
+    "group_routing_failed",
+    "issuer_extraction_failed",
+    "dossier_build_failed",
+    "name_pass_skipped_degraded_routing",
+}
 
 
 def _is_effective(doc: dict, dtype: str) -> bool:
@@ -125,6 +153,125 @@ def _route_or_quarantine(wd: Path, p: Path, targets: list[str], all_accounts: li
         }
 
 
+def _all_current(wd: Path, targets: list[str]) -> bool:
+    """Все ли досье на диске собраны ТЕКУЩЕЙ версией стадии.
+
+    Существования файла мало: artifact() сверяет ещё и версию, и при её росте
+    пересоберёт досье — а значит второй проход всё-таки нужен.
+    """
+    for acc in targets:
+        path = wd / "dossier" / f"{acc}.json"
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return False
+        if data.get("_meta", {}).get("stage_version") != DOSSIER_VERSION:
+            return False
+    return True
+
+
+def _attach_by_name(
+    wd: Path,
+    targets: list[str],
+    routed: list[dict],
+    quarantined: list[dict],
+    by_hash: dict[str, Path],
+    first_pass_degraded: bool = False,
+) -> tuple[list[dict], list[dict]]:
+    """Документы группового уровня, привязанные по наименованию заёмщика.
+
+    Наименования собираются из уже отмаршрутизированных документов счёта, то
+    есть из того, что первый проход про этот счёт уже установил по номеру.
+    Счёт без единого привязанного документа наименования не даёт — и это
+    правильно: брать его было бы неоткуда, кроме как из самого кандидата.
+    """
+    if targets and _all_current(wd, targets):
+        # Все досье уже лежат на диске в текущей версии — artifact() их и так
+        # вернёт готовыми, а проход успел бы прочитать полный текст сотни с
+        # лишним документов впустую (ревью PR #23, вторая волна). В окне это
+        # прямая цена рестарта, а рестарт — штатный сценарий ранбука.
+        return [], []
+    if first_pass_degraded:
+        # Второй проход целиком построен на результатах первого: наименование
+        # считается по документам, которые первый проход привязал, а решение по
+        # кандидату — по пулу этих наименований. При деградации первого прохода
+        # и то и другое неполно, но кэшируется как успех: ни набор документов,
+        # ни пул в ключи артефактов borrower/route_group не входят, а
+        # stages.artifact инвалидируется только по версии. Пустое наименование
+        # и посчитанный при неполном пуле отказ пережили бы устранение причины
+        # (ревью PR #23, замечание 1). Прохода при деградации нет вовсе — досье
+        # и так помечено деградированным и на диск не ляжет.
+        return [], [{"kind": "name_pass_skipped_degraded_routing"}]
+    unrouted = [
+        q
+        for q in sorted(quarantined, key=lambda x: x["file"])
+        if q.get("quarantine_reason") == "no_account_mentions" and q.get("doc_hash") in by_hash
+    ]
+    if not unrouted:
+        return [], []
+    alarms: list[dict] = []
+    names: list[tuple[str, str]] = []
+    for acc in targets:
+        mine = sorted((r for r in routed if r["account_id"] == acc), key=lambda d: d["file"])
+        if not mine:
+            continue
+        try:
+            found = borrower_name(wd, acc, [by_hash[r["doc_hash"]] for r in mine if r["doc_hash"] in by_hash])
+        except Exception as exc:
+            print(f"ALARM borrower_name_failed {acc}: {exc!r}", flush=True)
+            alarms.append({"kind": "borrower_name_failed", "account": acc, "error": repr(exc)})
+            continue
+        alarms.extend(found["alarms"])
+        if found["name"]:
+            names.append((acc, found["name"]))
+    if any(a["kind"] == "borrower_name_failed" for a in alarms):
+        # Пул наименований неполон по транзиентной причине (бюджет, сеть, промах
+        # кассеты), а артефакт route_group кэшируется по хешу документа и пул в
+        # ключ не входит: посчитанный сейчас отказ пережил бы устранение причины
+        # и молча отменил бы привязку на всех следующих прогонах. Прохода
+        # сегодня нет — досье и так помечено деградированным и не закрепится.
+        return [], alarms
+    if not names:
+        return [], alarms
+
+    def route_or_skip(q: dict) -> dict | None:
+        path = by_hash[q["doc_hash"]]
+        try:
+            return route_group_doc(wd, path, sorted(names))
+        except Exception as exc:
+            # Тот же рубеж, что у _route_or_quarantine: сбой одного документа
+            # не имеет права уронить список остальных. Документ просто остаётся
+            # в карантине, как и был до прохода.
+            print(f"ALARM group_routing_failed {path.name}: {exc!r}", flush=True)
+            alarms.append({"kind": "group_routing_failed", "file": path.name, "error": repr(exc)})
+            return None
+
+    workers = int(os.environ.get("SOLVE_WORKERS", "4"))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(route_or_skip, unrouted))
+    attached = []
+    for r in results:
+        if r is None:
+            continue
+        # Сбой META ВТОРОГО прохода переименовывается намеренно (ревью PR #23,
+        # вторая волна). Второй проход зовёт META по каждому непривязанному
+        # документу — на публичном наборе их 122, на приватном будет свой
+        # хвост мусора, и один SchemaRejected среди них практически неизбежен.
+        # Под общим именем он ставил бы degraded=True и запрещал запись ВСЕХ
+        # двенадцати досье — то есть отменял бы рестарт в окне из-за документа,
+        # который и без того остаётся в карантине. Свой route_group-артефакт
+        # при этом всё равно не кэшируется, поэтому следующий прогон по нему
+        # перепытается; цена компромисса — досье может закрепиться без
+        # документа, который на повторе привязался бы, и это видно алярмом.
+        alarms.extend(
+            {**a, "kind": "group_meta_extraction_failed"} if a.get("kind") == "meta_extraction_failed" else a
+            for a in r["alarms"]
+        )
+        if not r["quarantined"]:
+            attached.append(r)
+    return attached, alarms
+
+
 def build_dossiers(
     wd: Path, pdfs: list[Path], index: dict, all_accounts: list[str] | None = None
 ) -> dict[str, dict]:
@@ -139,6 +286,23 @@ def build_dossiers(
     quarantined = [r for r in results if r["quarantined"]]
     by_hash = {doc_hash(p): p for p in ordered}
 
+    # Деградация ПЕРВОГО прохода считается до второго: второй построен на его
+    # результатах целиком, и запускать его по неполному `routed` нельзя.
+    routing_degraded = any(
+        a.get("kind") in ROUTING_DEGRADED for q in quarantined for a in q.get("alarms", [])
+    )
+
+    # Второй проход по наименованию заёмщика — только по документам, которые
+    # первый проход не привязал НИ К ЧЕМУ (`no_account_mentions`). Фоновый
+    # документ и документ нерелевантного типа уже решены и не переигрываются:
+    # там счёт напечатан, и наименование его не отменяет.
+    attached, name_alarms = _attach_by_name(
+        wd, targets, routed, quarantined, by_hash, first_pass_degraded=routing_degraded
+    )
+    if attached:
+        by_group_hash = {g["doc_hash"]: g for g in attached}
+        quarantined = [q for q in quarantined if q["doc_hash"] not in by_group_hash]
+
     # routing_failed — транзиентный сбой (бюджет, сеть, CassetteMiss), а не
     # свойство архива: досье, собранное при таком сбое, заведомо неполно.
     # stages.artifact инвалидируется только по версии, поэтому записанный
@@ -152,8 +316,20 @@ def build_dossiers(
     # на META → карантин non_client_doc_type): route-артефакт при нём не
     # кэшируется (cache_if, 23-я волна), а досье без этого пункта кэшировалось
     # бы и не самовосстанавливалось (ревью PR #9, 28-я волна).
-    _degraded_kinds = {"routing_failed", "meta_extraction_failed"}
-    degraded = any(a.get("kind") in _degraded_kinds for q in quarantined for a in q.get("alarms", []))
+    # borrower_name_failed / group_routing_failed — та же природа: транзиентный
+    # сбой второго прохода означает, что досье собрано без документов
+    # группового уровня, и закреплять такое на диске нельзя.
+    # issuer_extraction_failed — деградация, в отличие от group_meta_extraction_failed
+    # (ревью PR #23, третья волна). Разница в объёме: META зовётся по каждому из
+    # сотни с лишним непривязанных документов, а издатель — только по тем, что
+    # прошли и наименование, и тип (на публичном наборе один документ из двухсот).
+    # Поэтому здесь блокировка кэша досье не отменяет рестарт, а спасает ровно ту
+    # ячейку, ради которой сделан проход: свой route_group-артефакт при этом
+    # алярме тоже не кэшируется, и следующий прогон перепытается.
+    degraded = any(
+        a.get("kind") in DEGRADED_KINDS
+        for a in [*(a for q in quarantined for a in q.get("alarms", [])), *name_alarms]
+    )
 
     out: dict[str, dict] = {}
     for acc in targets:
@@ -194,10 +370,32 @@ def build_dossiers(
                             "file": active["file"],
                             "doc_type": dtype,
                             "date": active["date"],
+                            "scope": "borrower",
                             "text": full_text(wd, by_hash[active["doc_hash"]]),
                         }
                     )
                 docs_rejected.extend(rej)
+            # Документы группового уровня — отдельной областью видимости и МИМО
+            # выбора действующей редакции по типу: они относятся к материнской
+            # компании, и редакции документов заёмщика того же типа ими не
+            # перебиваются (иначе консолидированная отчётность вытеснила бы
+            # аудиторский отчёт по самому заёмщику). Недействующая редакция
+            # отбрасывается тем же правилом, что и везде.
+            for g in sorted((g for g in attached if g["account_id"] == acc), key=lambda d: d["file"]):
+                if not _is_effective(g, g["doc_type"]):
+                    docs_rejected.append(
+                        {"file": g["file"], "reason": f"{g['edition']}_edition", "kept": None}
+                    )
+                    continue
+                docs.append(
+                    {
+                        "file": g["file"],
+                        "doc_type": g["doc_type"],
+                        "date": g["date"],
+                        "scope": "group",
+                        "text": full_text(wd, by_hash[g["doc_hash"]]),
+                    }
+                )
             return {
                 "account_id": acc,
                 "scenario_id": index["account_to_scenario"][acc],
@@ -213,8 +411,8 @@ def build_dossiers(
                 # (ревью PR #9, 9-я волна — раньше алярм создавался и
                 # нигде не потреблялся).
                 "alarms": sorted(
-                    (a for q in quarantined for a in q.get("alarms", [])),
-                    key=lambda a: (a.get("file", ""), a.get("kind", "")),
+                    [*(a for q in quarantined for a in q.get("alarms", [])), *name_alarms],
+                    key=lambda a: (a.get("file", ""), a.get("account", ""), a.get("kind", "")),
                 ),
             }
 

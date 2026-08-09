@@ -105,9 +105,16 @@ def submission_meta() -> dict:
 # --- ядро на эталонных фактах (источник подменяется задачами 16/24) ----------
 
 
-# Ключи doc_facts, которые вычисляет код из сырых фактов досье (_with_doc_facts):
-# адресный резолв (resolve_doc_fact) их не трогает — LLM не делает арифметику.
-_DERIVED_DOC_KEYS = frozenset({"ebitda_addbacks_material_total"})
+# Ключи doc_facts, которые вычисляет код из сырых фактов досье (_with_doc_facts
+# и facts_extract._group_capex): адресный резолв (resolve_doc_fact) их не
+# трогает — LLM не делает арифметику.
+#
+# group_capex тут не из осторожности, а по замеру: адресный резолв просит число
+# по ОПИСАНИЮ из цитаты пункта, а цитата ковенанта группового уровня называет
+# сам порог — модель его и возвращала. Порог, подставленный числителем, дал бы
+# уверенное значение в тысячи раз меньше настоящего; отсутствие ключа отправляет
+# ячейку на лестницу, и это заметно честнее.
+_DERIVED_DOC_KEYS = frozenset({"ebitda_addbacks_material_total", "group_capex"})
 
 
 def _with_doc_facts(facts: dict) -> dict:
@@ -809,6 +816,35 @@ def _extracted_cellspec(
                     f"ALARM heading_doc_keys_missing {scenario} {clause}: {missing_tpl}",
                     flush=True,
                 )
+                derived_missing = sorted(set(missing_tpl) & _DERIVED_DOC_KEYS)
+                if derived_missing and not loosely_matched:
+                    # Производный ключ считает КОД из документов досье. Не
+                    # посчитал — значит документа нет, и извлечённая формула его
+                    # не заменяет: она берёт число из леджера, а это другая
+                    # величина, не приближение к недостающей. Откат сюда,
+                    # задуманный как страховка от KeyError на валидной ячейке,
+                    # дал бы уверенно посчитанный не тот ответ; отсутствие
+                    # ответа честнее (ревью PR #23, вторая волна).
+                    #
+                    # Только при ТОЧНОМ матче (ревью PR #23, десятая волна). Весь
+                    # довод держится на посылке «заголовок опознан правильно, и
+                    # ковенант действительно про величину из документа», а у
+                    # нестрогого матча этой посылки нет — там мы заголовок как
+                    # раз не узнали. Пункт про капзатраты самого заёмщика,
+                    # нестрого сматчившийся на групповой шаблон, вето убило бы,
+                    # хотя ниже нестрогий матч был бы отвергнут по расхождению и
+                    # посчиталась бы извлечённая формула, для него верная.
+                    print(
+                        f"ALARM derived_doc_key_missing {scenario} {clause}: {derived_missing}",
+                        flush=True,
+                    )
+                    err = ValueError(f"невалидная спека: {derived_missing}")
+                    try:
+                        err.spec_direction = sp["direction"]  # type: ignore[attr-defined]
+                        err.spec_limit = Decimal(sp["limit"])  # type: ignore[attr-defined]
+                    except (InvalidOperation, KeyError, TypeError):
+                        pass
+                    return err, quote
                 metric_text = sp["metric"]
         # Подмена извлечённого DSL шаблоном остаётся (ruling: шаблон при матче
         # исполняется), но обязана быть видимой ЦЕЛИКОМ (ревью PR #9, 10-я

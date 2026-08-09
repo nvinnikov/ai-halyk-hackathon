@@ -11,7 +11,31 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 6
+FACTS_VERSION = 15
+# v15 — ревью PR #23, одиннадцатая волна: непрочитанное примечание видно
+# алярмом, а не только отсутствием ключа.
+# v14 — ревью PR #23, десятая волна: неназванный масштаб виден алярмом.
+# v13 — ревью PR #23, девятая волна: неназванная валюта видна алярмом,
+# неразобранное число не роняет решение о масштабе целиком.
+# v12 — ревью PR #23, седьмая волна: масштаб применяется при любом множителе,
+# кроме противоречивой пары «тысячи против центов»; расхождение двух групповых
+# документов сверяется по значению, а не по записи.
+# v11 — ревью PR #23, шестая волна: эвристика масштаба сужена до 10³ с
+# центами (иначе отказ), нулевой числитель отсекается наравне с отрицательным.
+# v10 — ревью PR #23, пятая волна: читаются единицы сумм примечания (валюта и
+# масштаб), гейт деградации досье распространён на адресный резолв.
+# v9 — ревью PR #23, вторая волна: group_capex от модели не попадает в
+# doc_facts вовсе, а resolve_doc_fact больше не видит документы группового
+# уровня ни в промпте, ни в корпусе проверки цитат.
+# v8 — ревью PR #23: тождество движения стоимости гейтится не только выбытиями,
+# но и иными изменениями (обесценение, курсовые разницы); проверка знака стала
+# общей для названных и посчитанных поступлений; расхождение двух документов
+# группового уровня снимает ключ вместо молчаливого выбора последнего.
+# Промпт GROUP_PPE изменён — его единственный ключ кассеты пересчитан.
+# v7 — DOSSIER_VERSION=10: в досье появились документы группового уровня
+# (scope="group"). Общий проход фактов их НЕ читает — решения материнской
+# компании не применяются к операциям заёмщика, — их читает отдельный проход
+# GROUP_PPE_PROMPT, и поступления основных средств группы считает код.
 # v4 — DOSSIER_VERSION=8: правило недействующих редакций расширено на
 # черновики, набор документов снова изменился.
 # v3 — досье перестало отдавать замененные редакции кумулятивных типов
@@ -218,6 +242,91 @@ OWNERSHIP_PROMPT = """Ниже — документ комплаенс-пров�
 {text}
 </document>"""
 
+GROUP_PPE_SCHEMA_VERSION = "group-ppe-1"
+
+# doc()-ключ капитальных затрат Группы. Значение под ним считает КОД (_group_capex);
+# то же имя модель знает из FACTS_PROMPT, и её значение код перебивает.
+GROUP_CAPEX_KEY = "group_capex"
+
+# Отдельный вызов по тем же соображениям, что OWNERSHIP: промпт фактов остаётся
+# байт в байт прежним, ключи его кэша не меняются, кассета переживает правку.
+GROUP_PPE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "opening_value": {"type": "string"},
+        "opening_quote": {"type": "string"},
+        "closing_value": {"type": "string"},
+        "closing_quote": {"type": "string"},
+        "depreciation": {"type": "string"},
+        "depreciation_quote": {"type": "string"},
+        "additions": {"type": "string"},
+        "additions_quote": {"type": "string"},
+        "no_disposals": {"type": "boolean"},
+        "no_disposals_quote": {"type": "string"},
+        "other_movements": {"type": "boolean"},
+        "other_movements_quote": {"type": "string"},
+        "currency": {"type": "string"},
+        "amount_scale": {"type": "string"},
+        "units_quote": {"type": "string"},
+    },
+    "required": [
+        "opening_value",
+        "opening_quote",
+        "closing_value",
+        "closing_quote",
+        "depreciation",
+        "depreciation_quote",
+        "additions",
+        "additions_quote",
+        "no_disposals",
+        "no_disposals_quote",
+        "other_movements",
+        "other_movements_quote",
+        "currency",
+        "amount_scale",
+        "units_quote",
+    ],
+    "additionalProperties": False,
+}
+
+GROUP_PPE_PROMPT = """Ниже — консолидированная отчётность материнской компании
+Группы. Выпиши из примечания об основных средствах то, что в нём НАПЕЧАТАНО,
+ничего не вычисляя, не складывая и не выводя одно число из других:
+
+- opening_value: балансовая стоимость основных средств на начало периода;
+  opening_quote — дословная цитата строки, где это число напечатано;
+- closing_value: та же стоимость на конец периода; closing_quote — цитата;
+- depreciation: начисленная за период амортизация основных средств;
+  depreciation_quote — цитата;
+- additions: поступления (приобретения) основных средств за период, ЕСЛИ
+  документ называет их отдельным числом; additions_quote — цитата. Если такого
+  числа в тексте нет — обе строки пустые;
+- no_disposals: true, только если документ прямо утверждает, что выбытий
+  основных средств за период не было; no_disposals_quote — дословная цитата
+  этого утверждения. Иначе false и пустая цитата;
+- other_movements: true, если примечание называет ЛЮБЫЕ иные изменения
+  балансовой стоимости за период, кроме поступлений, выбытий и амортизации —
+  обесценение, восстановление обесценения, переоценку, курсовые разницы от
+  пересчёта в валюту отчётности, перевод в инвестиционную недвижимость или в
+  активы для продажи. Тогда other_movements_quote — дословная цитата строки,
+  где такое изменение названо. Если ничего подобного в примечании нет — false и
+  пустая цитата.
+
+Отдельно — в каких единицах напечатаны ИМЕННО ЭТИ числа:
+- currency: код валюты этих сумм (например USD), как он назван в документе;
+- amount_scale: множитель, если суммы приведены в кратных единицах — «1000»
+  для «в тысячах», «1000000» для «в миллионах». Если суммы напечатаны
+  полностью — «1»;
+- units_quote: дословная цитата, где единицы названы (шапка примечания или
+  строка таблицы). Не нашли — все три строки пустые.
+
+Числа — строкой, без разделителей разрядов. Любое поле, которого в тексте нет,
+— пустая строка. Ничего не вычисляй и не пересчитывай сам.
+
+<document type="{doc_type}">
+{text}
+</document>"""
+
 RESOLVE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -403,6 +512,334 @@ def _apply_ownership(facts: dict, above: list[dict], below: list[dict]) -> None:
             )
 
 
+def _amount_scale(facts: dict, raw: dict, doc: dict, text: str) -> Decimal | None:
+    """Множитель сумм примечания; None — считать нельзя.
+
+    Числитель ковенанта приезжает из ЧУЖОЙ отчётности как есть, а знаменатель
+    нормализован в валюту расчёта построчно (fx.to_usd). Консолидированная
+    отчётность материнской компании — ровно тот документ, где «в тысячах» в
+    шапке и функциональная валюта, отличная от валюты расчёта, штатны. Промах
+    масштабом в 10³ на max-ковенанте даёт уверенный COMPLIANT, то есть стоит
+    статуса ячейки целиком, и проверка числа в цитате его не ловит: число
+    напечатано именно так (ревью PR #23, пятая волна).
+
+    Валюта: названа и не совпадает с валютой расчёта — расчёта нет. Пересчитать
+    её здесь нечем, курс материнской компании к строкам заёмщика отношения не
+    имеет, а молча принять чужую валюту хуже отсутствия ответа.
+
+    Масштаб против дробной части. Шапка «in thousands» относится к таблицам
+    отчётности, а примечание рядом печатает полные суммы с центами — ровно так
+    устроен документ публичного набора, и множитель из шапки, взятый буквально,
+    завысил бы числитель в 10³ на пустом месте. Но обратное рассуждение «есть
+    дробная часть — значит масштаб не тот» держится ТОЛЬКО на 10³ с центами: у
+    отчётности «в миллионах» одна цифра после запятой — стандартная вёрстка, и
+    сумма там значит в миллион раз больше напечатанного (ревью PR #23, шестая
+    волна).
+
+    Поэтому исключение сужено до того случая, который оно чинит, и правило
+    целиком читается так: множитель НЕ применяется ровно тогда, когда он равен
+    10³ и все дробные суммы напечатаны с двумя знаками. Во всех остальных
+    сочетаниях масштаб применяется как названо — они не расхождение, а согласие,
+    и отказ там снимал бы ключ при подтверждённых цитатой данных, то есть стоил
+    бы ровно той ячейки, ради которой сделан весь проход (ревью PR #23, седьмая
+    и восьмая волны — сначала правило было слишком доверчивым, потом слишком
+    отказным).
+
+    Отказ в этой функции остаётся ровно за двумя случаями: чужая валюта и
+    неразобранное число. Прочая защита стоит дальше — в условиях применимости
+    тождества и в проверке знака.
+
+    Дробность меряется тем же _normalize_limit, что и сами суммы: иначе исход
+    зависел бы от того, поставила ли модель разделители разрядов вопреки
+    промпту: с разделителем строка не парсилась Decimal напрямую и считалась
+    целой, без него — дробной.
+    """
+    from fx import BASE_CURRENCY
+
+    currency = raw["currency"].strip().upper()
+    if currency and currency != BASE_CURRENCY:
+        facts["alarms"].append(
+            {"kind": "group_capex_foreign_currency", "file": doc["file"], "currency": currency}
+        )
+        return None
+    if not currency:
+        # Валюта не названа — считаем в валюте расчёта, но НЕ молча (ревью PR
+        # #23, девятая волна). Это подстановка по умолчанию, и по природе она
+        # та же, что курс 1.0 для строки леджера: если отчётность материнской
+        # компании в чужой валюте, числитель поедет против знаменателя,
+        # нормализованного построчно, и промах в разы даст неверный статус.
+        #
+        # Отказываться всё же нельзя: на публичном наборе модель валюту не
+        # называет, хотя документ её печатает, — отказ стоил бы ровно той
+        # ячейки, ради которой сделан весь проход, причём гарантированно и
+        # сегодня, против гипотетической чужой валюты на приватном наборе.
+        # Поэтому цена вынесена в алярм: счётчик виден в run-report, и в окне
+        # по нему видно, на скольких заёмщиках допущение сработало.
+        facts["alarms"].append({"kind": "group_capex_currency_unnamed", "file": doc["file"]})
+    raw_scale = raw["amount_scale"].strip()
+    if not raw_scale:
+        # Масштаб не назван — считаем суммы напечатанными полностью, но НЕ молча
+        # (ревью PR #23, десятая волна). Допущение той же природы, что и
+        # неназванная валюта выше, а цена промаха даже выше: «in thousands» в
+        # шапке примечания занижает числитель ровно в 10³, и на max-ковенанте
+        # это уверенный COMPLIANT. На публичном наборе модель возвращает пустой
+        # масштаб, то есть боевой путь проходит именно здесь — счётчик обязан
+        # быть виден в run-report, как и у валюты.
+        facts["alarms"].append({"kind": "group_capex_scale_unnamed", "file": doc["file"]})
+        return Decimal(1)
+    try:
+        scale = Decimal(raw_scale.replace(",", "").replace(" ", ""))
+    except InvalidOperation:
+        facts["alarms"].append({"kind": "invalid_number", "field": "group_capex_scale", "value": raw_scale})
+        return None
+    if not scale.is_finite() or scale <= 0:
+        facts["alarms"].append({"kind": "invalid_number", "field": "group_capex_scale", "value": raw_scale})
+        return None
+    if scale == 1:
+        return scale
+    if not verify_quote(raw["units_quote"], text):
+        facts["alarms"].append(
+            {"kind": "quote_unverified", "field": "group_capex_scale", "file": doc["file"]}
+        )
+        return None
+    amounts = [raw["opening_value"], raw["closing_value"], raw["depreciation"], raw["additions"]]
+    digits = []
+    for value in amounts:
+        if not str(value).strip():
+            continue
+        d = _fraction_digits(value)
+        if d is None:
+            # Не разобралось — поле просто не участвует в решении о масштабе, а
+            # его судьбу дальше решает number(), где непарсибельность уже
+            # обработана мягко (ревью PR #23, девятая волна). Выход отсюда ронял
+            # ВЕСЬ расчёт: одиночная запятая ровно с тремя цифрами намеренно не
+            # снимается _normalize_limit, и такое `additions` убивало ячейку,
+            # хотя остальные три числа целы и тождество отработало бы.
+            facts["alarms"].append(
+                {"kind": "invalid_number", "field": "group_capex_scale_decision", "value": value}
+            )
+            continue
+        digits.append(d)
+    fractional = [d for d in digits if d > 0]
+    if scale == _CENTS_SCALE and fractional and all(d >= 2 for d in fractional):
+        # Единственная противоречивая пара: «в тысячах» в шапке против центов в
+        # самих суммах — множитель к этим числам не относится. Прочие сочетания
+        # масштаба и дробной части — согласие, а не спор, и отказ там снимал бы
+        # ключ при полностью подтверждённых данных (ревью PR #23, седьмая волна).
+        facts["alarms"].append({"kind": "group_capex_scale_ignored", "file": doc["file"], "scale": raw_scale})
+        return Decimal(1)
+    return scale
+
+
+# Единственный множитель, при котором дробная часть в сумме доказывает, что
+# масштаб к ней не относится: тысячи против центов. Для 10⁶ и выше дробная
+# часть — обычная вёрстка, а не противоречие, и такие суммы масштабируются как
+# названо.
+_CENTS_SCALE = Decimal(1000)
+
+
+def _fraction_digits(value: str) -> int | None:
+    """Сколько знаков после запятой напечатано; None — число не разобрано."""
+    from specs_extract import _normalize_limit
+
+    try:
+        d = Decimal(_normalize_limit(str(value)))
+    except (InvalidOperation, AttributeError):
+        return None
+    if not d.is_finite():
+        return None
+    exponent = d.as_tuple().exponent
+    if not isinstance(exponent, int):  # NaN/Infinity уже отсеяны is_finite
+        return None
+    return max(0, -exponent)
+
+
+def _group_capex(facts: dict, raw: dict, doc: dict, text: str) -> tuple[Decimal, str] | None:
+    """Поступления основных средств Группы за период: (значение, цитата).
+
+    Модель здесь только читает. Если документ называет поступления отдельным
+    числом — берётся оно. Если нет, они восстанавливаются из движения
+    балансовой стоимости: конец − начало + амортизация.
+
+    У этого тождества ДВА условия применимости, и оба проверяются, а не
+    подразумеваются. Полное движение стоимости — «начало + поступления −
+    выбытия − амортизация − обесценение ± курсовые разницы = конец», и всё, что
+    в формулу не вошло, молча уезжает в числитель:
+
+    - выбытий за период не было — иначе выражение даёт поступления за вычетом
+      выбывшего;
+    - иных изменений стоимости (обесценение, переоценка, курсовые разницы) в
+      примечании нет. Консолидация с зарубежными дочками — типовой случай, и
+      курсовая разница там не экзотика (ревью PR #23, замечание 3): её знак
+      произволен, величина ничем не ограничена, и подмешанная в поступления она
+      неотличима от настоящих капитальных затрат.
+
+    Оба признака извлекаются с цитатами и проверяются здесь; не подтвердился
+    любой — расчёта нет, и ячейка честно уходит на лестницу. Названные в
+    документе поступления обоими условиями не связаны: там читать нечего, число
+    напечатано.
+
+    Число обязано стоять в собственной верифицированной цитате — тот же
+    инвариант, что у порогов спек и долей владения: цитата привязывает число к
+    его формулировке, иначе стоимость на начало приезжает в расчёт как
+    стоимость на конец при настоящей цитате.
+    """
+    from specs_extract import _limit_in_quote, _normalize_limit
+
+    def number(value: str, quote: str, field: str) -> Decimal | None:
+        if not str(value).strip():
+            return None
+        try:
+            d = Decimal(_normalize_limit(str(value)))
+        except InvalidOperation:
+            d = None
+        if d is None or not d.is_finite():
+            facts["alarms"].append({"kind": "invalid_number", "field": field, "value": value})
+            return None
+        if not verify_quote(quote, text):
+            facts["alarms"].append({"kind": "quote_unverified", "field": field, "file": doc["file"]})
+            return None
+        if not _limit_in_quote(str(abs(d)), quote):
+            facts["alarms"].append({"kind": "invalid_number", "field": field, "value": value})
+            return None
+        return d
+
+    def signed_ok(value: Decimal) -> bool:
+        """Отрицательных поступлений не бывает — ни посчитанных, ни названных.
+
+        Проверка общая для обеих веток (ревью PR #23, замечание 2): у
+        вычисленной она ловит перепутанные начало и конец, у названной —
+        выбытия, прочитанные как поступления, и просто не то число под
+        подписью. Молча пропущенный отрицательный числитель даёт на
+        max-ковенанте уверенный COMPLIANT, то есть обнуляет ячейку по статусу,
+        а не портит `actual`.
+        """
+        if value > 0:
+            return True
+        # Ноль отсекается вместе с отрицательным (ревью PR #23, шестая волна).
+        # Нулевые капитальные затраты Группы за год — не тот ответ, который
+        # бывает правдой в консолидированной отчётности; зато это типовой
+        # дефолт непонятого поля, и он проходит все прочие гейты насквозь,
+        # включая оба условия применимости, если пришёл названным числом.
+        # На max-ковенанте нулевой числитель — гарантированный COMPLIANT, то
+        # есть ячейка в ноль по статусу.
+        facts["alarms"].append({"kind": "group_capex_non_positive", "file": doc["file"], "value": str(value)})
+        return False
+
+    scale = _amount_scale(facts, raw, doc, text)
+    if scale is None:
+        return None
+
+    stated = number(raw["additions"], raw["additions_quote"], "group_capex_additions")
+    if stated is not None:
+        stated *= scale
+        return (stated, raw["additions_quote"]) if signed_ok(stated) else None
+
+    if not raw["no_disposals"] or not verify_quote(raw["no_disposals_quote"], text):
+        facts["alarms"].append({"kind": "group_capex_disposals_unconfirmed", "file": doc["file"]})
+        return None
+    if raw["other_movements"]:
+        # Асимметрия с выбытиями намеренная. «Выбытий не было» документ пишет
+        # прямо, и цитата этого утверждения проверяема. «Иных движений нет» —
+        # утверждение об ОТСУТСТВИИ строки в таблице, и процитировать его
+        # нечем: требование цитаты здесь означало бы пустую цитату и отказ
+        # считать там, где считать можно. Поэтому цитата обязательна для
+        # положительного ответа (модель назвала движение — пусть покажет
+        # строку), а гейт стоит на самом факте.
+        facts["alarms"].append(
+            {
+                "kind": "group_capex_other_movements",
+                "file": doc["file"],
+                "quote": raw["other_movements_quote"],
+            }
+        )
+        return None
+    opening = number(raw["opening_value"], raw["opening_quote"], "group_capex_opening")
+    closing = number(raw["closing_value"], raw["closing_quote"], "group_capex_closing")
+    depreciation = number(raw["depreciation"], raw["depreciation_quote"], "group_capex_depreciation")
+    if opening is None or closing is None or depreciation is None:
+        # Единственный отказ этой функции, у которого раньше не было имени
+        # (ревью PR #23, одиннадцатая волна). number() молчит на ПУСТОМ поле —
+        # для additions это законно («числа в тексте нет», дальше тождество), а
+        # здесь означает, что примечание не прочитано, и ячейка уходит на
+        # лестницу. Без алярма в run-report такой случай читался как «документ
+        # привязан и прочитан нормально»: виден только group_doc_attached.
+        # На приватном наборе это самая вероятная ветка — у чужой материнской
+        # компании примечание свёрстано по-своему, и не найтись может именно
+        # стоимость на начало периода.
+        facts["alarms"].append(
+            {
+                "kind": "group_capex_movement_incomplete",
+                "file": doc["file"],
+                "fields": [
+                    field
+                    for field, value in (
+                        ("opening", opening),
+                        ("closing", closing),
+                        ("depreciation", depreciation),
+                    )
+                    if value is None
+                ],
+            }
+        )
+        return None
+    additions = (closing - opening + abs(depreciation)) * scale
+    return (additions, raw["closing_quote"]) if signed_ok(additions) else None
+
+
+def _plain(value: Decimal) -> str:
+    """Значение строкой без экспоненты и без хвостовых нулей.
+
+    Сравнение двух документов группового уровня идёт по ЗНАЧЕНИЮ, а не по
+    записи: str(Decimal) сохраняет экспоненту, а умножение на масштаб её
+    сдвигает, поэтому «21847000.000» и «21847000» — одно число в двух записях.
+    Без нормализации они дали бы ложный group_capex_conflict и сняли бы ключ, а
+    в трейсе окна читались бы как разные суммы (ревью PR #23, седьмая волна).
+    """
+    return format(value.normalize(), "f")
+
+
+def _apply_group_capex(facts: dict, computed: list[tuple[Decimal, str, str]]) -> None:
+    """Посчитанные по документам группового уровня затраты — в doc_facts.
+
+    Два документа группового уровня с РАЗНЫМИ значениями — это не «взять
+    посвежее», а признак, что привязан лишний документ: конечная материнская
+    компания у группы одна. Молча взятое одно из двух даёт уверенно
+    посчитанную не ту величину, а она на max-ковенанте стоит статуса. Ключ
+    снимается, ячейка уходит на лестницу — тот же выбор, что и везде в этом
+    расчёте: отсутствие ответа честнее неверного.
+
+    Источник у ключа ровно один — этот. Значение, которое модель выписывает в
+    numeric_facts (FACTS_PROMPT просит ключ прямо), в doc_facts не попадает
+    вовсе: его отсеивает _merge_doc. Поэтому «не посчитали» здесь означает
+    «ключа нет», и ячейка уходит на лестницу — а не считается по числу, которое
+    модель приняла за капзатраты Группы.
+    """
+    if not computed:
+        # Пояс поверх подтяжек (ревью PR #23, вторая волна): источник закрыт в
+        # _merge_doc, но ключ производный, и цена его протечки — статус ячейки,
+        # а не точность. Снятие громкое, чтобы протечка не осталась незамеченной.
+        if facts["doc_facts"].pop(GROUP_CAPEX_KEY, None) is not None:
+            facts["doc_fact_quotes"].pop(GROUP_CAPEX_KEY, None)
+            facts["alarms"].append({"kind": "group_capex_stale_key_dropped"})
+        return
+    distinct = sorted({_plain(value) for value, _quote, _file in computed})
+    if len(distinct) > 1:
+        facts["alarms"].append(
+            {
+                "kind": "group_capex_conflict",
+                "values": distinct,
+                "files": sorted(file for _v, _q, file in computed),
+            }
+        )
+        facts["doc_facts"].pop(GROUP_CAPEX_KEY, None)
+        facts["doc_fact_quotes"].pop(GROUP_CAPEX_KEY, None)
+        return
+    value, quote, _file = sorted(computed, key=lambda item: item[2])[0]
+    facts["doc_facts"][GROUP_CAPEX_KEY] = _plain(value)
+    facts["doc_fact_quotes"][GROUP_CAPEX_KEY] = quote
+
+
 def _merge_doc(facts: dict, raw: dict, doc: dict, text: str) -> None:
     def verified(quote: str, kind: str) -> bool:
         """Факт без цитаты из текста не принимается: это либо инъекция, либо
@@ -499,6 +936,25 @@ def _merge_doc(facts: dict, raw: dict, doc: dict, text: str) -> None:
         if key == "ebitda_addback_materiality":
             materiality = nf["value"]
             continue
+        if key == GROUP_CAPEX_KEY:
+            # Ключ производный: его считает КОД по отчётности группового уровня
+            # (_group_capex), и другого источника у него нет. FACTS_PROMPT
+            # просит его у модели прямо, и промпт здесь сознательно не трогают —
+            # его текст держит ключи кэша всей кассеты, — поэтому значение
+            # отсеивается тут. Пока шаблон считал числитель по леджеру,
+            # модельное значение было безвредным; после перевода шаблона на
+            # doc(group_capex) оно ИСПОЛНЯЕТСЯ, а модель выписывает сюда
+            # порог из цитаты пункта договора, а не капзатраты Группы (ревью
+            # PR #23, вторая волна). Значение не теряется молча — оно в алярме.
+            facts["alarms"].append(
+                {
+                    "kind": "group_capex_from_model_ignored",
+                    "value": nf["value"],
+                    "quote": nf["quote"],
+                    "file": doc["file"],
+                }
+            )
+            continue
         if key in facts["doc_facts"] and facts["doc_facts"][key] != nf["value"]:
             facts["alarms"].append(
                 {
@@ -527,6 +983,12 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
             # стадий, где этот случай не был закрыт).
             facts["alarms"].append({"kind": "no_documents", "account": acc})
         for doc in dossier_art["docs"]:
+            if doc.get("scope") == "group":
+                # Документ группового уровня описывает материнскую компанию, а
+                # не заёмщика: его реклассификации, исключения операций и курсы
+                # к строкам леджера заёмщика не относятся. Из него читается
+                # ровно то, ради чего он привязан, — отдельным проходом ниже.
+                continue
             text = sanitize_document(doc["text"])
             prompt = (
                 DATA_NOT_COMMANDS
@@ -576,6 +1038,30 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
             all_above.extend(above)
             all_below.extend(below)
         _apply_ownership(facts, all_above, all_below)
+        # Капитальные затраты Группы — из отчётности группового уровня. Модель
+        # выписывает числа примечания с цитатами, арифметику делает код.
+        # Посчитанное собирается по ВСЕМ групповым документам и применяется один
+        # раз, как строки владения: иначе порядок документов решал бы исход
+        # молча — побеждал бы последний по алфавиту (ревью PR #23, замечание 4).
+        computed: list[tuple[Decimal, str, str]] = []
+        for doc in dossier_art["docs"]:
+            if doc.get("scope") != "group":
+                continue
+            text = sanitize_document(doc["text"])
+            prompt = DATA_NOT_COMMANDS + "\n\n" + GROUP_PPE_PROMPT.format(doc_type=doc["doc_type"], text=text)
+            try:
+                raw = llm.call(prompt, GROUP_PPE_SCHEMA, GROUP_PPE_SCHEMA_VERSION, max_tokens=8000)
+            except Exception as exc:
+                # Широко, как ownership-проход: этот документ добавочный, и его
+                # непрочтение не должно стоить заёмщику остальных фактов.
+                facts["alarms"].append(
+                    {"kind": "group_capex_extraction_failed", "file": doc["file"], "error": repr(exc)}
+                )
+                continue
+            found = _group_capex(facts, raw, doc, text)
+            if found is not None:
+                computed.append((found[0], found[1], doc["file"]))
+        _apply_group_capex(facts, computed)
         for key in ("related_parties", "unrestricted_subsidiaries", "exclude"):
             facts[key] = sorted(facts[key])
         # Численная сортировка: лексикографическая ставит "1000000.00" перед
@@ -597,20 +1083,52 @@ def extract_facts(wd: Path, dossier_art: dict) -> dict:
     # FACTS_VERSION и переживали перезапуск. Пересбор no_documents бесплатен
     # (LLM не вызывается). Прочие алярмы (invalid_number, doc_fact_conflict) —
     # свойства ответа модели, их кэшировать правильно.
-    _degraded_kinds = {"facts_extraction_failed", "no_documents", "ownership_extraction_failed"}
+    _degraded_kinds = {
+        "facts_extraction_failed",
+        "no_documents",
+        "ownership_extraction_failed",
+        "group_capex_extraction_failed",
+    }
+    # Деградация ДОСЬЕ запрещает кэш фактов так же, как своя собственная.
+    # dossier при транзиентном сбое не ложится на диск, но объект в памяти
+    # отдаётся дальше — и факты, собранные по неполному набору документов,
+    # закреплялись под FACTS_VERSION без единого алярма и переживали устранение
+    # причины. Поймано вживую: офлайн-прогон уронил маршрутизацию на промахе
+    # кассеты, досье не закэшировалось, а факты без документа группового уровня
+    # — закэшировались, и следующий ЖИВОЙ прогон честно взял их с диска.
+    # Ровно то же случится в окне при перезапуске после сбоя сети.
+    # Набор берётся из dossier, а не дублируется здесь: свой список уже разъехался
+    # с тамошним на issuer_extraction_failed (ревью PR #23, четвёртая волна) —
+    # факты закэшировались бы без документа группового уровня и пережили бы
+    # починку маршрутизации, то есть ячейка осталась бы на лестнице навсегда.
+    # Плоский импорт по месту: модули solution не пакет, dossier фактов не знает.
+    from dossier import DEGRADED_KINDS
+
+    dossier_degraded = any(a.get("kind") in DEGRADED_KINDS for a in dossier_art.get("alarms", []))
     return artifact(
         wd / "facts" / f"{acc}.json",
         FACTS_VERSION,
         build,
-        cache_if=lambda d: not any(a.get("kind") in _degraded_kinds for a in d["alarms"]),
+        cache_if=lambda d: not dossier_degraded
+        and not any(a.get("kind") in _degraded_kinds for a in d["alarms"]),
     )
 
 
 def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) -> dict | None:
-    """Адресное извлечение числа под doc()-ключ спеки, которого нет в doc_facts."""
+    """Адресное извлечение числа под doc()-ключ спеки, которого нет в doc_facts.
+
+    Периметр тот же, что у общего прохода фактов: документы группового уровня
+    сюда не входят. Довод «решения материнской компании не применяются к
+    операциям заёмщика» ровно так же относится к её ЧИСЛАМ — обязательство по
+    персоналу или страховое покрытие в консолидированной отчётности носят то же
+    название и больше на порядок. Защита цитатой это не ловит: цитата
+    верифицируется против того же корпуса, поэтому фильтровать надо оба —
+    и промпт, и корпус (ревью PR #23, вторая волна).
+    """
+    own_docs = [d for d in dossier_art["docs"] if d.get("scope") != "group"]
     documents = "\n".join(
         f'<document type="{d["doc_type"]}" file="{d["file"]}">\n{sanitize_document(d["text"])}\n</document>'
-        for d in dossier_art["docs"]
+        for d in own_docs
     )
 
     def build() -> dict:
@@ -645,15 +1163,24 @@ def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) ->
         return ans
 
     # Провал резолва (alarms в результате) не кэшируется — см. extract_facts.
+    # Деградация досье блокирует кэш здесь по той же причине и тем же набором
+    # (ревью PR #23, пятая волна): вход у резолва тот же самый — docs досье, —
+    # каталог и версия стадии те же, а «числа нет» по неполному набору
+    # документов приходит БЕЗ единого алярма (found=false — законный ответ) и
+    # переживает устранение причины. Следующий прогон вернул бы found=false с
+    # диска: doc_fact_unresolved, ячейка на лестнице до конца окна.
+    from dossier import DEGRADED_KINDS
+
+    dossier_degraded = any(a.get("kind") in DEGRADED_KINDS for a in dossier_art.get("alarms", []))
     art = artifact(
         wd / "facts" / f"{dossier_art['account_id']}.doc.{key}.json",
         FACTS_VERSION,
         build,
-        cache_if=lambda d: not d.get("alarms"),
+        cache_if=lambda d: not dossier_degraded and not d.get("alarms"),
     )
     if not art.get("found"):
         return None
-    combined = "\n".join(sanitize_document(d["text"]) for d in dossier_art["docs"])
+    combined = "\n".join(sanitize_document(d["text"]) for d in own_docs)
     if not verify_quote(art["quote"], combined) or not _number_ok(art["value"]):
         return None  # непроверяемая цитата или мусорное число — факта нет
     # Число обязано присутствовать в верифицированной цитате (ревью PR #9,

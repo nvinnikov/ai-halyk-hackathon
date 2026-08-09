@@ -123,6 +123,81 @@ def test_non_client_doc_type_not_bound(fake, monkeypatch):
     assert not any(a["kind"] == "routing_quarantine" for a in art["alarms"])
 
 
+NAMES = [("ACC-1111", "Alpha Terminal JSC"), ("ACC-2222", "Alpha Terminal Services JSC")]
+
+
+def _group_meta_and_issuer(issuer):
+    """META отвечает «отчётность», ISSUER называет издателя."""
+
+    def call(prompt, schema, schema_version, **kw):
+        if schema is route.ISSUER_SCHEMA:
+            return {"reporting_entity": issuer, "quote": f"{issuer} consolidated statements"}
+        return {"doc_type": "financial_notes", "date": "2025-12-31", "edition": "final"}
+
+    return call
+
+
+def test_name_match_respects_boundaries():
+    assert route._name_mentioned("Alpha Terminal JSC", "сегмент ведёт Alpha Terminal JSC, а также")
+    # Наименования заёмщиков в наборе различаются одним словом: документ соседа
+    # не должен подтягиваться к чужому счёту.
+    assert not route._name_mentioned("Alpha Terminal JSC", "сегмент ведёт Alpha Terminal Services JSC")
+    # Границы обязательны и справа: наименование не бывает куском слова.
+    assert not route._name_mentioned("Alpha Terminal JSC", "Alpha Terminal JSCX")
+
+
+def test_group_level_doc_attached_by_name(fake, monkeypatch):
+    state, wd = fake
+    state["text"] = "Parent Holding JSC consolidated statements. Сегмент ведёт Alpha Terminal JSC."
+
+    monkeypatch.setattr(route.llm, "call", _group_meta_and_issuer("Parent Holding JSC"))
+    art = route.route_group_doc(wd, Path("x.pdf"), NAMES)
+    assert art["account_id"] == "ACC-1111"
+    assert art["quarantined"] is False
+    assert any(a["kind"] == "group_doc_attached" for a in art["alarms"])
+
+
+def test_named_doc_of_other_type_not_attached(fake, monkeypatch):
+    """Внутренний регламент печатает наименование заёмщика в шапке и по имени
+    находится; от досье его отделяет только тип документа."""
+    state, wd = fake
+    state["text"] = "Alpha Terminal JSC — операционное руководство подразделения"
+
+    def meta_other(prompt, schema, schema_version, **kw):
+        return {"doc_type": "other", "date": "", "edition": "unmarked"}
+
+    monkeypatch.setattr(route.llm, "call", meta_other)
+    art = route.route_group_doc(wd, Path("x.pdf"), NAMES)
+    assert art["account_id"] is None and art["quarantined"] is True
+    assert art["quarantine_reason"] == "named_doc_not_group_level"
+    assert art["alarms"] == []  # документ уже в карантине первого прохода
+
+
+def test_two_named_borrowers_are_not_stitched(fake):
+    state, wd = fake
+    state["text"] = "Alpha Terminal JSC и Alpha Terminal Services JSC — обе в периметре"
+    art = route.route_group_doc(wd, Path("x.pdf"), NAMES)
+    assert art["account_id"] is None
+    assert art["quarantine_reason"] == "ambiguous_named_borrowers"
+    assert state["llm"] == []  # META при неоднозначности не зовётся
+
+
+def test_borrower_name_must_be_verbatim(fake, monkeypatch):
+    """Наименованием ищут заёмщика в чужом документе обычным поиском: форма,
+    которой в тексте нет, не годится, даже если по смыслу верна."""
+    state, wd = fake
+    state["text"] = "Заёмщик — Alpha Terminal JSC, счёт ACC-1111"
+
+    def paraphrased(prompt, schema, schema_version, **kw):
+        return {"name": "АО «Альфа Терминал»", "quote": "Заёмщик — Alpha Terminal JSC"}
+
+    monkeypatch.setattr(route.llm, "call", paraphrased)
+    art = route.borrower_name(wd, "ACC-1111", [Path("x.pdf")])
+    assert art["name"] == ""
+    assert any(a["kind"] == "quote_unverified" for a in art["alarms"])
+    assert not (wd / "borrower" / "ACC-1111.json").exists()  # деградация не кэшируется
+
+
 def test_meta_failure_not_cached(fake, monkeypatch):
     """Провал META (SchemaRejected → карантин non_client_doc_type) не
     оставляет route-артефакта: перезапуск после устранения причины
@@ -148,3 +223,101 @@ def test_meta_failure_not_cached(fake, monkeypatch):
     art2 = route.route_doc(wd, Path("x.pdf"), TARGETS, ALL_ACCOUNTS)
     assert art2["account_id"] == "ACC-1111"
     assert (wd / "route" / "cafe00000000.json").exists()
+
+
+def test_own_reporting_without_account_not_attached(fake, monkeypatch):
+    """Без проверки издателя правило читается как «называет заёмщика и не
+    печатает номер счёта» — под это подходит и собственная отчётность заёмщика,
+    а она в роли группового документа теряет свои реклассификации и отдаёт свои
+    основные средства за капзатраты Группы (ревью PR #23, вторая волна)."""
+    state, wd = fake
+    state["text"] = "Alpha Terminal JSC consolidated statements. Отчётность за год."
+    monkeypatch.setattr(route.llm, "call", _group_meta_and_issuer("Alpha Terminal JSC"))
+    art = route.route_group_doc(wd, Path("x.pdf"), NAMES)
+    assert art["account_id"] is None and art["quarantined"] is True
+    assert art["quarantine_reason"] == "own_reporting_not_group_level"
+    assert any(a["kind"] == "own_reporting_rejected" for a in art["alarms"])
+
+
+def test_name_search_survives_line_break(fake):
+    """verify_quote, которым наименование допущено, пробелы схлопывает — поиск
+    обязан вести себя так же, иначе перенос строки в вёрстке PDF даёт
+    молчаливый промах на единственной ячейке, ради которой проход и делается."""
+    assert route._name_mentioned("Alpha Terminal JSC", "ведёт Alpha Terminal\nServices") is False
+    assert route._name_mentioned("Alpha Terminal JSC", "ведёт Alpha Terminal\nJSC, сегмент")
+    assert route._name_mentioned("Alpha Terminal JSC", "ведёт Alpha  Terminal JSC")
+
+
+def test_generic_borrower_name_rejected(fake, monkeypatch):
+    """Наименованием ищут заёмщика в произвольных чужих документах: общее слово
+    прошло бы verify_quote по его собственным страницам и совпало бы везде."""
+    state, wd = fake
+    state["text"] = "Заёмщик — Группа, счёт ACC-1111"
+
+    def generic(prompt, schema, schema_version, **kw):
+        return {"name": "Группа", "quote": "Заёмщик — Группа"}
+
+    monkeypatch.setattr(route.llm, "call", generic)
+    art = route.borrower_name(wd, "ACC-1111", [Path("x.pdf")])
+    assert art["name"] == ""
+    assert any(a["kind"] == "borrower_name_too_generic" for a in art["alarms"])
+
+
+def test_issuer_compared_across_legal_form_spellings():
+    """Шапка договора и шапка отчёта пишут одну компанию по-разному: engine.tokens
+    снимает только односложные юрформы, и «... Services JSC» против «... Services
+    Joint Stock Company» разошлись бы наборами (ревью PR #23, третья волна)."""
+    assert route._same_entity("Alpha Terminal Joint Stock Company", "Alpha Terminal JSC")
+    assert route._same_entity(
+        "ТОО «Альфа Терминал»", "Альфа Терминал товарищество с ограниченной ответственностью"
+    )
+    # Вложенность — тоже совпадение: по названию не отличить материнскую
+    # компанию от переименования самого заёмщика, а цены ошибок несимметричны.
+    assert route._same_entity("Alpha Terminal Holding JSC", "Alpha Terminal JSC")
+    # Настоящая материнская компания различается словами, а не юрформой.
+    assert not route._same_entity("Parent Energy Holding JSC", "Alpha Terminal JSC")
+
+
+def test_issuer_failure_not_cached(fake, monkeypatch):
+    """Отказ издателя — тот же SchemaRejected: ответ не прошёл валидацию, в
+    LLM-кэш не лёг и на повторе прошёл бы. Артефакт route_group инвалидируется
+    только по ROUTE_VERSION, поэтому закэшированный отказ был бы неустраним."""
+    import llm as llm_mod
+
+    state, wd = fake
+    state["text"] = "Parent Holding JSC consolidated statements. Сегмент ведёт Alpha Terminal JSC."
+
+    def issuer_fails(prompt, schema, schema_version, **kw):
+        if schema is route.ISSUER_SCHEMA:
+            raise llm_mod.SchemaRejected("bad")
+        return {"doc_type": "financial_notes", "date": "2025-12-31", "edition": "final"}
+
+    monkeypatch.setattr(route.llm, "call", issuer_fails)
+    art = route.route_group_doc(wd, Path("x.pdf"), NAMES)
+    assert any(a["kind"] == "issuer_extraction_failed" for a in art["alarms"])
+    assert not (wd / "route_group" / "cafe00000000.json").exists()
+
+    # Причина устранена — привязка проходит и кэшируется.
+    monkeypatch.setattr(route.llm, "call", _group_meta_and_issuer("Parent Holding JSC"))
+    art2 = route.route_group_doc(wd, Path("x.pdf"), NAMES)
+    assert art2["account_id"] == "ACC-1111"
+    assert (wd / "route_group" / "cafe00000000.json").exists()
+
+
+def test_legal_form_is_not_a_distinguishing_word():
+    """Различающие слова считаются после снятия юрформ: «АО Группа» различает
+    ровно одним словом, и оно общее (ревью PR #23, шестая волна)."""
+    assert not route._name_specific_enough("АО Группа")
+    assert not route._name_specific_enough("Joint Stock Company")
+    assert route._name_specific_enough("Alpha Terminal JSC")
+
+
+def test_generic_issuer_name_rejected_with_own_alarm(fake, monkeypatch):
+    """Наименование издателя из одной юрформы даёт пустой ключ, и _same_entity
+    трактует его как «своя» — документ отвергается молча. Причина названа."""
+    state, wd = fake
+    state["text"] = "Joint Stock Company consolidated statements. Сегмент ведёт Alpha Terminal JSC."
+    monkeypatch.setattr(route.llm, "call", _group_meta_and_issuer("Joint Stock Company"))
+    art = route.route_group_doc(wd, Path("x.pdf"), NAMES)
+    assert art["account_id"] is None
+    assert any(a["kind"] == "issuer_name_too_generic" for a in art["alarms"])
