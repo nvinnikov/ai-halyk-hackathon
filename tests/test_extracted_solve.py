@@ -692,3 +692,30 @@ def test_exact_heading_still_executes_template_on_divergence():
     assert "heading_matched_loosely" not in kinds
     assert "loose_heading_rejected_on_divergence" not in kinds
     assert cellspec["metric_text"] == TEMPLATES["icr"]
+
+
+def test_derived_key_veto_applies_only_to_exact_heading_match():
+    """Вето по производному ключу держится на посылке «заголовок опознан
+    правильно». У нестрогого матча этой посылки нет: пункт про капзатраты
+    самого заёмщика, нестрого сматчившийся на групповой шаблон, должен
+    вернуться к извлечённой формуле, а не умереть (ревью PR #23, 10-я волна)."""
+    from templates import _TEMPLATE_HEADING_TEXT, title_key
+
+    heading = _TEMPLATE_HEADING_TEXT["group_capex_to_ebitda"]
+    loose = title_key(" ".join(heading.split()[:-1]))  # то же, но без последнего слова
+    sp = _spec(title_key=loose, metric="agg(CAPEX, out)")
+    cellspec, _quote = solve._extracted_cellspec(sp, "6.1", fact_keys=frozenset())
+    assert not isinstance(cellspec, Exception), "нестрогий матч не должен убивать ячейку"
+    assert cellspec["metric_text"] == "agg(CAPEX, out)"
+
+
+def test_derived_key_veto_still_fires_on_exact_heading_match():
+    """При точном матче заголовок опознан, и извлечённая формула по леджеру
+    считает другую величину — ячейка честно уходит на лестницу."""
+    from templates import _TEMPLATE_HEADING_TEXT, title_key
+
+    exact = title_key(_TEMPLATE_HEADING_TEXT["group_capex_to_ebitda"])
+    sp = _spec(title_key=exact, metric="agg(CAPEX, out)")
+    cellspec, quote = solve._extracted_cellspec(sp, "6.1", fact_keys=frozenset())
+    assert isinstance(cellspec, ValueError)
+    assert quote == "цитата пункта"

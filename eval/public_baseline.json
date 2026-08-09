@@ -23,6 +23,7 @@
  "stage_alarms": {
   "group_capex_currency_unnamed": 1,
   "group_capex_from_model_ignored": 1,
+  "group_capex_scale_unnamed": 1,
   "group_doc_attached": 1,
   "quote_unverified": 1,
   "routing_quarantine": 133,

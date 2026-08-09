@@ -11,7 +11,8 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 13
+FACTS_VERSION = 14
+# v14 — ревью PR #23, десятая волна: неназванный масштаб виден алярмом.
 # v13 — ревью PR #23, девятая волна: неназванная валюта видна алярмом,
 # неразобранное число не роняет решение о масштабе целиком.
 # v12 — ревью PR #23, седьмая волна: масштаб применяется при любом множителе,
@@ -575,6 +576,14 @@ def _amount_scale(facts: dict, raw: dict, doc: dict, text: str) -> Decimal | Non
         facts["alarms"].append({"kind": "group_capex_currency_unnamed", "file": doc["file"]})
     raw_scale = raw["amount_scale"].strip()
     if not raw_scale:
+        # Масштаб не назван — считаем суммы напечатанными полностью, но НЕ молча
+        # (ревью PR #23, десятая волна). Допущение той же природы, что и
+        # неназванная валюта выше, а цена промаха даже выше: «in thousands» в
+        # шапке примечания занижает числитель ровно в 10³, и на max-ковенанте
+        # это уверенный COMPLIANT. На публичном наборе модель возвращает пустой
+        # масштаб, то есть боевой путь проходит именно здесь — счётчик обязан
+        # быть виден в run-report, как и у валюты.
+        facts["alarms"].append({"kind": "group_capex_scale_unnamed", "file": doc["file"]})
         return Decimal(1)
     try:
         scale = Decimal(raw_scale.replace(",", "").replace(" ", ""))

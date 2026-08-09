@@ -1056,3 +1056,13 @@ def test_unparsed_amount_does_not_kill_the_whole_calculation(tmp_path, monkeypat
     assert any(
         a["kind"] == "invalid_number" and a["field"] == "group_capex_scale_decision" for a in facts["alarms"]
     )
+
+
+def test_group_capex_unnamed_scale_is_alarmed(tmp_path, monkeypatch):
+    """Пустой масштаб — тоже допущение по умолчанию, и цена промаха выше, чем у
+    валюты: «in thousands» в шапке занижает числитель в 10³. На публичном наборе
+    модель возвращает его пустым, то есть путь живой (ревью PR #23, 10-я волна)."""
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(ppe(amount_scale="")))
+    facts = facts_extract.extract_facts(tmp_path, GROUP_DOSSIER)
+    assert facts["doc_facts"][facts_extract.GROUP_CAPEX_KEY] == "21847362.55"
+    assert any(a["kind"] == "group_capex_scale_unnamed" for a in facts["alarms"])
