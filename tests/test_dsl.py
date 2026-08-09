@@ -81,6 +81,25 @@ def test_parse_agg_kwargs_filters_list_equals_bare_tail():
     assert kw == bare
 
 
+def test_parse_bare_bracket_filter_list_equals_bare_tail():
+    # Четвёртая форма той же путаницы (боевой прогон 2026-08-09, три ячейки
+    # одного заёмщика): голый список фильтров без имени поля —
+    # agg(ALL, out, [period(...), counterparty_in(...)]). От списка
+    # контрагентов отличается первым токеном: фильтр — вызов, строка — нет.
+    bare = parse(
+        "sub(agg(ALL, out, period(2025-01-01, 2025-12-31), counterparty_in(related_parties)), doc(basket))"
+    )
+    bracketed = parse(
+        "sub(agg(ALL, out, [period(2025-01-01, 2025-12-31), counterparty_in(related_parties)]), doc(basket))"
+    )
+    assert bracketed == bare
+    # Список контрагентов из строк не задет новой веткой.
+    assert parse("agg(ALL, out, counterparty_in(['Acme LLP']))").filters[0].setname == ("Acme LLP",)
+    # Вне хвоста agg скобочные фильтры остаются ошибкой.
+    with pytest.raises(DslError):
+        parse("ratio([period(2025-01-01, 2025-12-31)], agg(REVENUE, in))")
+
+
 def test_parse_empty_filters_kwarg_equals_no_tail():
     # Ревью PR #11, раунд 2: самая вероятная форма эха — пустое значение поля,
     # agg(ALL, out, filters=[]). Семантически это agg(ALL, out), неоднозначности

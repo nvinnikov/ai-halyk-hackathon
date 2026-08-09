@@ -241,6 +241,24 @@ class _Parser:
             return ("str", v[1:-1])
         if k == "lbr":
             self.take("lbr")
+            # Голый список фильтров — agg(ALL, out, [period(...), ...]) — та же
+            # путаница форм, что filters=[...], только без имени поля (живой
+            # паттерн боевого прогона: три ячейки одного заёмщика). Отличается
+            # от списка контрагентов первым же токеном: фильтр — это вызов
+            # name(, строка-литерал — нет. Легален там же, где легален фильтр.
+            if (
+                self.peek()[0] == "name"
+                and self.i + 1 < len(self.toks)
+                and self.toks[self.i + 1][0] == "lpar"
+            ):
+                if not (in_agg and pos >= 2):
+                    raise DslError("[...] с фильтрами вне хвоста agg")
+                items_f = [self.parse_call(allow_filter=True)]
+                while self.peek()[0] == "comma":
+                    self.take("comma")
+                    items_f.append(self.parse_call(allow_filter=True))
+                self.take("rbr")
+                return ("filters_list", tuple(items_f))
             items = [self.take("str")[1:-1]]
             while self.peek()[0] == "comma":
                 self.take("comma")
