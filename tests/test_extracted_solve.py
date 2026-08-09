@@ -122,8 +122,10 @@ def test_extracted_cellspec_category_divergence_keeps_template_with_alarm():
     # шаблон всё равно исполняется (на публичном наборе такие расхождения —
     # ошибки извлечения синонимичных категорий, откат стоил −5.0 офлайн),
     # но расхождение обязано быть видно алярмом.
+    # Роллап, а не лист: лист теперь параметризует категорию (тест ниже),
+    # а синонимная путаница роллапов остаётся за шаблоном — как измерено.
     heading = title_key("Максимальные расходы по категории")
-    sp = _spec(title_key=heading, template=None, metric="agg(TAX, out)")
+    sp = _spec(title_key=heading, template=None, metric="agg(OPEX_TOTAL, out)")
     cellspec, _quote = solve._extracted_cellspec(sp, "6.1")
     assert isinstance(cellspec, dict)
     assert cellspec["metric_text"] == TEMPLATES["capex"]
@@ -136,9 +138,9 @@ def test_extracted_cellspec_stashes_shadow_metric_on_divergence():
     # тенью: без неё run_cell нечего сравнивать, и подмена снова становится
     # видимой только текстом формулы.
     heading = title_key("Максимальные расходы по категории")
-    sp = _spec(title_key=heading, template=None, metric="agg(TAX, out)")
+    sp = _spec(title_key=heading, template=None, metric="agg(OPEX_TOTAL, out)")
     cellspec, _quote = solve._extracted_cellspec(sp, "6.1")
-    assert cellspec["shadow_metric_text"] == "agg(TAX, out)"
+    assert cellspec["shadow_metric_text"] == "agg(OPEX_TOTAL, out)"
 
 
 def test_shadow_set_when_signatures_agree_but_text_differs():
@@ -193,6 +195,32 @@ def test_loose_match_on_more_general_heading_computes_extracted_formula():
         assert isinstance(cellspec, dict) and cellspec["metric_text"] == metric
         kinds = [a["kind"] for a in cellspec["match_alarms"]]
         assert rejection in kinds and "heading_matched_loosely" in kinds
+
+
+def test_category_template_takes_leaf_category_from_extracted_formula():
+    """Шаблон «по категории»: категория — параметр пункта (боевой прогон:
+    четыре пункта про «Маркетинговые расходы» считались запечённым CAPEX).
+    Форму задаёт шаблон (знак его, фильтры не переносятся), категорию — тело
+    пункта через извлечённую формулу; только лист таксономии."""
+    heading = title_key("Максимальные расходы по категории")
+    sp = _spec(title_key=heading, metric="agg(MARKETING, out, period(2025-01-01, 2025-12-31))")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == "agg(MARKETING, out)"
+    kinds = [a["kind"] for a in cellspec["match_alarms"]]
+    assert "heading_category_parameterized" in kinds
+    # Роллап — не статья: остаётся мерянное поведение «шаблон чинит синонимы».
+    sp = _spec(title_key=heading, metric="agg(OPEX_TOTAL, out)")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == TEMPLATES["capex"]
+    # Не одиночный agg — форма другая, категория не извлекается.
+    sp = _spec(title_key=heading, metric="ratio(agg(MARKETING, out), agg(REVENUE, in))")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == TEMPLATES["capex"]
+    # Совпадающая категория — обычная подмена шаблоном, без параметризации.
+    sp = _spec(title_key=heading, metric="agg(CAPEX, out, min_amount(10))")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == TEMPLATES["capex"]
+    assert not any(a["kind"] == "heading_category_parameterized" for a in cellspec.get("match_alarms", []))
 
 
 def test_substituted_template_does_not_inherit_period_filter():

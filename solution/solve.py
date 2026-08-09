@@ -40,8 +40,8 @@ from ledger import dirty_rows_of, extract_archive, find_inputs, load_ledger, row
 from scindex import INDEX_VERSION, build_index
 from specs_extract import extract_specs
 from stages import artifact
-from taxonomy import cell_other_alarm, coverage_report
-from templates import TEMPLATE_HEADINGS, TEMPLATES, match_heading
+from taxonomy import LEAVES, cell_other_alarm, coverage_report
+from templates import CATEGORY_PARAMETERIZED, TEMPLATE_HEADINGS, TEMPLATES, match_heading
 from util import OUT, ROOT, q2, stable_json, workdir
 
 # Модули, чьи *_VERSION-константы run-report собирает целиком (раздел 3):
@@ -794,6 +794,29 @@ def _category_divergence(extracted_text: str, template_text: str) -> tuple[list,
     return (a, b) if a != b else None
 
 
+def _parameterize_category(extracted_text: str, template_text: str) -> str | None:
+    """Категория извлечённой формулы в шаблоне «по категории» (или None).
+
+    Заголовок «расходы/выручка по категории» делает категорию параметром
+    пункта: на публичном наборе она всегда совпадала с запечённой в шаблон, на
+    чужом — статья называется в теле пункта, и шаблон обязан взять её оттуда
+    (боевой прогон: четыре пункта про «Маркетинговые расходы» считались как
+    CAPEX). Форму по-прежнему задаёт шаблон: знак его, фильтры извлечённой
+    формулы не переносятся. Берётся только ЛИСТ таксономии: роллап
+    (OPEX_TOTAL, ALL) — не статья, а мерянная синонимная путаница извлечения,
+    которую как раз чинит шаблон. Не одиночный agg — другая форма, категорию
+    из него не извлечь."""
+    try:
+        ext, tpl = parse(extracted_text), parse(template_text)
+    except DslError:
+        return None
+    if not isinstance(tpl, Agg) or tpl.filters or not isinstance(ext, Agg):
+        return None
+    if ext.category == tpl.category or ext.category not in LEAVES:
+        return None
+    return f"agg({ext.category}, {tpl.sign})"
+
+
 def _extracted_cellspec(
     sp: dict | None,
     clause: str,
@@ -881,6 +904,14 @@ def _extracted_cellspec(
         # решение и обнулил базу выручки. Исключения из периода выражаются
         # ярусом фактов (excluded_txns), а не фильтром формулы.
         match_alarms: list[dict] = []
+        # Категория — параметр для шаблонов «по категории». Только строгий
+        # матч: у нестрогого посылки «заголовок тот самый» нет, и его защита
+        # отказом по расхождению не ослабляется.
+        if metric_text != sp["metric"] and not loosely_matched and template in CATEGORY_PARAMETERIZED:
+            param = _parameterize_category(sp["metric"], metric_text)
+            if param is not None:
+                metric_text = param
+                match_alarms.append({"kind": "heading_category_parameterized", "metric": param})
         # Подмена извлечённого DSL шаблоном остаётся (ruling: шаблон при матче
         # исполняется), но обязана быть видимой ЦЕЛИКОМ (ревью PR #9, 10-я
         # волна): не только другой набор категорий, но и разница по
