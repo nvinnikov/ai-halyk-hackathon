@@ -197,7 +197,12 @@ def to_usd(rows: list[dict], own_rates: list[dict], donor_rates: list[dict]) -> 
 
 
 def coverage_alarms(rows: list[dict], own_rates: list[dict], donor_rates: list[dict]) -> list[dict]:
-    """Проверка покрытия до расчёта: непокрытая валюта бьёт по заёмщику целиком."""
+    """Проверка покрытия до расчёта: непокрытая валюта бьёт по заёмщику целиком.
+
+    Согласована с лестницей to_usd (ревью PR #26): пара, которую вытянет
+    ступень ближайшего курса, покрыта — иначе fx_uncovered лгал бы ровно там,
+    где ступень отработала. Алярм остаётся только у валюты, чьи строки
+    действительно выбывают (fx_uncovered_row)."""
     missing = sorted(
         {
             (r["currency"], r["date"])
@@ -206,6 +211,7 @@ def coverage_alarms(rows: list[dict], own_rates: list[dict], donor_rates: list[d
             and r["amt"] is not None
             and pick_rate(own_rates, r["currency"], r["date"]) is None
             and pick_rate(donor_rates, r["currency"], r["date"]) is None
+            and pick_nearest(own_rates + donor_rates, r["currency"], r["date"]) is None
         }
     )
     return [{"kind": "fx_uncovered", "currency": c, "date": d} for c, d in missing]

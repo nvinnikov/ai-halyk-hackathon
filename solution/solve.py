@@ -14,7 +14,6 @@ legacy_spec_to_cellspec, регрессия/eval), "extracted" (дефолт, з
 документный конвейер: досье → факты → спеки, LLM трогает только чтение,
 арифметика ковенанта — DSL и код."""
 
-import dataclasses
 import hashlib
 import importlib
 import json
@@ -32,7 +31,7 @@ import evidence
 import facts_extract
 import llm
 from dossier import build_dossiers
-from dsl import Agg, Doc, DslError, Period, Quarter, Ratio, parse, signature, unparse, walk
+from dsl import Agg, Doc, DslError, Ratio, parse, signature, walk
 from engine import agg, prepare_rows, select_rows, sign_divergence
 from facts_extract import extract_facts, resolve_doc_fact
 from fallbacks import fallback_cell, family_of, heuristic_template
@@ -795,60 +794,6 @@ def _category_divergence(extracted_text: str, template_text: str) -> tuple[list,
     return (a, b) if a != b else None
 
 
-def _transfer_time_filters(extracted_text: str, template_text: str) -> str | None:
-    """Текст шаблона с временными фильтрами извлечённой формулы; None — нечего
-    переносить или перенос неоднозначен.
-
-    Шаблон задаёт ФОРМУ метрики, а договор — период наблюдения: подмена
-    шаблоном выбрасывала period(...) извлечённой формулы, и строка вне периода
-    (единственная за пределами календарного года леджера) молча оставалась в
-    базе. Переносятся только фильтры, единые для ВСЕХ agg извлечённой формулы:
-    фильтр на части узлов — это утверждение о конкретном слагаемом, чужому AST
-    его не адресовать. Вид фильтра, уже занятый шаблоном, не трогается
-    (quarter у revenue_q4 — часть самой метрики)."""
-    try:
-        ext, tpl = parse(extracted_text), parse(template_text)
-    except DslError:
-        return None
-    ext_aggs = [n for n in walk(ext) if isinstance(n, Agg)]
-    tpl_aggs = [n for n in walk(tpl) if isinstance(n, Agg)]
-    if not ext_aggs or not tpl_aggs:
-        return None
-    carried: list = []
-    for kind in (Period, Quarter):
-        uniform = {tuple(f for f in a.filters if isinstance(f, kind)) for a in ext_aggs}
-        if len(uniform) != 1:
-            continue  # фильтр не единый по формуле — перенос неоднозначен
-        filters = uniform.pop()
-        if not filters:
-            continue
-        if any(isinstance(f, kind) for a in tpl_aggs for f in a.filters):
-            continue  # шаблон сам несёт фильтр этого вида
-        carried.extend(filters)
-    if not carried:
-        return None
-
-    def rewrite(node):
-        if isinstance(node, Agg):
-            return dataclasses.replace(node, filters=node.filters + tuple(carried))
-        if not hasattr(node, "__dataclass_fields__"):
-            return node
-        changes = {}
-        for name in node.__dataclass_fields__:
-            value = getattr(node, name)
-            if isinstance(value, tuple):
-                rebuilt = tuple(rewrite(c) if hasattr(c, "__dataclass_fields__") else c for c in value)
-                if rebuilt != value:
-                    changes[name] = rebuilt
-            elif hasattr(value, "__dataclass_fields__"):
-                rebuilt = rewrite(value)
-                if rebuilt != value:
-                    changes[name] = rebuilt
-        return dataclasses.replace(node, **changes) if changes else node
-
-    return unparse(rewrite(tpl))
-
-
 def _extracted_cellspec(
     sp: dict | None,
     clause: str,
@@ -928,17 +873,14 @@ def _extracted_cellspec(
                         pass
                     return err, quote
                 metric_text = sp["metric"]
-        # Перенос временных фильтров — до сравнения формул: шаблон задаёт форму
-        # метрики, договор — период наблюдения, и подмена не имеет права молча
-        # расширять окно на строки вне периода. Только для строгих матчей:
-        # нестрогий и так отвергается при любом расхождении, а сузить это
-        # расхождение переносом значило бы ослабить его защиту.
+        # Перенос period(...) извлечённой формулы в шаблон здесь ПРОБОВАЛИ и
+        # откатили (PR #26, регрессия S2 на боевом прогоне): единственная
+        # строка за границей календарного года во всём приватном леджере —
+        # ровно та, которую AUP-отчёт включает в ковенантный период по методу
+        # начисления. Механический фильтр по дате задавил документальное
+        # решение и обнулил базу выручки. Исключения из периода выражаются
+        # ярусом фактов (excluded_txns), а не фильтром формулы.
         match_alarms: list[dict] = []
-        if metric_text != sp["metric"] and not loosely_matched:
-            carried = _transfer_time_filters(sp["metric"], metric_text)
-            if carried is not None:
-                metric_text = carried
-                match_alarms.append({"kind": "heading_time_filters_carried", "template": metric_text})
         # Подмена извлечённого DSL шаблоном остаётся (ruling: шаблон при матче
         # исполняется), но обязана быть видимой ЦЕЛИКОМ (ревью PR #9, 10-я
         # волна): не только другой набор категорий, но и разница по

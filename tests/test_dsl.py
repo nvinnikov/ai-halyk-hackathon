@@ -209,24 +209,3 @@ def test_signature_ignores_sign():
 def test_uses_ledger():
     assert uses_ledger(parse("agg(REVENUE, in)"))
     assert not uses_ledger(parse("ratio(doc(a), doc(b))"))
-
-
-def test_unparse_roundtrip_on_templates_and_filters():
-    """parse(unparse(x)) == x — на всей библиотеке шаблонов и всех формах
-    фильтров: unparse кормит подмену шаблоном с переносом фильтров, и текст
-    в cellspec обязан разбираться той же грамматикой в тот же AST."""
-    from dsl import unparse
-    from templates import TEMPLATES
-
-    cases = list(TEMPLATES.values()) + [
-        "agg(REVENUE, in, period(2025-01-01, 2025-12-31))",
-        "agg(REVENUE, in, quarter(4), min_amount(10.5))",
-        "agg(ALL, out, counterparty_in(related_parties), desc_contains('subsidiary'))",
-        "agg(ALL, out, counterparty_in(['ТОО Ромашка', 'Acme LLP']))",
-        "agg(ALL, out, txn_in(['T-1', 'T-2']))",
-        "sub(const(5), min(agg(TAX, out), agg(RENT, net)))",
-        "gt(agg(FINANCING, in), const(1000000))",
-    ]
-    for text in cases:
-        ast = parse(text)
-        assert parse(unparse(ast)) == ast, text

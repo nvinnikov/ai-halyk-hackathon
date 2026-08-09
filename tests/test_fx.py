@@ -144,6 +144,17 @@ def test_coverage_check_before_compute():
     assert alarms and alarms[0]["kind"] == "fx_uncovered"
 
 
+def test_coverage_silent_when_nearest_covers():
+    # Согласованность с лестницей to_usd: пара, которую вытянет ступень
+    # ближайшего курса, не считается непокрытой.
+    alarms = coverage_alarms(
+        [row("T-1", "-1", "EUR", date="2025-08-01")],
+        [rate(frm="2025-01-01", to="2025-06-30")],
+        [],
+    )
+    assert alarms == []
+
+
 def test_coverage_silent_when_donor_covers():
     assert coverage_alarms([row("T-1", "-1", "EUR")], [], [rate()]) == []
 
