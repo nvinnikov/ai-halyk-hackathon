@@ -12,6 +12,7 @@ fx до любой агрегации. Складывать rows_of() напря
 """
 
 import csv
+import json
 import zipfile
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -102,6 +103,37 @@ def _pick_ledger(csvs: list[Path]) -> Path:
     return best
 
 
+def _pick_template(templates: list[Path]) -> Path:
+    """Шаблон submission среди нескольких: по числу сценариев, затем по глубине.
+
+    Тот же довод, что у _pick_ledger, и та же цена: ассерт здесь обнулял бы
+    прогон, а лишний файл с этим именем в приватном пакете ничем не запрещён —
+    заполненный пример ответа, копия в examples/, шаблон рядом с документами.
+
+    Выбирается самый содержательный: у настоящего шаблона ключей `answers`
+    больше всего, у примера-огрызка меньше. При равенстве — ближайший к корню
+    архива: вложенная копия скорее вспомогательная. «Первый по алфавиту» здесь
+    так же случаен, как и у леджера, и тем же способом отвергнут.
+    """
+
+    def rank(path: Path) -> tuple[int, int, str]:
+        try:
+            answers = json.loads(path.read_text()).get("answers", {})
+            width = len(answers) if isinstance(answers, dict) else 0
+        except (OSError, ValueError):
+            width = 0
+        return (-width, len(path.parts), path.name)
+
+    ranked = sorted(templates, key=rank)
+    best = ranked[0]
+    if len(templates) > 1:
+        print(
+            f"ALARM multiple_templates: выбран {best.name} из {[str(p) for p in templates]}",
+            flush=True,
+        )
+    return best
+
+
 def find_inputs(input_dir: Path) -> dict:
     """Файлы датасета ищутся, а не зашиваются именами (раздел 9).
 
@@ -112,8 +144,9 @@ def find_inputs(input_dir: Path) -> dict:
     скелета submission, и её падение обнуляет весь прогон.
     """
     templates = sorted(input_dir.rglob("submission_template.json"))
-    assert len(templates) == 1, f"шаблонов найдено {len(templates)}"
-    root = templates[0].parent
+    assert templates, "в пакете нет submission_template.json"
+    template = _pick_template(templates)
+    root = template.parent
     pdfs = sorted(root.rglob("*.pdf"))
     pdf_dirs = {p.parent for p in pdfs}
 
@@ -124,7 +157,7 @@ def find_inputs(input_dir: Path) -> dict:
     assert csvs, "в пакете нет ни одного CSV"
     return {
         "root": root,
-        "template": templates[0],
+        "template": template,
         "ledger_csv": _pick_ledger(csvs),
         "pdfs": pdfs,
     }

@@ -262,3 +262,34 @@ def test_csv_only_outside_root_still_found(tmp_path):
     (root / "documents" / "a.pdf").write_bytes(b"%PDF-1.4\n")
     (root / "data" / "ledger.csv").write_text("txn_id,amount,account_id\n1,2,3\n")
     assert find_inputs(root)["ledger_csv"].name == "ledger.csv"
+
+
+def test_extra_template_does_not_raise(tmp_path):
+    """Ассерт на шаблонах имел ту же цену, что и на CSV (ревью PR #25): лишний
+    файл с этим именем в приватном пакете ничем не запрещён — заполненный
+    пример, копия в examples/, шаблон рядом с документами."""
+    root = tmp_path / "pkg"
+    (root / "examples").mkdir(parents=True)
+    (root / "documents").mkdir()
+    (root / "documents" / "a.pdf").write_bytes(b"%PDF-1.4\n")
+    (root / "master_ledger_2025.csv").write_text("txn_id,amount,account_id\n1,2,3\n")
+    (root / "submission_template.json").write_text('{"answers": {"P1": {}, "P2": {}, "P3": {}}}')
+    (root / "examples" / "submission_template.json").write_text('{"answers": {"P1": {}}}')
+    got = find_inputs(root)
+    # Выбран самый содержательный, а не первый по алфавиту (examples/ < корень).
+    assert got["template"].parent.name == "pkg"
+    assert got["root"] == root
+
+
+def test_template_tie_broken_by_depth(tmp_path):
+    """Одинаково содержательные — ближайший к корню: вложенная копия скорее
+    вспомогательная."""
+    root = tmp_path / "pkg"
+    (root / "nested").mkdir(parents=True)
+    (root / "documents").mkdir()
+    (root / "documents" / "a.pdf").write_bytes(b"%PDF-1.4\n")
+    (root / "master_ledger_2025.csv").write_text("txn_id,amount,account_id\n1,2,3\n")
+    payload = '{"answers": {"P1": {}, "P2": {}}}'
+    (root / "submission_template.json").write_text(payload)
+    (root / "nested" / "submission_template.json").write_text(payload)
+    assert find_inputs(root)["template"].parent.name == "pkg"
