@@ -11,7 +11,9 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 12
+FACTS_VERSION = 13
+# v13 — ревью PR #23, девятая волна: неназванная валюта видна алярмом,
+# неразобранное число не роняет решение о масштабе целиком.
 # v12 — ревью PR #23, седьмая волна: масштаб применяется при любом множителе,
 # кроме противоречивой пары «тысячи против центов»; расхождение двух групповых
 # документов сверяется по значению, а не по записи.
@@ -557,6 +559,20 @@ def _amount_scale(facts: dict, raw: dict, doc: dict, text: str) -> Decimal | Non
             {"kind": "group_capex_foreign_currency", "file": doc["file"], "currency": currency}
         )
         return None
+    if not currency:
+        # Валюта не названа — считаем в валюте расчёта, но НЕ молча (ревью PR
+        # #23, девятая волна). Это подстановка по умолчанию, и по природе она
+        # та же, что курс 1.0 для строки леджера: если отчётность материнской
+        # компании в чужой валюте, числитель поедет против знаменателя,
+        # нормализованного построчно, и промах в разы даст неверный статус.
+        #
+        # Отказываться всё же нельзя: на публичном наборе модель валюту не
+        # называет, хотя документ её печатает, — отказ стоил бы ровно той
+        # ячейки, ради которой сделан весь проход, причём гарантированно и
+        # сегодня, против гипотетической чужой валюты на приватном наборе.
+        # Поэтому цена вынесена в алярм: счётчик виден в run-report, и в окне
+        # по нему видно, на скольких заёмщиках допущение сработало.
+        facts["alarms"].append({"kind": "group_capex_currency_unnamed", "file": doc["file"]})
     raw_scale = raw["amount_scale"].strip()
     if not raw_scale:
         return Decimal(1)
@@ -582,10 +598,16 @@ def _amount_scale(facts: dict, raw: dict, doc: dict, text: str) -> Decimal | Non
             continue
         d = _fraction_digits(value)
         if d is None:
+            # Не разобралось — поле просто не участвует в решении о масштабе, а
+            # его судьбу дальше решает number(), где непарсибельность уже
+            # обработана мягко (ревью PR #23, девятая волна). Выход отсюда ронял
+            # ВЕСЬ расчёт: одиночная запятая ровно с тремя цифрами намеренно не
+            # снимается _normalize_limit, и такое `additions` убивало ячейку,
+            # хотя остальные три числа целы и тождество отработало бы.
             facts["alarms"].append(
                 {"kind": "invalid_number", "field": "group_capex_scale_decision", "value": value}
             )
-            return None
+            continue
         digits.append(d)
     fractional = [d for d in digits if d > 0]
     if scale == _CENTS_SCALE and fractional and all(d >= 2 for d in fractional):

@@ -1024,3 +1024,35 @@ def test_group_capex_conflict_compares_values_not_spellings(tmp_path, monkeypatc
     facts = facts_extract.extract_facts(tmp_path, dossier)
     assert not any(a["kind"] == "group_capex_conflict" for a in facts["alarms"])
     assert facts["doc_facts"][facts_extract.GROUP_CAPEX_KEY] == "21847000"
+
+
+def test_group_capex_unnamed_currency_is_alarmed_not_silent(tmp_path, monkeypatch):
+    """Пустая валюта — штатный ответ по промпту, и она проваливалась мимо гейта:
+    расчёт шёл в валюте расчёта по умолчанию, без следа. Считаем по-прежнему
+    (отказ стоил бы ячейки уже сегодня), но допущение видно (ревью PR #23)."""
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(ppe(currency="")))
+    facts = facts_extract.extract_facts(tmp_path, GROUP_DOSSIER)
+    assert facts["doc_facts"][facts_extract.GROUP_CAPEX_KEY] == "21847362.55"
+    assert any(a["kind"] == "group_capex_currency_unnamed" for a in facts["alarms"])
+
+
+def test_unparsed_amount_does_not_kill_the_whole_calculation(tmp_path, monkeypatch):
+    """Одиночная запятая ровно с тремя цифрами намеренно не снимается
+    _normalize_limit. Такое `additions` роняло весь расчёт, хотя остальные три
+    числа целы и тождество отработало бы (ревью PR #23, девятая волна)."""
+    text = GROUP_TEXT + " Additions during the year 154,050"
+    raw = ppe(
+        additions="154,050",
+        additions_quote="Additions during the year 154,050",
+        amount_scale="1000",
+        units_quote="Depreciation charge for the year $15,826,229.43",
+    )
+    dossier = {**GROUP_DOSSIER, "docs": [{**GROUP_DOSSIER["docs"][0], "text": text}]}
+    monkeypatch.setattr(facts_extract.llm, "call", _group_dispatch(raw))
+    facts = facts_extract.extract_facts(tmp_path, dossier)
+    # additions отброшено number()-ом как непарсибельное, расчёт ушёл на
+    # тождество по трём оставшимся числам; масштаб не применён — суммы с центами.
+    assert facts["doc_facts"][facts_extract.GROUP_CAPEX_KEY] == "21847362.55"
+    assert any(
+        a["kind"] == "invalid_number" and a["field"] == "group_capex_scale_decision" for a in facts["alarms"]
+    )
