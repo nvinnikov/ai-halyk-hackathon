@@ -44,6 +44,21 @@ def test_agg_and_arithmetic():
     assert ev("const(4000000)").value == Decimal("4000000")
 
 
+def test_mul_constant_multiplier_and_cap_formula():
+    """mul — процентные кэпы договоров: «добавки не более доли выручки».
+    Флаги операндов сливаются, как у остальной арифметики."""
+    assert ev("mul(const(0.05), agg(REVENUE, in))").value == Decimal("75.00")
+    assert ev("mul(agg(REVENUE, in), const(2))").value == Decimal("3000")
+    # Полная формула кэпа (кейс G1 6.1): EBITDA + min(добавки, доля выручки).
+    capped = ev(
+        "add(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)),"
+        " min(doc(severance_liability), mul(const(0.05), agg(REVENUE, in))))"
+    )
+    assert capped.value == Decimal("1240")  # 1200 + min(40, 75)
+    flagged = ev("mul(const(2), ratio(agg(REVENUE, in), const(0)))")
+    assert "zero_denominator" in flagged.flags  # флаги множителя не теряются
+
+
 def test_filters():
     assert ev("agg(REVENUE, in, quarter(4))").value == Decimal("500")
     assert ev("agg(REVENUE, in, period(2025-01-01, 2025-06-30))").value == Decimal("1000")

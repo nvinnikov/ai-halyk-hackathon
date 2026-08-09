@@ -212,6 +212,48 @@ def test_validate_category_and_fact_keys():
     assert validate(parse("agg(OPEX_TOTAL, net)"), set()) == []
 
 
+def test_parse_mul_requires_constant_operand():
+    """mul(a, b) — процентные кэпы («добавки не более доли выручки», кейс
+    G1 6.1). Хотя бы один аргумент — константа: произведение двух агрегатов
+    ковенантной семантики не имеет и дало бы правдоподобно-огромные числа."""
+    from dsl import Const, Mul
+
+    node = parse("mul(const(0.05), agg(REVENUE, in))")
+    assert isinstance(node, Mul) and node.a == Const(Decimal("0.05"))
+    # порядок аргументов любой
+    swapped = parse("mul(agg(REVENUE, in), const(0.05))")
+    assert isinstance(swapped, Mul) and swapped.b == Const(Decimal("0.05"))
+    # полная формула кэпа парсится целиком
+    parse(
+        "add(sub(agg(REVENUE,in),agg(OTHER_OPEX,out)),"
+        " min(doc(ebitda_addbacks_material_total), mul(const(0.05), agg(REVENUE,in))))"
+    )
+    with pytest.raises(DslError):
+        parse("mul(agg(REVENUE, in), agg(CAPEX, out))")  # два агрегата
+    with pytest.raises(DslError):
+        parse("mul(const(2))")  # арность
+    with pytest.raises(DslError):
+        parse("mul(const(2), period(2025-01-01, 2025-12-31))")  # фильтр не выражение
+
+
+def test_parse_mul_bare_and_quoted_number_promoted_to_const():
+    # Та же терпимость форм, что у const('3.0'): числовой множитель голым
+    # числом или кавыченной строкой-числом — тот же Const; мусор — ошибка.
+    bare = parse("mul(0.05, agg(REVENUE, in))")
+    quoted = parse("mul('0.05', agg(REVENUE, in))")
+    canon = parse("mul(const(0.05), agg(REVENUE, in))")
+    assert bare == quoted == canon
+    with pytest.raises(DslError):
+        parse("mul('пять процентов', agg(REVENUE, in))")
+
+
+def test_signature_mul_erases_constant():
+    a = signature(parse("mul(const(0.05), agg(REVENUE, in))"))
+    b = signature(parse("mul(const(0.10), agg(REVENUE, in))"))
+    c = signature(parse("mul(const(0.05), agg(CAPEX, out))"))
+    assert a == b != c
+
+
 def test_signature_ignores_constants():
     a = signature(parse("ratio(agg(CAPEX, out), const(2))"))
     b = signature(parse("ratio(agg(CAPEX, out), const(9))"))
