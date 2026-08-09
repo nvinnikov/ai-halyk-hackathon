@@ -1156,3 +1156,90 @@ def test_resolve_doc_metric_rejects_constants_doc_and_garbage(tmp_path, monkeypa
 def test_resolve_doc_metric_not_computable_is_refusal(tmp_path, monkeypatch):
     monkeypatch.setattr(facts_extract.llm, "call", _metric_answer(computable=False, expression=""))
     assert facts_extract.resolve_doc_metric(tmp_path, _METRIC_DOSSIER, "external_index", "ц") is None
+
+
+# --- определение EBITDA из договора ------------------------------------------
+
+_EBITDA_DEF_NARROW = "EBITDA означает Выручку за вычетом Операционных расходов, как раскрыто в примечаниях."
+_EBITDA_DEF_BROAD = "EBITDA означает выручку за вычетом всех операционных расходов за период."
+
+
+def _agreement_dossier(definition: str) -> dict:
+    return {
+        "account_id": "ACC-1",
+        "scenario_id": "S1",
+        "docs": [
+            {
+                "file": "agreement.pdf",
+                "doc_type": "agreement",
+                "date": "2025-01-01",
+                "text": f"Кредитный договор. {definition} Прочие условия.",
+            }
+        ],
+        "docs_rejected": [],
+        "quarantined": [],
+        "alarms": [],
+    }
+
+
+def _def_call(found: bool, quote: str):
+    def call(prompt, schema, schema_version, **kw):
+        assert schema_version == facts_extract.EBITDA_DEF_SCHEMA_VERSION
+        return {"found": found, "quote": quote}
+
+    return call
+
+
+def test_ebitda_definition_classified_by_code():
+    """Классифицирует КОД по цитате, модель только находит определение: статья
+    без квантора — line_item, квантор всеобщности — all_opex, определение
+    другой природы или не про метрику — None."""
+    assert facts_extract._classify_ebitda_quote(_EBITDA_DEF_NARROW) == "line_item"
+    assert facts_extract._classify_ebitda_quote(_EBITDA_DEF_BROAD) == "all_opex"
+    assert (
+        facts_extract._classify_ebitda_quote("EBITDA means Revenue less total operating costs") == "all_opex"
+    )
+    assert facts_extract._classify_ebitda_quote("EBITDA means profit before tax and depreciation") is None
+    assert facts_extract._classify_ebitda_quote("операционные расходы без определения метрики") is None
+
+
+def test_ebitda_definition_line_item(tmp_path, monkeypatch):
+    monkeypatch.setattr(facts_extract.llm, "call", _def_call(True, _EBITDA_DEF_NARROW))
+    got = facts_extract.ebitda_definition(tmp_path, _agreement_dossier(_EBITDA_DEF_NARROW))
+    assert got == {"reading": "line_item", "quote": _EBITDA_DEF_NARROW}
+
+
+def test_ebitda_definition_broad(tmp_path, monkeypatch):
+    monkeypatch.setattr(facts_extract.llm, "call", _def_call(True, _EBITDA_DEF_BROAD))
+    got = facts_extract.ebitda_definition(tmp_path, _agreement_dossier(_EBITDA_DEF_BROAD))
+    assert got is not None and got["reading"] == "all_opex"
+
+
+def test_ebitda_definition_unverified_quote_is_dropped(tmp_path, monkeypatch):
+    # Цитата не из договора — факта нет (контракт guard, как у всех потребителей).
+    monkeypatch.setattr(
+        facts_extract.llm, "call", _def_call(True, "EBITDA означает что-то выдуманное про операционные")
+    )
+    assert facts_extract.ebitda_definition(tmp_path, _agreement_dossier(_EBITDA_DEF_NARROW)) is None
+
+
+def test_ebitda_definition_without_agreement_is_none(tmp_path, monkeypatch):
+    def boom(*a, **kw):
+        raise AssertionError("вызова быть не должно: договора в досье нет")
+
+    monkeypatch.setattr(facts_extract.llm, "call", boom)
+    assert facts_extract.ebitda_definition(tmp_path, DOSSIER) is None
+
+
+def test_ebitda_definition_schema_failure_not_cached(tmp_path, monkeypatch):
+    def rejected(prompt, schema, schema_version, **kw):
+        raise facts_extract.llm.SchemaRejected("bad")
+
+    monkeypatch.setattr(facts_extract.llm, "call", rejected)
+    dossier = _agreement_dossier(_EBITDA_DEF_NARROW)
+    assert facts_extract.ebitda_definition(tmp_path, dossier) is None
+    # Отказ не закреплён артефактом: на повторе (после устранения причины)
+    # вызов уйдёт заново, а не вернёт found=false с диска.
+    assert not (tmp_path / "facts" / "ACC-1.ebitda_def.json").exists()
+    monkeypatch.setattr(facts_extract.llm, "call", _def_call(True, _EBITDA_DEF_NARROW))
+    assert facts_extract.ebitda_definition(tmp_path, dossier) is not None

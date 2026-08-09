@@ -14,6 +14,7 @@ legacy_spec_to_cellspec, регрессия/eval), "extracted" (дефолт, з
 документный конвейер: досье → факты → спеки, LLM трогает только чтение,
 арифметика ковенанта — DSL и код."""
 
+import dataclasses
 import hashlib
 import importlib
 import json
@@ -32,7 +33,7 @@ import evidence
 import facts_extract
 import llm
 from dossier import build_dossiers
-from dsl import Agg, Doc, DslError, Ratio, parse, signature, validate, walk
+from dsl import Agg, Doc, DslError, Ratio, Sub, parse, signature, unparse, validate, walk
 from engine import agg, prepare_rows, select_rows, sign_divergence
 from facts_extract import extract_facts, resolve_doc_fact, resolve_doc_metric
 from fallbacks import fallback_cell, family_of, heuristic_template
@@ -727,6 +728,20 @@ def _extracted_inputs(
                 "clauses": {},
                 "alarms": [{"kind": "specs_failed", "scenario": sc, "error": repr(exc)}],
             }
+        # Определение EBITDA — отдельным fail-open рубежом: его сбой (в том
+        # числе CassetteMiss в офлайне — на публичной кассете этого вызова нет)
+        # не имеет права уронить уже извлечённые спеки в specs_failed. Нет
+        # определения — ключа нет, формулы не переписываются, поведение прежнее.
+        if spec_art.get("clauses"):
+            try:
+                ebitda_def = facts_extract.ebitda_definition(wd, dossiers[acc])
+            except Exception as exc:
+                print(f"ALARM ebitda_definition_error {sc}: {exc!r}", flush=True)
+                ebitda_def = None
+            if ebitda_def is not None:
+                # Копия, не мутация: spec_art может быть только что записанным
+                # артефактом, дописывать в его словарь — играть с диском.
+                spec_art = {**spec_art, "ebitda_reading": ebitda_def}
         try:
             facts_by_sc[sc] = _with_doc_facts(facts)
         except Exception as exc:
@@ -930,12 +945,59 @@ def _parameterize_category(extracted_text: str, template_text: str) -> str | Non
     return f"agg({ext.category}, {tpl.sign})"
 
 
+def _apply_ebitda_reading(text: str, reading: str) -> str | None:
+    """Текст формулы с категорией опекса по определению EBITDA из договора;
+    None — переписывать нечего (или текст не парсится).
+
+    Определение договора главнее и извлечённой формулы, и канона шаблонов:
+    «EBITDA означает Выручку за вычетом Операционных расходов» — это статья
+    (лист OTHER_OPEX), «за вычетом всех операционных расходов» — роллап
+    OPEX_TOTAL (ebitda_total_opex — второе легитимное прочтение). Переписывается
+    ТОЛЬКО EBITDA-подвыражение — sub(выручка, опекс), — а не всякий agg опекса:
+    ковенант «доля консультационных в операционных расходах» оперирует своей
+    статьёй независимо от определения EBITDA. Знак и фильтры узла сохраняются."""
+    target = "OTHER_OPEX" if reading == "line_item" else "OPEX_TOTAL"
+    wrong = "OPEX_TOTAL" if target == "OTHER_OPEX" else "OTHER_OPEX"
+    try:
+        ast = parse(text)
+    except DslError:
+        return None
+
+    changed = False
+
+    def rewrite(node):
+        nonlocal changed
+        if isinstance(node, Sub) and isinstance(node.a, Agg) and isinstance(node.b, Agg):
+            if node.a.category == "REVENUE" and node.b.category == wrong:
+                changed = True
+                return Sub(a=node.a, b=dataclasses.replace(node.b, category=target))
+            return node
+        if not hasattr(node, "__dataclass_fields__"):
+            return node
+        updates = {}
+        for name in node.__dataclass_fields__:
+            value = getattr(node, name)
+            if isinstance(value, tuple):
+                rebuilt = tuple(rewrite(c) if hasattr(c, "__dataclass_fields__") else c for c in value)
+                if rebuilt != value:
+                    updates[name] = rebuilt
+            elif hasattr(value, "__dataclass_fields__"):
+                rebuilt = rewrite(value)
+                if rebuilt != value:
+                    updates[name] = rebuilt
+        return dataclasses.replace(node, **updates) if updates else node
+
+    rewritten = rewrite(ast)
+    return unparse(rewritten) if changed else None
+
+
 def _extracted_cellspec(
     sp: dict | None,
     clause: str,
     scenario: str = "",
     hide_templates: frozenset = frozenset(),
     fact_keys: frozenset | None = None,
+    ebitda_reading: str | None = None,
 ) -> tuple[object, str]:
     """Cellspec-или-ошибка + цитата пункта из извлечённой спеки (правка 3).
 
@@ -1085,12 +1147,38 @@ def _extracted_cellspec(
                     }
                 )
                 metric_text = sp["metric"]
+        # Определение EBITDA из договора применяется к ФИНАЛЬНОМУ тексту —
+        # после всех подмен: оно главнее и извлечённой формулы (кейс боевого
+        # прогона: модель взяла роллап при договорном «за вычетом Операционных
+        # расходов»), и канона шаблонов (_EBITDA зашивает OTHER_OPEX, а договор
+        # вправе выбрать второе прочтение). Сбой извлечения определения выше
+        # по стеку — reading просто не приходит, поведение прежнее.
+        trigger_text = sp["trigger"]
+        if ebitda_reading:
+            for label, current in (("metric", metric_text), ("trigger", trigger_text)):
+                if not current:
+                    continue
+                rewritten = _apply_ebitda_reading(current, ebitda_reading)
+                if rewritten is None:
+                    continue
+                if label == "metric":
+                    metric_text = rewritten
+                else:
+                    trigger_text = rewritten
+                match_alarms.append(
+                    {
+                        "kind": "ebitda_definition_applied",
+                        "reading": ebitda_reading,
+                        "target": label,
+                        "text": rewritten,
+                    }
+                )
         cellspec = {
             "metric_ast": parse(metric_text),
             "metric_text": metric_text,
             "direction": sp["direction"],
             "limit": Decimal(sp["limit"]),
-            "trigger_ast": parse(sp["trigger"]) if sp["trigger"] else None,
+            "trigger_ast": parse(trigger_text) if trigger_text else None,
         }
         if match_alarms:
             cellspec["match_alarms"] = match_alarms
@@ -1574,6 +1662,7 @@ def main(
                             scenario,
                             hide_templates,
                             fact_keys=frozenset(facts.get("doc_facts", {})),
+                            ebitda_reading=(specs_by_sc[scenario].get("ebitda_reading") or {}).get("reading"),
                         )
                     else:
                         cellspec_or_error = legacy_spec_to_cellspec(_expected_specs()[scenario][clause])
