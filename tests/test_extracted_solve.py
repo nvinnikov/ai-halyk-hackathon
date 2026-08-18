@@ -378,6 +378,9 @@ def test_shadow_records_both_answers_and_alarms_when_they_differ():
     # Шаблон считает CAPEX (50 — COMPLIANT), извлечённая формула — TAX
     # (500 — BREACH). Ячейка остаётся шаблонной, но расхождение ОТВЕТА
     # обязано попасть и в трейс, и в alarms: только его читает run-report.
+    # Улика теневой BREACH-ветки больше не null (новая политика evidence.find):
+    # единственная читаемая строка TAX одновременно и переворачивающий
+    # кандидат (её снятие даёт 0 <= порога), поэтому она — улика.
     rows = [_row("TXN-1", "CAPEX", "-50"), _row("TXN-2", "TAX", "-500")]
     cellspec = _shadow_cellspec("agg(TAX, out)")
     cell, trace = solve.run_cell("SC-S", "6.1", rows, {}, cellspec, [])
@@ -386,7 +389,7 @@ def test_shadow_records_both_answers_and_alarms_when_they_differ():
         "metric": "agg(TAX, out)",
         "status": "BREACH",
         "actual": 500.0,
-        "evidence_txn_id": None,
+        "evidence_txn_id": "TXN-2",
         "changed_answer": True,
     }
     got = [a for a in trace["alarms"] if a["kind"] == "heading_divergence_changed_answer"]

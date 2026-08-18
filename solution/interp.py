@@ -48,6 +48,13 @@ def _quarter_months(n: int) -> tuple[str, ...]:
 
 def _pred(filters: tuple, ctx: Ctx):
     def check(r) -> bool:
+        # Отсечение конкретной транзакции — контрфактуал улики (5.6), и он не
+        # свойство фильтра контрагента: «убрать эту строку» обязано работать в
+        # ЛЮБОМ агрегате, иначе кандидатом может быть только строка связанной
+        # стороны. Проверка первой: остальные фильтры на отсечённой строке уже
+        # не имеют смысла.
+        if r["txn_id"] in ctx.set_exclude:
+            return False
         for f in filters:
             if isinstance(f, Period):
                 if not (f.frm <= r["date"] <= f.to):
@@ -56,8 +63,6 @@ def _pred(filters: tuple, ctx: Ctx):
                 if r["date"][5:7] not in _quarter_months(f.n):
                     return False
             elif isinstance(f, CounterpartyIn):
-                if r["txn_id"] in ctx.set_exclude:
-                    return False
                 parties = list(f.setname) if isinstance(f.setname, tuple) else ctx.facts.get(f.setname, [])
                 if not is_related(r["counterparty"], parties):
                     return False
@@ -73,6 +78,10 @@ def _pred(filters: tuple, ctx: Ctx):
         return True
 
     return check
+
+
+# Публичное имя для потребителей вне интерпретатора (evidence.reading_rows).
+row_filter = _pred
 
 
 def evaluate(node, ctx: Ctx) -> EvalResult:

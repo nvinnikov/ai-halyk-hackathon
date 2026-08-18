@@ -149,3 +149,23 @@ def test_trigger(trig, want):
 
 def test_trigger_none_means_always_applies():
     assert check_trigger(None, CTX) is True
+
+
+def _row(txn, cat, amt, cp="Acme LLP", date="2025-03-01"):
+    return {
+        "txn_id": txn,
+        "cat": cat,
+        "amt": Decimal(amt),
+        "counterparty": cp,
+        "date": date,
+        "description": "",
+    }
+
+
+def test_set_exclude_removes_row_from_plain_agg():
+    rows = [_row("T-1", "CAPEX", "-100"), _row("T-2", "CAPEX", "-40")]
+    ast = parse("agg(CAPEX, out)")
+    full = evaluate(ast, Ctx(rows=rows, facts={}))
+    without = evaluate(ast, Ctx(rows=rows, facts={}, set_exclude=frozenset({"T-1"})))
+    assert full.value == Decimal("140")
+    assert without.value == Decimal("40")
