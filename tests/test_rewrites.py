@@ -131,3 +131,35 @@ def test_period_filter_is_replaced_by_quarter():
     text = unparse(ast)
     assert "period(" not in text
     assert "quarter(2)" in text
+
+
+def test_inserted_adjective_between_quant_and_quarter_still_matches():
+    """Раунд правок 1: буквальный список фраз рвался вставленным между
+    квантором и «кварталом» прилагательным — F2 6.1 приватного набора пишет
+    «в любом ОТДЕЛЬНОМ финансовом квартале», а старый список знал только
+    «любом финансовом квартале» без разрыва."""
+    quote = "не допускать превышения расходами в любом отдельном финансовом квартале величины $300,000.00"
+    ast, changed = quarterly(parse("agg(MARKETING, out)"), quote, "max")
+    assert changed
+    assert unparse(ast).startswith("max(")
+
+
+def test_english_inserted_word_between_quant_and_quarter_still_matches():
+    quote = "EBITDA shall not fall below $600,000.00 in any single fiscal quarter"
+    ast, changed = quarterly(parse(_EBITDA), quote, "min")
+    assert changed
+    assert unparse(ast).startswith("min(")
+
+
+def test_quant_and_quarter_too_far_apart_does_not_match():
+    """Отрицающий тест: квантор и «квартал» дальше допустимого разрыва слов
+    (в соседнем предложении цитаты) — не квартализуем, иначе образец склеивал
+    бы несвязанные части текста и квартализовал бы годовую метрику там, где
+    пункт вообще не про кварталы."""
+    quote = (
+        "Компания вправе принять любое решение по своему усмотрению в течение "
+        "финансового года. Отчётность предоставляется по результатам работы "
+        "подразделения за квартал."
+    )
+    ast, changed = quarterly(parse(_EBITDA), quote, "min")
+    assert not changed

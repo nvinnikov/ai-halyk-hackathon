@@ -7,6 +7,7 @@
 """
 
 import dataclasses
+import re
 
 from dsl import Add, Agg, MaxOf, MinOf, Period, Quarter, Ratio, Sub, unparse, walk
 
@@ -96,24 +97,50 @@ def narrow_opex(metric_ast, quote: str) -> tuple[object, bool]:
     return (out, changed) if changed else (metric_ast, False)
 
 
-# Маркеры поквартальности: пункт явно меряет «любой»/«каждый» финансовый
-# квартал, а не год. Список нарочно узкий — маркер, срабатывающий на описании
-# отчётного периода («за 4-й квартал 2025») вместо формулировки теста
-# ковенанта, квартализовал бы годовую метрику и стоил бы ячейки; на публичном
-# наборе договоров с поквартальными пунктами не было, поэтому правило там
-# обязано молчать.
-_QUARTER_MARKERS = (
-    "любой финансовый квартал",
-    "любом финансовом квартале",
-    "любого финансового квартала",
-    "каждый финансовый квартал",
-    "каждом финансовом квартале",
-    "за любой квартал",
-    "поквартальн",
-    "any fiscal quarter",
-    "each fiscal quarter",
-    "any financial quarter",
-)
+# Признак поквартальности: квантор («любой»/«каждый», any/each) и слово
+# «квартал»/quarter в пределах ограниченного разрыва слов, а не буквальная
+# фраза целиком (раунд правок 1). Список готовых фраз («любом финансовом
+# квартале» и т.п.) хрупок по построению: любое прилагательное, вставленное
+# между квантором и «кварталом» («в любом ОТДЕЛЬНОМ финансовом квартале», «за
+# каждый ЗАВЕРШЁННЫЙ финансовый квартал», «in any SINGLE fiscal quarter»),
+# рвёт совпадение целиком, хотя смысл пункта не меняется — одна из ячеек
+# приватного набора потерялась именно так: договор пишет «в любом ОТДЕЛЬНОМ
+# финансовом квартале», а список фраз знал только «любом финансовом квартале».
+#
+# Основы вместо целых слов (тот же приём, что у dsl._SET_STEMS) снимают
+# чувствительность к падежу и роду — «любой», «любом», «любого» и «любых»
+# ловятся одной основой. Разрыв между квантором и «кварталом» ограничен
+# ДВУМЯ словами — это несущее ограничение, а не украшение: без потолка образец
+# склеивал бы квантор из одного предложения цитаты со словом «квартал» из
+# совсем другого и квартализовал бы годовую метрику там, где пункт вообще не
+# про кварталы. На публичном наборе договоров с поквартальными пунктами не
+# было, поэтому правило там обязано молчать.
+_QUANT_STEMS_RU = ("любо", "кажд")
+_QUANT_WORDS_EN = ("any", "each")
+_QUARTER_STEMS = ("квартал", "quarter")
+_MAX_GAP_WORDS = 2
+
+_WORD_RE = re.compile(r"[\w-]+", re.UNICODE)
+
+
+def _is_quant_word(word: str) -> bool:
+    return word.startswith(_QUANT_STEMS_RU) or word in _QUANT_WORDS_EN
+
+
+def _is_quarter_word(word: str) -> bool:
+    return word.startswith(_QUARTER_STEMS)
+
+
+def _mentions_any_quarter(quote: str) -> bool:
+    """Пункт меряет «любой»/«каждый» квартал — по образцу, а не по фразе."""
+    words = _WORD_RE.findall((quote or "").lower())
+    for i, word in enumerate(words):
+        if not _is_quant_word(word):
+            continue
+        window = words[i + 1 : i + 1 + _MAX_GAP_WORDS + 1]
+        if any(_is_quarter_word(w) for w in window):
+            return True
+    return False
 
 
 def _quarterize(node, n: int):
@@ -152,8 +179,7 @@ def quarterly(metric_ast, quote: str, direction: str | None) -> tuple[object, bo
     выше Y»), квартализация знаменателя испортила бы верную метрику; отделить
     один случай от другого по цитате нечем, а цена ошибки в эту сторону выше.
     """
-    t = (quote or "").lower()
-    if not any(m in t for m in _QUARTER_MARKERS):
+    if not _mentions_any_quarter(quote):
         return metric_ast, False
     if direction not in ("min", "max"):
         return metric_ast, False
