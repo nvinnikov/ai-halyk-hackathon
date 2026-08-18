@@ -1,7 +1,7 @@
 # Все цели идут через `uv run` ради воспроизводимого окружения из uv.lock.
 # `check` — локальное зеркало CI-гейта. Цели ниже `check` — репетиция
 # (задача 31): однословные команды на 9 августа под трёхчасовым таймером.
-.PHONY: install public-archive solve score lint typecheck test check \
+.PHONY: install public-archive solve score private-score lint typecheck test check \
 	run sanity eval-offline eval-live cassette-freeze determinism submit \
 	require-archive require-private-archive
 
@@ -29,6 +29,9 @@ solve: public-archive
 	./run.sh $(ARCHIVE)
 
 score: solve
+
+private-score: ## скор последнего прогона против прокси-ключа приватного набора
+	uv run python tools/score_private.py out/submission.json
 
 lint: install
 	uv run ruff format --check .
