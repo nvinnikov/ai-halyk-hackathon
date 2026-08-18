@@ -11,14 +11,21 @@ def test_narrows_when_quote_says_nothing_about_articles():
     assert unparse(ast) == "sub(agg(REVENUE, in), agg(OTHER_OPEX, out))"
 
 
-def test_keeps_rollup_when_quote_enumerates_articles():
+def test_narrows_when_articles_describe_covenant_denominator():
+    """Раунд правок 1 (рулинг team-lead): подсчёт маркеров-статей по ВСЕЙ
+    цитате неспасаем — H5 6.2 приватного набора перечисляет аренду,
+    коммунальные и страхование как ЗНАМЕНАТЕЛЬ ковенанта (сумма фиксированных
+    платежей), а не как состав вычитаемого в EBITDA, и старая эвристика
+    ошибочно сохраняла роллап OPEX_TOTAL. Правильный ответ — сузить: цитата
+    ничего не говорит о СОСТАВЕ EBITDA, значит действует умолчание по статье."""
     quote = (
-        "EBITDA означает Выручку за вычетом Операционных расходов, включая "
-        "расходы на оплату труда, арендные платежи и коммунальные расходы"
+        "Отношение EBITDA Заёмщика к сумме арендных платежей, коммунальных "
+        "расходов и страховых премий за тот же период должно составлять не "
+        "менее 2.28x."
     )
     ast, changed = narrow_opex(parse(_EBITDA_BROAD), quote)
-    assert not changed
-    assert unparse(ast) == _EBITDA_BROAD
+    assert changed
+    assert unparse(ast) == "sub(agg(REVENUE, in), agg(OTHER_OPEX, out))"
 
 
 def test_keeps_rollup_when_quote_says_all_operating_expenses():
@@ -57,3 +64,17 @@ def test_narrows_nested_sub_form():
     ast, changed = narrow_opex(parse(metric), "не допускать снижения EBITDA")
     assert changed
     assert unparse(ast) == "sub(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), agg(ONE_OFF, out))"
+
+
+def test_narrows_composite_subtrahend():
+    """Раунд правок 1 (рулинг team-lead, дефект №2): J1 6.3 приватного набора
+    вычитает названные статьи СУММОЙ — sub(REVENUE, add(OPEX_TOTAL, PAYROLL,
+    RENT)) — и роллап внутри add так же ошибочен, как голый agg. Границу не
+    расширяем дальше: узнаём только OPEX_TOTAL среди ПРЯМЫХ аргументов add
+    под EBITDA-подвыражением, остальные статьи (PAYROLL, RENT) не трогаем."""
+    metric = "sub(agg(REVENUE, in), add(agg(OPEX_TOTAL, out), agg(PAYROLL, out), agg(RENT, out)))"
+    ast, changed = narrow_opex(parse(metric), "не допускать снижения показателя")
+    assert changed
+    assert unparse(ast) == (
+        "sub(agg(REVENUE, in), add(agg(OTHER_OPEX, out), agg(PAYROLL, out), agg(RENT, out)))"
+    )

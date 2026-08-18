@@ -8,31 +8,18 @@
 
 import dataclasses
 
-from dsl import Agg, Sub, unparse
-
-# Маркеры того, что договор перечисляет статьи операционных расходов, то есть
-# понимает их ШИРОКО. Основы, не полные слова: падежи и вёрстка разные, а
-# основа одна. Два маркера, а не один: одиночное упоминание аренды в пункте
-# про EBITDA — это чаще знаменатель ковенанта, чем перечисление статей.
-_ARTICLE_MARKERS = (
-    "оплат",
-    "труд",
-    "фот",
-    "аренд",
-    "коммунал",
-    "налог",
-    "страхов",
-    "консультац",
-    "маркетинг",
-    "payroll",
-    "rent",
-    "utilit",
-    "insur",
-    "consult",
-    "marketing",
-)
+from dsl import Add, Agg, Sub, unparse
 
 # Маркеры прямого широкого прочтения: договор сам говорит «все операционные».
+# Это ЕДИНСТВЕННЫЙ путь к роллапу OPEX_TOTAL — подсчёт маркеров-статей
+# (аренда, коммуналка, страхование и т.п.) по всей цитате пункта был отвергнут
+# раундом правок 1: одна из ячеек приватного набора (коэффициент покрытия
+# постоянных платежей) перечисляет ИМЕННО эти статьи как
+# ЗНАМЕНАТЕЛЬ ковенанта (сумму фиксированных платежей), а не как состав
+# вычитаемого в EBITDA, и подсчёт слов не может отличить одно от другого —
+# у подсчёта нет доступа к тому, к какой части формулы относится
+# перечисление. Единственный надёжный сигнал — прямое высказывание «все
+# операционные расходы» именно о EBITDA.
 _TOTAL_MARKERS = (
     "всех операционных",
     "все операционные",
@@ -43,14 +30,10 @@ _TOTAL_MARKERS = (
     "all operating expense",
 )
 
-_MIN_ARTICLES_FOR_ROLLUP = 2
-
 
 def _quote_reads_broadly(quote: str) -> bool:
     t = (quote or "").lower()
-    if any(m in t for m in _TOTAL_MARKERS):
-        return True
-    return sum(1 for m in _ARTICLE_MARKERS if m in t) >= _MIN_ARTICLES_FOR_ROLLUP
+    return any(m in t for m in _TOTAL_MARKERS)
 
 
 def narrow_opex(metric_ast, quote: str) -> tuple[object, bool]:
@@ -62,7 +45,17 @@ def narrow_opex(metric_ast, quote: str) -> tuple[object, bool]:
     (355 млн против 3.2 млн у одного заёмщика). Переписывается только
     EBITDA-подвыражение sub(выручка, опекс) — ровно та же граница, что у
     solve._apply_ebitda_reading: ковенант о доле консультационных в
-    операционных расходах оперирует своим роллапом независимо."""
+    операционных расходах оперирует своим роллапом независимо.
+
+    Вычитаемое узнаётся в двух формах (раунд правок 1, дефект №2, ячейка
+    приватного набора про минимальный запас покрытия постоянных расходов):
+    голый agg(OPEX_TOTAL, ...) и add(...), среди прямых
+    аргументов которого есть agg(OPEX_TOTAL, ...) — договор вычитает
+    несколько названных статей суммой, и роллап внутри этой суммы столь же
+    ошибочен, как единственное вычитаемое. Остальные аргументы add (ФОТ,
+    аренда как отдельные названные статьи) не трогаются — граница уже, чем
+    «весь add», ровно на ту одну категорию, которая и есть неправильный
+    дефолт."""
     if _quote_reads_broadly(quote):
         return metric_ast, False
 
@@ -70,15 +63,22 @@ def narrow_opex(metric_ast, quote: str) -> tuple[object, bool]:
 
     def rewrite(node):
         nonlocal changed
-        if (
-            isinstance(node, Sub)
-            and isinstance(node.a, Agg)
-            and isinstance(node.b, Agg)
-            and node.a.category == "REVENUE"
-            and node.b.category == "OPEX_TOTAL"
-        ):
-            changed = True
-            return Sub(a=node.a, b=dataclasses.replace(node.b, category="OTHER_OPEX"))
+        if isinstance(node, Sub) and isinstance(node.a, Agg) and node.a.category == "REVENUE":
+            b = node.b
+            if isinstance(b, Agg) and b.category == "OPEX_TOTAL":
+                changed = True
+                return Sub(a=node.a, b=dataclasses.replace(b, category="OTHER_OPEX"))
+            if isinstance(b, Add) and any(
+                isinstance(arg, Agg) and arg.category == "OPEX_TOTAL" for arg in b.args
+            ):
+                changed = True
+                new_args = tuple(
+                    dataclasses.replace(arg, category="OTHER_OPEX")
+                    if isinstance(arg, Agg) and arg.category == "OPEX_TOTAL"
+                    else arg
+                    for arg in b.args
+                )
+                return Sub(a=node.a, b=dataclasses.replace(b, args=new_args))
         if not hasattr(node, "__dataclass_fields__"):
             return node
         # Несовпавший узел (в т.ч. Sub другой формы) всё равно спускается в
