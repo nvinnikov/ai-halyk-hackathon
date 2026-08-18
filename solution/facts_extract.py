@@ -11,7 +11,9 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 17
+FACTS_VERSION = 18
+# v18 — обрыв цепочки владения по циклу или предельной глубине виден алярмом
+# ownership_chain_broken (ревью задачи 5, раунд 1); расчёт не меняется.
 # v17 — промпт таблицы владения просит долю держателя-посредника отдельной
 # строкой, даже если она названа не в таблице, а прямым текстом: без неё
 # цепочка обрывается на первом звене и эффективная доля не считается.
@@ -426,7 +428,7 @@ def _percent_in_quote(number: Decimal, quote: str) -> bool:
 _MAX_OWNERSHIP_DEPTH = 4
 
 
-def _effective_shares(rows: list[dict]) -> dict[str, Decimal]:
+def _effective_shares(rows: list[dict], alarms: list[dict] | None = None) -> dict[str, Decimal]:
     """Эффективная доля = произведение долей по цепочке владения.
 
     Таблица KYC даёт рёбра: «доля 52% в T, удерживаемая через Mid» вместе с
@@ -437,8 +439,14 @@ def _effective_shares(rows: list[dict]) -> dict[str, Decimal]:
     косвенная) — побеждает БОЛЬШАЯ: связанность возникает от любого из путей,
     и занижение здесь стоило бы выпадения настоящей связанной стороны.
     Неизвестный держатель — строка считается прямой: она раскрыта в другом
-    документе, и обнулять её мы права не имеем. Цикл и глубина больше
-    _MAX_OWNERSHIP_DEPTH обрываются: это дефект таблицы, а не владение."""
+    документе, и обнулять её мы права не имеем.
+
+    Цикл и глубина больше _MAX_OWNERSHIP_DEPTH обрываются: это дефект таблицы,
+    а не владение — но, в отличие от неизвестного держателя, дефект таблицы
+    молчать не должен (соседние защиты в этом файле тоже оставляют след):
+    `alarms`, если передан, получает `ownership_chain_broken` с именем
+    организации и причиной обрыва (`cycle` / `max_depth`). Обрыв не меняет
+    расчёт — он всё так же откатывается к прямой доле строки."""
     by_name: dict[str, list[dict]] = {}
     for r in rows:
         by_name.setdefault(r["name"], []).append(r)
@@ -448,9 +456,30 @@ def _effective_shares(rows: list[dict]) -> dict[str, Decimal]:
         for r in by_name.get(name, []):
             share = r["share_percent"]
             via = (r.get("held_through") or "").strip()
-            if via and via != name and via in by_name and via not in seen and depth < _MAX_OWNERSHIP_DEPTH:
-                holder = resolve(via, seen | {name}, depth + 1)
-                share = share * holder / Decimal(100)
+            if via and via != name and via in by_name:
+                if via in seen:
+                    if alarms is not None:
+                        alarms.append(
+                            {
+                                "kind": "ownership_chain_broken",
+                                "name": name,
+                                "held_through": via,
+                                "reason": "cycle",
+                            }
+                        )
+                elif depth >= _MAX_OWNERSHIP_DEPTH:
+                    if alarms is not None:
+                        alarms.append(
+                            {
+                                "kind": "ownership_chain_broken",
+                                "name": name,
+                                "held_through": via,
+                                "reason": "max_depth",
+                            }
+                        )
+                else:
+                    holder = resolve(via, seen | {name}, depth + 1)
+                    share = share * holder / Decimal(100)
             best = max(best, share)
         return best
 
@@ -513,7 +542,7 @@ def _ownership_rows(facts: dict, raw: dict, doc: dict, text: str) -> tuple[list,
 
     # Перемножение долей по цепочке — арифметика, её делает код (_effective_shares);
     # модель только выписывает таблицу как напечатано.
-    effective = _effective_shares(parsed)
+    effective = _effective_shares(parsed, alarms=facts["alarms"])
     above: list[dict] = []
     below: list[dict] = []
     for item in parsed:

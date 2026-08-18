@@ -648,6 +648,90 @@ def test_largest_path_wins_when_entity_listed_twice():
     assert _effective_shares(rows)["T"] == Decimal("18")
 
 
+def test_cycle_raises_chain_broken_alarm():
+    alarms: list = []
+    rows = [_s("A", "50", via="B"), _s("B", "50", via="A")]
+    _effective_shares(rows, alarms=alarms)
+    alarm = next(a for a in alarms if a["kind"] == "ownership_chain_broken")
+    assert alarm["reason"] == "cycle"
+    assert alarm["name"] in {"A", "B"}
+
+
+def test_depth_limit_raises_chain_broken_alarm():
+    alarms: list = []
+    rows = [
+        _s("L0", "50", via="L1"),
+        _s("L1", "50", via="L2"),
+        _s("L2", "50", via="L3"),
+        _s("L3", "50", via="L4"),
+        _s("L4", "50", via="L5"),
+        _s("L5", "50"),
+    ]
+    _effective_shares(rows, alarms=alarms)
+    alarm = next(a for a in alarms if a["kind"] == "ownership_chain_broken")
+    assert alarm["reason"] == "max_depth"
+    assert alarm["name"] == "L4"
+    assert alarm["held_through"] == "L5"
+
+
+# --- эффективная доля через полный путь извлечения фактов --------------------
+
+CHAIN_TEXT = (
+    "Организация Доля голосующих прав Mid Holding LLP 15.0% "
+    "Target LLP 54.0% Direct Party LLP 25.0% "
+    "Организации, в которых Группа владеет 20.0% и более голосующих прав, "
+    "признаются связанными сторонами для целей Договора. "
+    "Доля в Target LLP удерживается косвенно через Mid Holding LLP."
+)
+CHAIN_DOSSIER = {
+    "account_id": "ACC-1",
+    "scenario_id": "S1",
+    "docs": [{"file": "kyc.pdf", "doc_type": "kyc", "date": "2025-12-31", "text": CHAIN_TEXT}],
+    "docs_rejected": [],
+    "quarantined": [],
+}
+
+
+def test_effective_share_dilutes_chain_but_keeps_unrelated_direct_share(tmp_path, monkeypatch):
+    """Прямая доля Target LLP (54.0%) не ниже порога (20.0%), но она удерживается
+    косвенно через Mid Holding LLP (15.0%): эффективная доля 8.10% ниже порога,
+    и Target LLP в набор связанных сторон не попадает. Рядом — Direct Party LLP
+    с прямой долей 25.0% и без держателя: она обязана попасть, иначе тест не
+    отличит сработавшую дилюцию от сломанного разбора по порогу целиком."""
+    own = ownership(
+        [
+            ("Mid Holding LLP", "15.0", "Mid Holding LLP 15.0%"),
+            ("Target LLP", "54.0", "Target LLP 54.0%", "Mid Holding LLP"),
+            ("Direct Party LLP", "25.0", "Direct Party LLP 25.0%"),
+        ]
+    )
+    monkeypatch.setattr(facts_extract.llm, "call", _dispatch([], own))
+    facts = facts_extract.extract_facts(tmp_path, CHAIN_DOSSIER)
+    assert facts["related_parties"] == ["Direct Party LLP"]
+
+
+def test_effective_share_removal_alarm_shows_direct_and_effective(tmp_path, monkeypatch):
+    """Модель назвала Target LLP связанной стороной по прямой доле (54.0%);
+    таблица раскрывает держателя (Mid Holding LLP, 15.0%), эффективная доля —
+    8.10%, ниже порога. Снятие видно алярмом с обеими величинами."""
+    own = ownership(
+        [
+            ("Mid Holding LLP", "15.0", "Mid Holding LLP 15.0%"),
+            ("Target LLP", "54.0", "Target LLP 54.0%", "Mid Holding LLP"),
+        ]
+    )
+    model = [{"name": "Target LLP", "quote": "Target LLP 54.0%"}]
+    monkeypatch.setattr(facts_extract.llm, "call", _dispatch(model, own))
+    facts = facts_extract.extract_facts(tmp_path, CHAIN_DOSSIER)
+    assert facts["related_parties"] == []
+    dilution = next(a for a in facts["alarms"] if a["kind"] == "ownership_effective_share")
+    assert dilution["name"] == "Target LLP"
+    assert dilution["direct"] == "54.0"
+    assert dilution["effective"] == "8.10"
+    removal = next(a for a in facts["alarms"] if a["kind"] == "ownership_below_threshold")
+    assert removal["name"] == "Target LLP"
+
+
 # --- капитальные затраты Группы (документ группового уровня) -----------------
 
 GROUP_TEXT = (
