@@ -681,10 +681,17 @@ def _extracted_inputs(
                         # приоре на ровном месте (ревью PR #9, 26-я волна).
                         print(f"ALARM doc_fact_resolve_error {sc} {_cl} {key}: {exc!r}", flush=True)
                         resolved = None
+                    metric_is_this_doc = False
+                    try:
+                        metric_ast = parse(sp["metric"])
+                        metric_is_this_doc = isinstance(metric_ast, Doc) and metric_ast.key == key
+                    except DslError:
+                        metric_is_this_doc = False
                     if resolved is not None and _resolve_echoes_limit(
                         resolved["value"],
                         sp.get("limit"),
                         resolved.get("quote_outside_agreement", False),
+                        whole_metric=metric_is_this_doc,
                     ):
                         # Мерянный на group_capex паттерн, обобщённый на
                         # произвольный ключ: адресный резолв просит число по
@@ -695,7 +702,11 @@ def _extracted_inputs(
                         # цитате. Признак эха двойной: равенство порогу И
                         # источник цитаты (resolve_doc_fact атрибутирует её по
                         # документам досье) — законное равенство из полиса,
-                        # процитированное вне договора, гард не трогает.
+                        # процитированное вне договора, гард не трогает. Но
+                        # только если doc-ключ — часть метрики: когда он и
+                        # есть вся метрика ячейки (metric_is_this_doc), это
+                        # оправдание не действует — тавтология статуса не
+                        # бывает законной.
                         print(
                             f"ALARM doc_fact_resolve_echoes_limit {sc} {_cl}: {key}",
                             flush=True,
@@ -752,7 +763,9 @@ def _extracted_inputs(
     return facts_by_sc, specs_by_sc
 
 
-def _resolve_echoes_limit(value, limit, quote_outside_agreement: bool = False) -> bool:
+def _resolve_echoes_limit(
+    value, limit, quote_outside_agreement: bool = False, whole_metric: bool = False
+) -> bool:
     """Резолв вернул порог самой ячейки, взяв его из текста договора, — эхо.
 
     Признака два, и нужны оба: равенство порогу по модулю (порог в цитате
@@ -765,12 +778,21 @@ def _resolve_echoes_limit(value, limit, quote_outside_agreement: bool = False) -
     настоящий факт, не эхо (полис ровно на требуемую сумму). Неоднозначный
     источник (голое число в обоих текстах, сшитая цитата) остаётся эхом —
     цена этой ошибки ограничена статусом, обратная — уверенным вердиктом
-    впритык. Неразбираемое значение или отсутствующий порог — не эхо."""
+    впритык. Неразбираемое значение или отсутствующий порог — не эхо.
+
+    Оправдание по источнику цитаты не действует, когда doc-ключ — ВСЯ метрика
+    ячейки: величина, тождественно равная порогу, не измеряет ничего, она
+    делает вердикт «впритык соблюдено» независимо от данных. Законное
+    совпадение полиса с порогом мыслимо для слагаемого, но не для метрики
+    целиком; на приватном наборе этот путь стоил трёх ячеек, и все три —
+    ложный COMPLIANT."""
     try:
         if abs(Decimal(str(value))) != abs(Decimal(str(limit))):
             return False
     except (InvalidOperation, TypeError, ValueError):
         return False
+    if whole_metric:
+        return True
     return not quote_outside_agreement
 
 

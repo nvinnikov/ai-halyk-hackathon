@@ -342,6 +342,24 @@ def test_resolve_echoes_limit_guard():
     assert not solve._resolve_echoes_limit("100", None, False)
 
 
+def test_echo_guard_forgives_outside_quote_for_a_part_of_metric():
+    assert not solve._resolve_echoes_limit(
+        "250000", Decimal("250000"), quote_outside_agreement=True, whole_metric=False
+    )
+
+
+def test_echo_guard_is_unconditional_when_doc_is_the_whole_metric():
+    assert solve._resolve_echoes_limit(
+        "250000", Decimal("250000"), quote_outside_agreement=True, whole_metric=True
+    )
+
+
+def test_echo_guard_ignores_values_below_limit():
+    assert not solve._resolve_echoes_limit(
+        "249999", Decimal("250000"), quote_outside_agreement=True, whole_metric=True
+    )
+
+
 def test_extracted_cellspec_no_shadow_when_template_matches_extracted():
     # Формулы совпали — подменять нечего, тень не нужна: лишний проход по
     # леджеру ради заведомо равного значения не делаем.
