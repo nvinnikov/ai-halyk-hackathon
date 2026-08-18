@@ -163,3 +163,25 @@ def test_quant_and_quarter_too_far_apart_does_not_match():
     )
     ast, changed = quarterly(parse(_EBITDA), quote, "min")
     assert not changed
+
+
+def test_sentence_boundary_blocks_window_even_with_one_word_gap():
+    """Раунд правок 2 (Important): окно разрыва не должно перескакивать точку.
+    Квантор и «квартал» разделены ровно одним словом, но это слово —
+    последнее в своём предложении, а «квартал» открывает следующее. Цитаты
+    пунктов в этих договорах многосоставны (см. диагностику F2 6.1 в раунде
+    0) — точка внутри одной цитаты не крайний случай, а наблюдаемая форма."""
+    quote = "Любой платёж. Квартал начинается заново."
+    ast, changed = quarterly(parse(_EBITDA), quote, "min")
+    assert not changed
+
+
+def test_ratio_nested_deeper_in_tree_is_left_alone():
+    """Раунд правок 2 (Minor): отказ на отношениях смотрит на всё дерево, а
+    не только на корень — извлечённая формула вправе положить ratio() глубже
+    (например, внутри add())."""
+    metric = "add(ratio(agg(CAPEX, out), agg(REVENUE, in)), agg(ONE_OFF, out))"
+    quote = "не допускать снижения показателя за любой финансовый квартал"
+    ast, changed = quarterly(parse(metric), quote, "min")
+    assert not changed
+    assert unparse(ast) == metric

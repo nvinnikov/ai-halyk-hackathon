@@ -115,12 +115,21 @@ def narrow_opex(metric_ast, quote: str) -> tuple[object, bool]:
 # совсем другого и квартализовал бы годовую метрику там, где пункт вообще не
 # про кварталы. На публичном наборе договоров с поквартальными пунктами не
 # было, поэтому правило там обязано молчать.
+#
+# Окно разрыва не пересекает границу предложения (раунд правок 2): цитаты
+# пунктов в этих договорах многосоставны, точка внутри одной цитаты —
+# наблюдаемая форма, а не крайний случай (см. историю ячейки, потерянной
+# вставленным прилагательным между квантором и «кварталом» в том же
+# предложении). Квантор в конце одного предложения и «квартал» в начале
+# следующего оказались бы рядом чисто геометрически — окно ищется отдельно
+# в каждом предложении, а не по цитате целиком.
 _QUANT_STEMS_RU = ("любо", "кажд")
 _QUANT_WORDS_EN = ("any", "each")
 _QUARTER_STEMS = ("квартал", "quarter")
 _MAX_GAP_WORDS = 2
 
 _WORD_RE = re.compile(r"[\w-]+", re.UNICODE)
+_SENTENCE_SPLIT_RE = re.compile(r"[.;]+")
 
 
 def _is_quant_word(word: str) -> bool:
@@ -131,9 +140,8 @@ def _is_quarter_word(word: str) -> bool:
     return word.startswith(_QUARTER_STEMS)
 
 
-def _mentions_any_quarter(quote: str) -> bool:
-    """Пункт меряет «любой»/«каждый» квартал — по образцу, а не по фразе."""
-    words = _WORD_RE.findall((quote or "").lower())
+def _sentence_mentions_any_quarter(sentence: str) -> bool:
+    words = _WORD_RE.findall(sentence)
     for i, word in enumerate(words):
         if not _is_quant_word(word):
             continue
@@ -141,6 +149,12 @@ def _mentions_any_quarter(quote: str) -> bool:
         if any(_is_quarter_word(w) for w in window):
             return True
     return False
+
+
+def _mentions_any_quarter(quote: str) -> bool:
+    """Пункт меряет «любой»/«каждый» квартал — по образцу, а не по фразе."""
+    t = (quote or "").lower()
+    return any(_sentence_mentions_any_quarter(s) for s in _SENTENCE_SPLIT_RE.split(t))
 
 
 def _quarterize(node, n: int):
@@ -183,7 +197,10 @@ def quarterly(metric_ast, quote: str, direction: str | None) -> tuple[object, bo
         return metric_ast, False
     if direction not in ("min", "max"):
         return metric_ast, False
-    if isinstance(metric_ast, Ratio):
+    # По всему дереву, не только по корню (раунд правок 2, Minor): извлечённая
+    # формула вправе положить ratio() глубже, а квартализация ветки, где
+    # знаменатель ей не рад, ломает верный ответ — отказ дешевле лишней ячейки.
+    if any(isinstance(n, Ratio) for n in walk(metric_ast)):
         return metric_ast, False
     if any(isinstance(n, Quarter) for n in walk(metric_ast)):
         return metric_ast, False
