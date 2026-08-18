@@ -11,7 +11,12 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 15
+FACTS_VERSION = 17
+# v17 — промпт таблицы владения просит долю держателя-посредника отдельной
+# строкой, даже если она названа не в таблице, а прямым текстом: без неё
+# цепочка обрывается на первом звене и эффективная доля не считается.
+# v16 — связанность считается по эффективной доле владения (произведению по
+# цепочке через held_through), а не по одной строке таблицы KYC.
 # v15 — ревью PR #23, одиннадцатая волна: непрочитанное примечание видно
 # алярмом, а не только отсутствием ключа.
 # v14 — ревью PR #23, десятая волна: неназванный масштаб виден алярмом.
@@ -198,7 +203,7 @@ FOCUS = {
     "other": "Фокус: любые факты из перечисленных ниже.",
 }
 
-OWNERSHIP_SCHEMA_VERSION = "ownership-1"
+OWNERSHIP_SCHEMA_VERSION = "ownership-2"
 
 # Отдельный вызов, а не поля в FACTS_SCHEMA: промпт фактов остаётся байт в байт
 # тем же, поэтому его ключи кэша не меняются и кассета переживает эту правку.
@@ -212,9 +217,10 @@ OWNERSHIP_SCHEMA = {
                 "properties": {
                     "name": {"type": "string"},
                     "share_percent": {"type": "string"},
+                    "held_through": {"type": "string"},
                     "quote": {"type": "string"},
                 },
-                "required": ["name", "share_percent", "quote"],
+                "required": ["name", "share_percent", "held_through", "quote"],
                 "additionalProperties": False,
             },
         },
@@ -228,9 +234,15 @@ OWNERSHIP_SCHEMA = {
 OWNERSHIP_PROMPT = """Ниже — документ комплаенс-проверки заёмщика. Выпиши из него
 две вещи, ничего не сравнивая и не вычисляя:
 
-- shares: таблица участия — организация (name), её доля в процентах числом без
-  знака процента (share_percent, строкой) и дословная цитата строки таблицы
-  (quote). Если таблицы участия нет — пустой список.
+- shares: доли участия — по каждой организации, чья доля голосующих прав
+  названа в документе (строкой таблицы участия ИЛИ отдельным предложением вне
+  таблицы — например, о доле самой Группы в промежуточной организации, через
+  которую держится косвенная доля): организация (name), её доля в процентах
+  числом без знака процента (share_percent, строкой), держатель доли
+  (held_through — имя организации, ЧЕРЕЗ которую доля удерживается, если
+  документ называет её; пустая строка, если доля прямая) и дословная цитата
+  (quote). Перемножать доли не нужно: выпиши как напечатано, каждую отдельной
+  строкой. Долей в документе нет — пустой список.
 - threshold_percent: доля в процентах, начиная с которой документ признаёт
   организацию связанной стороной, числом строкой; threshold_quote — дословная
   цитата предложения, где этот порог назван. Если порог в документе не назван —
@@ -411,6 +423,40 @@ def _percent_in_quote(number: Decimal, quote: str) -> bool:
     return any(_percent(m.group()) == number for m in _STANDALONE_NUMBER.finditer(quote))
 
 
+_MAX_OWNERSHIP_DEPTH = 4
+
+
+def _effective_shares(rows: list[dict]) -> dict[str, Decimal]:
+    """Эффективная доля = произведение долей по цепочке владения.
+
+    Таблица KYC даёт рёбра: «доля 52% в T, удерживаемая через Mid» вместе с
+    «доля 24% в Mid» означает эффективные 12.48% в T, а не 52%. Сравнение с
+    порогом делает код (арифметика), модель только выписывает рёбра.
+
+    Организация может быть названа несколькими строками (прямая доля и
+    косвенная) — побеждает БОЛЬШАЯ: связанность возникает от любого из путей,
+    и занижение здесь стоило бы выпадения настоящей связанной стороны.
+    Неизвестный держатель — строка считается прямой: она раскрыта в другом
+    документе, и обнулять её мы права не имеем. Цикл и глубина больше
+    _MAX_OWNERSHIP_DEPTH обрываются: это дефект таблицы, а не владение."""
+    by_name: dict[str, list[dict]] = {}
+    for r in rows:
+        by_name.setdefault(r["name"], []).append(r)
+
+    def resolve(name: str, seen: frozenset, depth: int) -> Decimal:
+        best = Decimal(0)
+        for r in by_name.get(name, []):
+            share = r["share_percent"]
+            via = (r.get("held_through") or "").strip()
+            if via and via != name and via in by_name and via not in seen and depth < _MAX_OWNERSHIP_DEPTH:
+                holder = resolve(via, seen | {name}, depth + 1)
+                share = share * holder / Decimal(100)
+            best = max(best, share)
+        return best
+
+    return {name: resolve(name, frozenset(), 0) for name in sorted(by_name)}
+
+
 def _ownership_rows(facts: dict, raw: dict, doc: dict, text: str) -> tuple[list, list]:
     """Строки таблицы владения, разложенные по порогу: (выше-или-равно, ниже).
 
@@ -458,14 +504,35 @@ def _ownership_rows(facts: dict, raw: dict, doc: dict, text: str) -> tuple[list,
     if threshold is None:
         return [], []
 
-    above: list[dict] = []
-    below: list[dict] = []
+    parsed: list[dict] = []
     for item in raw["shares"]:
         share = number_from_quote(item["share_percent"], item["quote"], "ownership_share")
         if share is None:
             continue
-        row = {**item, "threshold_percent": raw["threshold_percent"]}
-        (above if share >= threshold else below).append(row)
+        parsed.append({**item, "share_percent": share, "held_through": item.get("held_through", "")})
+
+    # Перемножение долей по цепочке — арифметика, её делает код (_effective_shares);
+    # модель только выписывает таблицу как напечатано.
+    effective = _effective_shares(parsed)
+    above: list[dict] = []
+    below: list[dict] = []
+    for item in parsed:
+        eff = effective.get(item["name"], item["share_percent"])
+        if eff != item["share_percent"]:
+            facts["alarms"].append(
+                {
+                    "kind": "ownership_effective_share",
+                    "name": item["name"],
+                    "direct": str(item["share_percent"]),
+                    "effective": str(eff),
+                }
+            )
+        row = {
+            **item,
+            "share_percent": str(item["share_percent"]),
+            "threshold_percent": raw["threshold_percent"],
+        }
+        (above if eff >= threshold else below).append(row)
     return above, below
 
 

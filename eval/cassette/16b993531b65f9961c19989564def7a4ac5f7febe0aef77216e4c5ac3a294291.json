@@ -1,0 +1,28 @@
+{
+ "result": {
+  "shares": [
+   {
+    "name": "Aktobe Bridge Finance Advisers",
+    "quote": "Aktobe Bridge Finance Advisers 29.2%",
+    "share_percent": "29.2"
+   },
+   {
+    "name": "Aktobe Depot Services LLP",
+    "quote": "Aktobe Depot Services LLP 54.0%",
+    "share_percent": "54.0"
+   },
+   {
+    "name": "Aktobe Terminal Properties LLP",
+    "quote": "Aktobe Terminal Properties LLP 13.5%",
+    "share_percent": "13.5"
+   },
+   {
+    "name": "Kargaly Holdings LLP",
+    "quote": "Kargaly Holdings LLP 41.6%",
+    "share_percent": "41.6"
+   }
+  ],
+  "threshold_percent": "30.0",
+  "threshold_quote": "Организации, в которых Группа владеет 30.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

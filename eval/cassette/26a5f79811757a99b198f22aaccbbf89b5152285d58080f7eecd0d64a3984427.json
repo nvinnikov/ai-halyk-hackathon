@@ -1,0 +1,26 @@
+{
+ "result": {
+  "shares": [
+   {
+    "held_through": "",
+    "name": "\"Saryarka Capital Partners\" LLP",
+    "quote": "\"Saryarka Capital Partners\" LLP 42.3%",
+    "share_percent": "42.3"
+   },
+   {
+    "held_through": "",
+    "name": "Karaganda Energy Supply JSC",
+    "quote": "Karaganda Energy Supply JSC 12.1%",
+    "share_percent": "12.1"
+   },
+   {
+    "held_through": "",
+    "name": "Saryarka Terminal Properties LLP",
+    "quote": "Saryarka Terminal Properties LLP 33.5%",
+    "share_percent": "33.5"
+   }
+  ],
+  "threshold_percent": "36.0",
+  "threshold_quote": "Организации, в которых Группа владеет 36.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

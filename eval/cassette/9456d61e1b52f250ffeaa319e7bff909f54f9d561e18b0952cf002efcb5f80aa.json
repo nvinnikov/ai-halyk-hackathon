@@ -1,0 +1,182 @@
+{
+ "result": {
+  "categories": [
+   {
+    "category": "RENT",
+    "description": "1. Advance storage contract settlement"
+   },
+   {
+    "category": "REVENUE",
+    "description": "2. Bulk cement sales — Q4 deliveries"
+   },
+   {
+    "category": "CAPEX",
+    "description": "3. Concentrator machinery instalment"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "4. Depot roof refurbishment works"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "5. Emergency flood damage maintenance works"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "6. Engineering advisory — silo expansion"
+   },
+   {
+    "category": "CAPEX",
+    "description": "7. Fibre backbone machinery installation"
+   },
+   {
+    "category": "CAPEX",
+    "description": "8. Grain silo aeration equipment"
+   },
+   {
+    "category": "CAPEX",
+    "description": "9. Imported catalyst processing equipment"
+   },
+   {
+    "category": "CAPEX",
+    "description": "10. Imported clinker grinding equipment"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "11. Intercompany advisory retainer — H1 2025"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "12. Intercompany advisory settlement"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "13. Intercompany distribution settlement"
+   },
+   {
+    "category": "CAPEX",
+    "description": "14. Intra-group transfer of warehouse equipment"
+   },
+   {
+    "category": "CAPEX",
+    "description": "15. Kiln conveyor machinery upgrade"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "16. Legal and consulting fees 2025"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "17. Network operations and maintenance — full year"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "18. Non-recurring extruder line refurbishment programme"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "19. Non-recurring legacy 3G network refurbishment"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "20. Non-recurring storm damage repair to warehouse roof"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "21. Ordinary-course management advisory fees"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "22. Plant operating costs and maintenance"
+   },
+   {
+    "category": "CAPEX",
+    "description": "23. Processing equipment transfer to group entity"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "24. Rail handling and maintenance costs"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "25. Rail siding maintenance and handling charges"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "26. Rail siding maintenance and operating costs"
+   },
+   {
+    "category": "CAPEX",
+    "description": "27. Refrigeration machinery instalment"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "28. Restructuring-related plant repair and line decommissioning"
+   },
+   {
+    "category": "CAPEX",
+    "description": "29. Rolling equipment transfer to group entity"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "30. Routine plant maintenance and operating costs"
+   },
+   {
+    "category": "UTILITIES",
+    "description": "31. Sewer discharge levy 2024"
+   },
+   {
+    "category": "UTILITIES",
+    "description": "32. Sewer discharge levy — Atyrau terminal, July"
+   },
+   {
+    "category": "UTILITIES",
+    "description": "33. Sewer discharge levy — Ekibastuz block B"
+   },
+   {
+    "category": "UTILITIES",
+    "description": "34. Sewer discharge levy — Ekibastuz block B, November 2025"
+   },
+   {
+    "category": "UTILITIES",
+    "description": "35. Sewer discharge levy — Oskemen unit, Q3 2026"
+   },
+   {
+    "category": "UTILITIES",
+    "description": "36. Sewer discharge levy — Shymkent depot, Q4 2026"
+   },
+   {
+    "category": "UTILITIES",
+    "description": "37. Sewer discharge levy — Uralsk annex"
+   },
+   {
+    "category": "UTILITIES",
+    "description": "38. Sewer discharge levy — instalment 1"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "39. Storm damage emergency repair works"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "40. Storm damage repair — microwave link restoration"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "41. Strategy consulting retainer — network roadmap"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "42. Technical advisory retainer"
+   },
+   {
+    "category": "CAPEX",
+    "description": "43. Transfer of production line machinery and tooling"
+   },
+   {
+    "category": "REVENUE",
+    "description": "44. Wholesale interconnect revenue Q4 2025"
+   }
+  ]
+ }
+}

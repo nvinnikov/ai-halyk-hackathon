@@ -1,0 +1,62 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "springing_net_leverage_threshold",
+    "quote": "when its Net Leverage Ratio exceeds 2.50x, sell, transfer, contribute or otherwise dispose of any asset constituting Collateral to any Unrestricted Subsidiary where the aggregate value of all such transfers exceeds $500,000.00",
+    "value": "2.50"
+   },
+   {
+    "key": "unrestricted_subsidiary_transfer_limit",
+    "quote": "where the aggregate value of all such transfers exceeds $500,000.00",
+    "value": "500000"
+   },
+   {
+    "key": "max_net_leverage_ratio",
+    "quote": "shall not permit its Net Leverage Ratio to exceed 3.00x as measured over the period from 2025-01-01 to 2025-12-31",
+    "value": "3.00"
+   },
+   {
+    "key": "max_quarterly_revenue_concentration",
+    "quote": "shall not permit Revenue recognised in any single fiscal quarter falling within the period from 2025-01-01 to 2025-12-31 to exceed 0.30x, expressed as a multiple of Revenue for that period taken as a whole",
+    "value": "0.30"
+   },
+   {
+    "key": "permitted_other_indebtedness_limit",
+    "quote": "other indebtedness not exceeding $9,000,000.00 in aggregate at any time",
+    "value": "9000000"
+   },
+   {
+    "key": "asset_disposal_limit",
+    "quote": "disposals of fixed or other non-current assets where the aggregate value disposed of in any financial year exceeds $5,700,000.00",
+    "value": "5700000"
+   },
+   {
+    "key": "unbudgeted_capex_limit",
+    "quote": "Capital expenditure outside that budget is permitted provided the aggregate in any financial year does not exceed $5,550,000.00",
+    "value": "5550000"
+   },
+   {
+    "key": "minimum_collateral_value",
+    "quote": "the aggregate appraised value of which is not less than $56,500,000.00 as at the date of the relevant security document",
+    "value": "56500000"
+   },
+   {
+    "key": "minimum_property_insurance",
+    "quote": "insure the secured assets against loss and damage for a sum insured of not less than $28,000,000.00",
+    "value": "28000000"
+   },
+   {
+    "key": "minimum_third_party_liability_insurance",
+    "quote": "maintain third-party liability cover of not less than $4,250,000.00",
+    "value": "4250000"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

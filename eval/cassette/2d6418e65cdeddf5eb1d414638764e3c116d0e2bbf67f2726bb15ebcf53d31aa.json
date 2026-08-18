@@ -1,0 +1,22 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "ebitda_addback_materiality",
+    "quote": "Разовыми для целей ковенантов признаются статьи в сумме не менее $1,200,000.00; статьи меньшей суммы к EBITDA не прибавляются.",
+    "value": "1200000.00"
+   },
+   {
+    "key": "ebitda_addback_1",
+    "quote": "Вывод из эксплуатации экструзионной линии«Ural Plant Decommissioning LLP»$2,341,668.72",
+    "value": "2341668.72"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

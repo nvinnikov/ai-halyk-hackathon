@@ -1,0 +1,26 @@
+{
+ "result": {
+  "shares": [
+   {
+    "held_through": "",
+    "name": "KEGOC National Grid JSC",
+    "quote": "KEGOC National Grid JSC 5.1%",
+    "share_percent": "5.1"
+   },
+   {
+    "held_through": "",
+    "name": "Taldykorgan Plant Services LLP",
+    "quote": "Taldykorgan Plant Services LLP 18.9%",
+    "share_percent": "18.9"
+   },
+   {
+    "held_through": "",
+    "name": "Zhetysu Capital LLP",
+    "quote": "Zhetysu Capital LLP 33.4%",
+    "share_percent": "33.4"
+   }
+  ],
+  "threshold_percent": "20",
+  "threshold_quote": "Организации, в которых Группе принадлежит не менее одной пятой голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

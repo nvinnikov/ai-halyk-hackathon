@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "6.1",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "250000",
+    "metric": "sub(agg(ALL, out, [period(2025-01-01,2025-12-31), counterparty_in(related_parties)]), doc(related_party_consulting_basket))",
+    "quote": "Заёмщик, Atyrau Petrochemicals JSC, обязуется не допускать превышения совокупными платежами связанным сторонам за период с 2025-01-01 по 2025-12-31 величины $250,000.00, после исключения разрешённой корзины в размере до $300,000.00 таких платежей, совершённых в обычном порядке и надлежащим образом квалифицированных как Консультационные услуги.",
+    "trigger": null
+   },
+   {
+    "clause": "6.2",
+    "confidence": 0.95,
+    "direction": "min",
+    "limit": "0.67",
+    "metric": "ratio(sub(agg(REVENUE, in, [period(2025-01-01,2025-12-31)]), add(agg(PAYROLL, out, [period(2025-01-01,2025-12-31)]), agg(TAX, out, [period(2025-01-01,2025-12-31)]))), agg(REVENUE, in, [period(2025-01-01,2025-12-31)]))",
+    "quote": "Заёмщик, Atyrau Petrochemicals JSC, обязуется обеспечить, чтобы операционная маржа после расходов на персонал за период с 2025-01-01 по 2025-12-31 составляла не менее 0.67x.",
+    "trigger": null
+   },
+   {
+    "clause": "6.3",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "400000",
+    "metric": "agg(MARKETING, out, [period(2025-01-01,2025-12-31)])",
+    "quote": "Условием предоставления заёмных средств является то, что совокупные расходы Atyrau Petrochemicals JSC по статье «Маркетинговые расходы» за период с 2025-01-01 по 2025-12-31 не превысят $400,000.00.",
+    "trigger": null
+   }
+  ]
+ }
+}

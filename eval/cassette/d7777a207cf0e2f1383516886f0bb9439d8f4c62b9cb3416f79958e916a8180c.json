@@ -1,0 +1,26 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "related_party_threshold",
+    "quote": "Организации, в которых Группе принадлежит не менее трёх десятых голосующих прав, признаются связанными сторонами для целей Договора.",
+    "value": "0.3"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [
+   {
+    "name": "Aktobe Capital Advisers LLP",
+    "quote": "Aktobe Capital Advisers LLP 37.4%"
+   },
+   {
+    "name": "Ilek Trading House LLP",
+    "quote": "Ilek Trading House LLP 33.1%"
+   }
+  ],
+  "unrestricted_subsidiaries": []
+ }
+}

@@ -1,0 +1,26 @@
+{
+ "result": {
+  "shares": [
+   {
+    "held_through": "",
+    "name": "Aktobe Elevator Services LLP",
+    "quote": "Aktobe Elevator Services LLP 28.6%",
+    "share_percent": "28.6"
+   },
+   {
+    "held_through": "",
+    "name": "Aral Capital Partners, LLP",
+    "quote": "Aral Capital Partners, LLP 33.4%",
+    "share_percent": "33.4"
+   },
+   {
+    "held_through": "",
+    "name": "Ural Conveyor Works LLP",
+    "quote": "Ural Conveyor Works LLP 7.3%",
+    "share_percent": "7.3"
+   }
+  ],
+  "threshold_percent": "30.0",
+  "threshold_quote": "Организации, в которых Группа владеет 30.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

@@ -1,0 +1,26 @@
+{
+ "result": {
+  "shares": [
+   {
+    "held_through": "",
+    "name": "Ertis Capital, LLP",
+    "quote": "Ertis Capital, LLP 31.4%",
+    "share_percent": "31.4"
+   },
+   {
+    "held_through": "",
+    "name": "Irtysh Advisory Bureau",
+    "quote": "Irtysh Advisory Bureau 18.6%",
+    "share_percent": "18.6"
+   },
+   {
+    "held_through": "",
+    "name": "Pavlodar Plant Services LLP",
+    "quote": "Pavlodar Plant Services LLP 12.5%",
+    "share_percent": "12.5"
+   }
+  ],
+  "threshold_percent": "20.0",
+  "threshold_quote": "Организации, в которых Группа владеет 20.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

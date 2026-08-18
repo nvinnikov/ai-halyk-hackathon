@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "Пункт 6.1",
+    "confidence": 1.0,
+    "direction": "max",
+    "limit": "20000000.00",
+    "metric": "doc('group_capex')",
+    "quote": "Заёмщик, Turkestan Grain Holding JSC, обязуется не допускать превышения совокупными Капитальными затратами консолидированной Группы за период с 2025-01-01 по 2025-12-31 величины $20,000,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.2",
+    "confidence": 1.0,
+    "direction": "min",
+    "limit": "250000.00",
+    "metric": "agg(INSURANCE, out, period(2025-01-01,2025-12-31))",
+    "quote": "Если совокупные капитальные затраты Заёмщика (Turkestan Grain Holding JSC) за период с 2025-01-01 по 2025-12-31 превышают $1,500,000.00, Заёмщик обязуется поддерживать страховые премии в размере не менее $250,000.00 за указанный период.",
+    "trigger": "gt(agg(CAPEX, out, period(2025-01-01,2025-12-31)), doc('capex_insurance_threshold'))"
+   },
+   {
+    "clause": "Пункт 6.3",
+    "confidence": 1.0,
+    "direction": "max",
+    "limit": "280000.00",
+    "metric": "agg(ALL, out, period(2025-01-01,2025-12-31), counterparty_in(related_parties))",
+    "quote": "Заёмщик обязуется обеспечить, чтобы совокупный размер Ограниченных платежей, совершённых Turkestan Grain Holding JSC в пользу любой связанной стороны в период с 2025-01-01 по 2025-12-31, не превышал $280,000.00.",
+    "trigger": null
+   }
+  ]
+ }
+}

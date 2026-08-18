@@ -1,0 +1,23 @@
+{
+ "result": {
+  "shares": [
+   {
+    "name": "Astana Network Maintenance LLP",
+    "quote": "Astana Network Maintenance LLP 24.1%",
+    "share_percent": "24.1"
+   },
+   {
+    "name": "Esil Capital Partners LLP.",
+    "quote": "Esil Capital Partners LLP. 36.5%",
+    "share_percent": "36.5"
+   },
+   {
+    "name": "Nur-Sultan Municipal Services JSC",
+    "quote": "Nur-Sultan Municipal Services JSC 3.2%",
+    "share_percent": "3.2"
+   }
+  ],
+  "threshold_percent": "25.0",
+  "threshold_quote": "Организации, в которых Группа владеет 25.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

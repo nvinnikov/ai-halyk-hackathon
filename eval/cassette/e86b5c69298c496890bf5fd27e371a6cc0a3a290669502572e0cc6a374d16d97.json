@@ -1,0 +1,18 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [
+   {
+    "counterparty": null,
+    "quote": "Операция TXN-S1-0015, первоначально учтённая как Операционные расходы ($295,643.24), переклассифицирована для целей соблюдения ковенантов как Капитальные затраты.",
+    "to_category": "CAPEX",
+    "txn_id": "TXN-S1-0015"
+   }
+  ],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

@@ -1,0 +1,23 @@
+{
+ "result": {
+  "shares": [
+   {
+    "name": "Bühler Grain Systems LLP",
+    "quote": "Bühler Grain Systems LLP 9.8%",
+    "share_percent": "9.8"
+   },
+   {
+    "name": "Syrdarya Capital L.L.P.",
+    "quote": "Syrdarya Capital L.L.P. 32.1%",
+    "share_percent": "32.1"
+   },
+   {
+    "name": "Turkestan Rail Operations LLP",
+    "quote": "Turkestan Rail Operations LLP 24.6%",
+    "share_percent": "24.6"
+   }
+  ],
+  "threshold_percent": "25",
+  "threshold_quote": "Организации, в которых Группе принадлежит не менее одной четверти голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

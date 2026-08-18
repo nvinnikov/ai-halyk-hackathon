@@ -1,0 +1,16 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [
+   {
+    "quote": "Операция TXN-J1-0080 (счёт-фактура от 2025-09-26) относится к услугам, оказанным в период с 2026-01-12 по 2026-03-31.",
+    "txn_id": "TXN-J1-0080"
+   }
+  ],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

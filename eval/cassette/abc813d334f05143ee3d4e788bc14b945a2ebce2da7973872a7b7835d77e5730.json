@@ -1,0 +1,17 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "ebitda_addback_1",
+    "quote": "Операция TXN-S3-0004 ($1,018,162.53) является разовой статьёй, прибавляемой к EBITDA для целей ковенантов.",
+    "value": "1018162.53"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

@@ -1,0 +1,23 @@
+{
+ "result": {
+  "shares": [
+   {
+    "name": "Astyk Trans Export JSC",
+    "quote": "Astyk Trans Export JSC 4.9%",
+    "share_percent": "4.9"
+   },
+   {
+    "name": "Qyzylorda Rail Operations LLP",
+    "quote": "Qyzylorda Rail Operations LLP 19.3%",
+    "share_percent": "19.3"
+   },
+   {
+    "name": "Syrdarya Capital, LLP",
+    "quote": "Syrdarya Capital, LLP 27.8%",
+    "share_percent": "27.8"
+   }
+  ],
+  "threshold_percent": "20",
+  "threshold_quote": "Организации, в которых Группе принадлежит не менее одной пятой голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

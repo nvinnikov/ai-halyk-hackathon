@@ -1,0 +1,19 @@
+{
+ "result": {
+  "additions": "",
+  "additions_quote": "",
+  "amount_scale": "",
+  "closing_quote": "",
+  "closing_value": "",
+  "currency": "",
+  "depreciation": "",
+  "depreciation_quote": "",
+  "no_disposals": false,
+  "no_disposals_quote": "",
+  "opening_quote": "",
+  "opening_value": "",
+  "other_movements": false,
+  "other_movements_quote": "",
+  "units_quote": ""
+ }
+}

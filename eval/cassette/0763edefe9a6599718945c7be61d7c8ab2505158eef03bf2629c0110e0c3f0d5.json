@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "Пункт 6.1",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "2000000",
+    "metric": "agg(CAPEX, out, period(2025-01-01,2025-12-31))",
+    "quote": "Tau-Ken Logistics JSC обязуется обеспечить, чтобы совокупные расходы по указанной статье, понесённые в период с 2025-01-01 по 2025-12-31, не превышали $2,000,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.2",
+    "confidence": 0.95,
+    "direction": "min",
+    "limit": "5750000",
+    "metric": "agg(REVENUE, in, period(2025-01-01,2025-12-31))",
+    "quote": "Совокупный объём поступлений Заёмщика (Tau-Ken Logistics JSC) по статье «Выручка» за период с 2025-01-01 по 2025-12-31 должен быть не ниже $5,750,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.3",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "275000",
+    "metric": "agg(ALL, out, period(2025-01-01,2025-12-31), counterparty_in(related_parties))",
+    "quote": "Заёмщик обязуется обеспечить, чтобы совокупный размер Ограниченных платежей, совершённых Tau-Ken Logistics JSC в пользу любой связанной стороны в период с 2025-01-01 по 2025-12-31, не превышал $275,000.00.",
+    "trigger": null
+   }
+  ]
+ }
+}

@@ -1,0 +1,27 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "group_capex_outside_borrower_limit",
+    "quote": "Заёмщик, Zhaik Pipeline Services JSC, обязуется не допускать превышения Капитальными затратами Группы за пределами Заёмщика за период с 2025-01-01 по 2025-12-31 суммы $20,000,000.00.",
+    "value": "20000000"
+   },
+   {
+    "key": "minimum_quarterly_revenue",
+    "quote": "Заёмщик, Zhaik Pipeline Services JSC, обязуется не допускать снижения Выручки за любой финансовый квартал, оканчивающийся в период с 2025-01-01 по 2025-12-31, ниже $3,000,000.00.",
+    "value": "3000000"
+   },
+   {
+    "key": "max_aggregate_financing_and_occupancy_charges_percentage",
+    "quote": "Разрешённая величина означает 5 процентов Консолидированных капитальных затрат Группы за тот же период по данным последнего годового отчёта Группы, в состав которой входит Заёмщик.",
+    "value": "5"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

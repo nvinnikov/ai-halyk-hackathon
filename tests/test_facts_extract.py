@@ -1,6 +1,9 @@
 """Извлечение с цитатой на каждый факт; слияние документов детерминировано."""
 
+from decimal import Decimal
+
 import facts_extract
+from facts_extract import _effective_shares
 
 DOSSIER = {
     "account_id": "ACC-1",
@@ -335,7 +338,15 @@ OWNERSHIP_DOSSIER = {
 
 def ownership(shares, threshold="20.0", threshold_quote="Группа владеет 20.0% и более"):
     return {
-        "shares": [{"name": n, "share_percent": s, "quote": q} for n, s, q in shares],
+        "shares": [
+            {
+                "name": row[0],
+                "share_percent": row[1],
+                "quote": row[2],
+                "held_through": row[3] if len(row) > 3 else "",
+            }
+            for row in shares
+        ],
         "threshold_percent": threshold,
         "threshold_quote": threshold_quote,
     }
@@ -599,6 +610,42 @@ def test_ownership_unverifiable_threshold_quote_ignored(tmp_path, monkeypatch):
     assert any(
         a["kind"] == "quote_unverified" and a["field"] == "ownership_threshold" for a in facts["alarms"]
     )
+
+
+def _s(name, pct, via=""):
+    return {"name": name, "share_percent": Decimal(pct), "held_through": via, "quote": ""}
+
+
+def test_direct_share_is_itself():
+    assert _effective_shares([_s("A LLP", "41.3")]) == {"A LLP": Decimal("41.3")}
+
+
+def test_indirect_share_is_a_product():
+    rows = [_s("Mid LLP", "24.0"), _s("Target LLP", "52.0", via="Mid LLP")]
+    got = _effective_shares(rows)
+    assert got["Target LLP"] == Decimal("12.48")
+
+
+def test_three_links_multiply():
+    rows = [_s("A", "50"), _s("B", "50", via="A"), _s("C", "50", via="B")]
+    assert _effective_shares(rows)["C"] == Decimal("12.5")
+
+
+def test_unknown_holder_keeps_direct_value_and_does_not_crash():
+    got = _effective_shares([_s("X LLP", "30.0", via="Nowhere LLP")])
+    assert got["X LLP"] == Decimal("30.0")
+
+
+def test_cycle_does_not_hang():
+    rows = [_s("A", "50", via="B"), _s("B", "50", via="A")]
+    got = _effective_shares(rows)
+    assert set(got) == {"A", "B"}
+
+
+def test_largest_path_wins_when_entity_listed_twice():
+    rows = [_s("Mid", "20"), _s("T", "10"), _s("T", "90", via="Mid")]
+    # прямая 10% против косвенной 18% — берём большую
+    assert _effective_shares(rows)["T"] == Decimal("18")
 
 
 # --- капитальные затраты Группы (документ группового уровня) -----------------

@@ -1,0 +1,42 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "Пункт 6.1",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "3.25",
+    "metric": "ratio(agg('FINANCING', 'in'), sub(agg('REVENUE', 'in'), agg('OPEX_TOTAL', 'out')))",
+    "quote": "Случай неисполнения обязательств по настоящему разделу наступает если и только если применительно к периоду с 2025-01-01 по 2025-12-31 одновременно выполняются оба следующих условия: (a) отношение Общего долга к EBITDA Заёмщика, Pavlodar Petrochemical Terminal JSC, превышает 3.25x; и (b) отношение EBITDA к Процентным расходам за этот период составляет менее 2.00x.",
+    "trigger": "lt(ratio(sub(agg('REVENUE', 'in'), agg('OPEX_TOTAL', 'out')), agg('INTEREST', 'out')), const(2.00))"
+   },
+   {
+    "clause": "Пункт 6.2",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "3.00",
+    "metric": "ratio(agg('FINANCING', 'in'), sub(agg('REVENUE', 'in'), agg('OPEX_TOTAL', 'out')))",
+    "quote": "Событие досрочного погашения за счёт свободного денежного потока наступает применительно к периоду с 2025-01-01 по 2025-12-31 при наступлении любого из следующих обстоятельств: (a) отношение Общего долга к EBITDA Заёмщика, Pavlodar Petrochemical Terminal JSC, превышает 3.00x;",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.2",
+    "confidence": 0.95,
+    "direction": "min",
+    "limit": "1.30",
+    "metric": "ratio(sub(agg('REVENUE', 'in'), agg('OPEX_TOTAL', 'out')), add(agg('INTEREST', 'out'), agg('FINANCING', 'out')))",
+    "quote": "(b) Коэффициент покрытия обслуживания долга за этот период составляет менее 1.30x.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.3",
+    "confidence": 0.95,
+    "direction": "min",
+    "limit": "0.25",
+    "metric": "ratio(sub(agg('REVENUE', 'in'), agg('OPEX_TOTAL', 'out')), agg('REVENUE', 'in'))",
+    "quote": "Заёмщик, Pavlodar Petrochemical Terminal JSC, обязуется не допускать снижения Рентабельности по EBITDA за период с 2025-01-01 по 2025-12-31 ниже 0.25x, выраженной как кратное к Выручке за этот период.",
+    "trigger": null
+   }
+  ]
+ }
+}

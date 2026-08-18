@@ -1,0 +1,20 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [
+   {
+    "currency": "EUR",
+    "derivation": "paired_payment",
+    "effective_from": "",
+    "effective_to": "",
+    "source_quote": "Расчёты с контрагентом «Nordwerk Polymertechnik GmbH»: счёт на сумму 2,143,386.00 EUR урегулирован платежом в долларах США в размере $2,307,111.34, отражённым за вычетом банковской комиссии в размере $18,462.47, которая не входит в пересчитываемую сумму.",
+    "usd_per_unit": "1.0763863"
+   }
+  ],
+  "numeric_facts": [],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

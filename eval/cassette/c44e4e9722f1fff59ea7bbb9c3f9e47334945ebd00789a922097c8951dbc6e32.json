@@ -1,0 +1,32 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "max_related_party_payments",
+    "quote": "Заёмщик, Atyrau Petrochemicals JSC, обязуется не допускать превышения совокупными платежами связанным сторонам за период с 2025-01-01 по 2025-12-31 величины $250,000.00",
+    "value": "250000"
+   },
+   {
+    "key": "related_party_consulting_basket",
+    "quote": "после исключения разрешённой корзины в размере до $300,000.00 таких платежей, совершённых в обычном порядке и надлежащим образом квалифицированных как Консультационные услуги",
+    "value": "300000"
+   },
+   {
+    "key": "min_post_personnel_operating_margin",
+    "quote": "обеспечить, чтобы операционная маржа после расходов на персонал за период с 2025-01-01 по 2025-12-31 составляла не менее 0.67x.",
+    "value": "0.67"
+   },
+   {
+    "key": "max_marketing_expenses",
+    "quote": "совокупные расходы Atyrau Petrochemicals JSC по статье «Маркетинговые расходы» за период с 2025-01-01 по 2025-12-31 не превысят $400,000.00",
+    "value": "400000"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

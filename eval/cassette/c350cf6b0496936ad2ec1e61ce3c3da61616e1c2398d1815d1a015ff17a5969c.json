@@ -1,0 +1,32 @@
+{
+ "result": {
+  "shares": [
+   {
+    "held_through": "",
+    "name": "\"Atyrau Management Services\" LLP",
+    "quote": "| \"Atyrau Management Services\" LLP | 46.3% |",
+    "share_percent": "46.3"
+   },
+   {
+    "held_through": "",
+    "name": "Caspian Media Group LLP",
+    "quote": "| Caspian Media Group LLP | 19.2% |",
+    "share_percent": "19.2"
+   },
+   {
+    "held_through": "",
+    "name": "Caspian Trade Partners L.L.P.",
+    "quote": "| Caspian Trade Partners L.L.P. | 21.5% |",
+    "share_percent": "21.5"
+   },
+   {
+    "held_through": "",
+    "name": "KazMunayGas Trading JSC",
+    "quote": "| KazMunayGas Trading JSC | 6.4% |",
+    "share_percent": "6.4"
+   }
+  ],
+  "threshold_percent": "20.0",
+  "threshold_quote": "Организации, в которых Группа владеет 20.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

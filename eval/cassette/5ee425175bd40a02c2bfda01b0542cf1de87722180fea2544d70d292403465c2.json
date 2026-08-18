@@ -1,0 +1,24 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "ebitda_addback_materiality",
+    "quote": "Корректировка EBITDA, изложенная ниже, производится для целей проверки ковенантов только в отношении операций на сумму не менее $15,000,000.00.",
+    "value": "15000000.00"
+   }
+  ],
+  "reclassifications": [
+   {
+    "counterparty": null,
+    "quote": "Операция TXN-KC-MKT-05, первоначально учтённая как Маркетинговые расходы ($20,284,662.18), переклассифицирована для целей соблюдения ковенантов как Капитальные затраты.",
+    "to_category": "CAPEX",
+    "txn_id": "TXN-KC-MKT-05"
+   }
+  ],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}
