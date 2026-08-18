@@ -500,7 +500,9 @@ def run_cell(
     спеки, в expected-режиме она пуста."""
     trace: dict = {"scenario": scenario, "clause": clause, "quote": quote}
     if isinstance(cellspec_or_error, dict):
-        cellspec, rewrite_alarms = rewrites.apply_final(cellspec_or_error, quote)
+        cellspec, rewrite_alarms = rewrites.apply_final(
+            cellspec_or_error, quote, cellspec_or_error.get("direction")
+        )
         for alarm in rewrite_alarms:
             trace.setdefault("alarms", []).append({**alarm, "scenario": scenario, "clause": clause})
             print(f"ALARM {alarm['kind']} {scenario} {clause}: {alarm}")

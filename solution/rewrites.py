@@ -8,7 +8,7 @@
 
 import dataclasses
 
-from dsl import Add, Agg, Sub, unparse
+from dsl import Add, Agg, MaxOf, MinOf, Period, Quarter, Ratio, Sub, unparse, walk
 
 # Маркеры прямого широкого прочтения: договор сам говорит «все операционные».
 # Это ЕДИНСТВЕННЫЙ путь к роллапу OPEX_TOTAL — подсчёт маркеров-статей
@@ -96,7 +96,78 @@ def narrow_opex(metric_ast, quote: str) -> tuple[object, bool]:
     return (out, changed) if changed else (metric_ast, False)
 
 
-def apply_final(cellspec: dict, quote: str) -> tuple[dict, list[dict]]:
+# Маркеры поквартальности: пункт явно меряет «любой»/«каждый» финансовый
+# квартал, а не год. Список нарочно узкий — маркер, срабатывающий на описании
+# отчётного периода («за 4-й квартал 2025») вместо формулировки теста
+# ковенанта, квартализовал бы годовую метрику и стоил бы ячейки; на публичном
+# наборе договоров с поквартальными пунктами не было, поэтому правило там
+# обязано молчать.
+_QUARTER_MARKERS = (
+    "любой финансовый квартал",
+    "любом финансовом квартале",
+    "любого финансового квартала",
+    "каждый финансовый квартал",
+    "каждом финансовом квартале",
+    "за любой квартал",
+    "поквартальн",
+    "any fiscal quarter",
+    "each fiscal quarter",
+    "any financial quarter",
+)
+
+
+def _quarterize(node, n: int):
+    """Копия узла, где каждый agg считает только квартал n.
+
+    Годовой period() снимается: он и quarter() описывают один и тот же
+    отчётный период, и оставленный period() ничего не изменил бы, но текст
+    формулы в трейсе врал бы про то, что считается."""
+    if isinstance(node, Agg):
+        filters = tuple(f for f in node.filters if not isinstance(f, Period | Quarter))
+        return dataclasses.replace(node, filters=filters + (Quarter(n=n),))
+    if not hasattr(node, "__dataclass_fields__"):
+        return node
+    updates = {}
+    for name in node.__dataclass_fields__:
+        value = getattr(node, name)
+        if isinstance(value, tuple):
+            updates[name] = tuple(
+                _quarterize(c, n) if hasattr(c, "__dataclass_fields__") else c for c in value
+            )
+        elif hasattr(value, "__dataclass_fields__"):
+            updates[name] = _quarterize(value, n)
+    return dataclasses.replace(node, **updates) if updates else node
+
+
+def quarterly(metric_ast, quote: str, direction: str | None) -> tuple[object, bool]:
+    """Годовая метрика → худший квартал, если пункт меряет любой квартал.
+
+    Направление решает, какой квартал худший: у min-ковенанта («не ниже»)
+    нарушение — самый маленький квартал, у max — самый большой. Годовой итог
+    не лечит нарушенный квартал, и наоборот: на приватном наборе четыре
+    ячейки посчитаны за год против поквартального ключа.
+
+    Отношения не трогаем сознательно. Там, где квартальным является ТРИГГЕР
+    («если выручка любого квартала ниже X, то отношение за период в целом не
+    выше Y»), квартализация знаменателя испортила бы верную метрику; отделить
+    один случай от другого по цитате нечем, а цена ошибки в эту сторону выше.
+    """
+    t = (quote or "").lower()
+    if not any(m in t for m in _QUARTER_MARKERS):
+        return metric_ast, False
+    if direction not in ("min", "max"):
+        return metric_ast, False
+    if isinstance(metric_ast, Ratio):
+        return metric_ast, False
+    if any(isinstance(n, Quarter) for n in walk(metric_ast)):
+        return metric_ast, False
+    if not any(isinstance(n, Agg) for n in walk(metric_ast)):
+        return metric_ast, False
+    parts = tuple(_quarterize(metric_ast, n) for n in (1, 2, 3, 4))
+    return (MinOf(args=parts) if direction == "min" else MaxOf(args=parts)), True
+
+
+def apply_final(cellspec: dict, quote: str, direction: str | None = None) -> tuple[dict, list[dict]]:
     """Все финальные переписывания одним входом. cellspec не мутируется.
 
     Пустая цитата (эталонный режим) — ничего не переписываем: признак решения
@@ -109,6 +180,12 @@ def apply_final(cellspec: dict, quote: str) -> tuple[dict, list[dict]]:
     ast, narrowed = narrow_opex(ast, quote)
     if narrowed:
         alarms.append({"kind": "opex_rollup_narrowed", "from": "OPEX_TOTAL", "to": "OTHER_OPEX"})
+
+    # Порядок важен: квартализация копирует поддерево четырежды, и узкий опекс
+    # обязан быть выбран ДО копирования — иначе он чинился бы в четырёх местах.
+    ast, quartered = quarterly(ast, quote, direction)
+    if quartered:
+        alarms.append({"kind": "metric_quarterized", "direction": direction})
 
     if not alarms:
         return cellspec, []

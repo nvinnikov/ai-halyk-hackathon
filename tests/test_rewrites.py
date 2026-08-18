@@ -1,5 +1,5 @@
 from dsl import parse, unparse
-from rewrites import apply_final, narrow_opex
+from rewrites import apply_final, narrow_opex, quarterly
 
 _EBITDA_BROAD = "sub(agg(REVENUE, in), agg(OPEX_TOTAL, out))"
 
@@ -78,3 +78,56 @@ def test_narrows_composite_subtrahend():
     assert unparse(ast) == (
         "sub(agg(REVENUE, in), add(agg(OTHER_OPEX, out), agg(PAYROLL, out), agg(RENT, out)))"
     )
+
+
+_EBITDA = "sub(agg(REVENUE, in), agg(OTHER_OPEX, out))"
+
+
+def test_min_covenant_becomes_min_over_quarters():
+    quote = "не допускать снижения EBITDA за любой финансовый квартал ниже $600,000.00"
+    ast, changed = quarterly(parse(_EBITDA), quote, "min")
+    assert changed
+    text = unparse(ast)
+    assert text.startswith("min(")
+    assert text.count("quarter(1)") == 2
+    assert text.count("quarter(4)") == 2
+
+
+def test_max_covenant_becomes_max_over_quarters():
+    quote = "совокупные маркетинговые расходы за любой финансовый квартал не превысят $300,000.00"
+    ast, changed = quarterly(parse("agg(MARKETING, out)"), quote, "max")
+    assert changed
+    assert unparse(ast).startswith("max(")
+
+
+def test_english_marker_is_recognised():
+    ast, changed = quarterly(parse("agg(REVENUE, in)"), "Revenue in any fiscal quarter", "min")
+    assert changed
+    assert unparse(ast).startswith("min(")
+
+
+def test_ratio_metric_is_left_alone():
+    metric = "ratio(agg(CAPEX, out), agg(REVENUE, in))"
+    ast, changed = quarterly(parse(metric), "если выручка за любой финансовый квартал ниже", "max")
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_metric_already_quarterly_is_left_alone():
+    metric = "agg(REVENUE, in, quarter(4))"
+    ast, changed = quarterly(parse(metric), "выручка за любой финансовый квартал", "min")
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_no_marker_no_rewrite():
+    ast, changed = quarterly(parse(_EBITDA), "EBITDA за период с 2025-01-01 по 2025-12-31", "min")
+    assert not changed
+
+
+def test_period_filter_is_replaced_by_quarter():
+    metric = "agg(REVENUE, in, period(2025-01-01, 2025-12-31))"
+    ast, _ = quarterly(parse(metric), "выручка за любой финансовый квартал", "min")
+    text = unparse(ast)
+    assert "period(" not in text
+    assert "quarter(2)" in text
