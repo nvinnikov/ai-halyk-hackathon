@@ -31,6 +31,7 @@ sys.path.insert(0, "eval")
 import evidence
 import facts_extract
 import llm
+import rewrites
 from dossier import build_dossiers
 from dsl import Agg, Doc, DslError, Ratio, Sub, parse, signature, unparse, walk
 from engine import agg, prepare_rows, select_rows, sign_divergence
@@ -389,7 +390,10 @@ def run_cell(
     спеки, в expected-режиме она пуста."""
     trace: dict = {"scenario": scenario, "clause": clause, "quote": quote}
     if isinstance(cellspec_or_error, dict):
-        cellspec = cellspec_or_error
+        cellspec, rewrite_alarms = rewrites.apply_final(cellspec_or_error, quote)
+        for alarm in rewrite_alarms:
+            trace.setdefault("alarms", []).append({**alarm, "scenario": scenario, "clause": clause})
+            print(f"ALARM {alarm['kind']} {scenario} {clause}: {alarm}")
         trace["spec"] = {
             "quote": quote,
             "direction": cellspec["direction"],
