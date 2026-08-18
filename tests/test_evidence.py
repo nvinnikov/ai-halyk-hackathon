@@ -171,6 +171,46 @@ def test_reading_rows_respects_sign_and_filters():
     assert [r["txn_id"] for r in got] == ["T-1", "T-2"]
 
 
+def test_smaller_flipping_row_beats_larger_non_flipping_row():
+    # Разделяющий тест: для sub(REVENUE_in, OPEX_out) снятие любой строки
+    # меняет знаменатель по-разному, поэтому "крупнейшая читаемая" и
+    # "крупнейшая переворачивающая" здесь не совпадают — подделка без учёта
+    # flipped выбрала бы T-1 (крупнейшая), а не T-2 (переворачивающая).
+    # 1000 − 300 = 700 < 800 → BREACH. Без T-1 (REVENUE, крупнейшая читаемая):
+    # 0 − 300 = −300 < 800 → BREACH, не переворачивает. Без T-2 (OTHER_OPEX,
+    # меньшая читаемая): 1000 − 0 = 1000, не < 800 → COMPLIANT, переворачивает.
+    raw = [
+        row("T-1", "REVENUE", "1000", date="2025-02-01"),
+        row("T-2", "OTHER_OPEX", "-300", date="2025-03-01"),
+    ]
+    s = spec("sub(agg(REVENUE, in), agg(OTHER_OPEX, out))", "min", "800")
+    ev, trace = find(raw, {}, s, "BREACH")
+    flips = {t["txn"]: t["flipped"] for t in trace}
+    assert flips == {"T-1": False, "T-2": True}
+    assert ev == "T-2"
+
+
+def test_document_decision_outranks_larger_ledger_row():
+    # Разделяющий тест на приоритет ранга типа решения над суммой: T-1 CAPEX
+    # −900 без документального решения, T-2 в леджере −10, но документ
+    # (amount_fix) поднимает её до −50. Порог 920, max: по умолчанию
+    # 900+50=950 > 920 → BREACH. Без T-1: 50 > 920? нет → COMPLIANT,
+    # переворот. Откат поправки (T-2 возвращается к −10): 900+10=910 > 920?
+    # нет → COMPLIANT, тоже переворот — обе строки переворачивают, но
+    # документальный кандидат (T-2, меньшая сумма) обязан победить крупную
+    # T-1 по рангу типа решения, а не по модулю суммы.
+    raw = [
+        row("T-1", "CAPEX", "-900", date="2025-02-01"),
+        row("T-2", "CAPEX", "-10", date="2025-03-01"),
+    ]
+    facts = {"amount_override": {"T-2": "-50"}, "override_quotes": {"T-2": "записка казначейства"}}
+    s = spec("agg(CAPEX, out)", "max", "920")
+    ev, trace = find(raw, facts, s, "BREACH")
+    flippers = {t["txn"] for t in trace if t["flipped"]}
+    assert flippers == {"T-1", "T-2"}  # обе строки переворачивают
+    assert ev == "T-2"  # но побеждает документальное решение, не крупная сумма
+
+
 def test_public_key_all_nine_found():
     """Интеграция: все 9 непустых улик публичного ключа достаются алгоритмом."""
     import json
