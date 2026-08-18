@@ -656,6 +656,82 @@ def test_run_cell_match_alarms_reach_trace_alarms():
     assert got and got[0]["scenario"] == "SC-X" and got[0]["clause"] == "9.9"
 
 
+def test_bare_doc_metric_equal_to_limit_falls_off_dsl_tier():
+    # Метрика ячейки — голый doc(ключ), значение из фактов равно порогу:
+    # тавтология «впритык соблюдено», не измерение. Ячейка уходит на лестницу
+    # фолбэков (без цитаты heuristic_template не матчится — ярус приора),
+    # алярм metric_equals_limit поднят.
+    cellspec = {
+        "metric_ast": parse("doc(max_asset_transfer)"),
+        "metric_text": "doc(max_asset_transfer)",
+        "direction": "max",
+        "limit": Decimal("250000"),
+        "trigger_ast": None,
+    }
+    facts = {"doc_facts": {"max_asset_transfer": "250000"}}
+    cell, trace = solve.run_cell("SC-T", "6.1", [], facts, cellspec, [])
+    assert trace["path"] != "dsl"
+    assert trace["tier"] == 2
+    kinds = [a["kind"] for a in trace["alarms"] if isinstance(a, dict)]
+    assert "metric_equals_limit" in kinds
+    assert cell["actual"] == 250000.0  # приор держит порог, не тавтологичное значение
+
+
+def test_bare_doc_metric_below_limit_computes_normally():
+    # Тот же голый doc(), но значение НЕ равно порогу — тавтологии нет,
+    # ячейка считается на нулевом ярусе как обычно.
+    cellspec = {
+        "metric_ast": parse("doc(max_asset_transfer)"),
+        "metric_text": "doc(max_asset_transfer)",
+        "direction": "max",
+        "limit": Decimal("250000"),
+        "trigger_ast": None,
+    }
+    facts = {"doc_facts": {"max_asset_transfer": "100000"}}
+    cell, trace = solve.run_cell("SC-T", "6.1", [], facts, cellspec, [])
+    assert trace["path"] == "dsl"
+    assert cell["status"] == "COMPLIANT" and cell["actual"] == 100000.0
+    kinds = [a["kind"] for a in trace.get("alarms", []) if isinstance(a, dict)]
+    assert "metric_equals_limit" not in kinds
+
+
+def test_doc_as_part_of_expression_equal_to_limit_is_not_a_tautology():
+    # doc() — только СЛАГАЕМОЕ метрики, не вся метрика: законное совпадение
+    # (полис ровно на нужную сумму) гард не имеет права трогать.
+    cellspec = {
+        "metric_ast": parse("add(doc(policy_amount), agg(CAPEX, out))"),
+        "metric_text": "add(doc(policy_amount), agg(CAPEX, out))",
+        "direction": "max",
+        "limit": Decimal("250000"),
+        "trigger_ast": None,
+    }
+    facts = {"doc_facts": {"policy_amount": "250000"}}
+    cell, trace = solve.run_cell("SC-T", "6.1", [], facts, cellspec, [])
+    assert trace["path"] == "dsl"
+    assert cell["status"] == "COMPLIANT" and cell["actual"] == 250000.0
+    kinds = [a["kind"] for a in trace.get("alarms", []) if isinstance(a, dict)]
+    assert "metric_equals_limit" not in kinds
+
+
+def test_ledger_metric_coincidentally_equal_to_limit_is_not_a_tautology():
+    # Метрика по леджеру (не doc()), чьё посчитанное значение случайно
+    # совпало с порогом, — законный ответ впритык, не тавтология: метрика
+    # измерена, а не эхнута из текста договора.
+    cellspec = {
+        "metric_ast": parse("agg(CAPEX, out)"),
+        "metric_text": "agg(CAPEX, out)",
+        "direction": "max",
+        "limit": Decimal("100"),
+        "trigger_ast": None,
+    }
+    rows = [_row("TXN-1", "CAPEX", "-100")]
+    cell, trace = solve.run_cell("SC-T", "6.1", rows, {}, cellspec, [])
+    assert trace["path"] == "dsl"
+    assert cell["status"] == "COMPLIANT" and cell["actual"] == 100.0
+    kinds = [a["kind"] for a in trace.get("alarms", []) if isinstance(a, dict)]
+    assert "metric_equals_limit" not in kinds
+
+
 def test_extracted_cellspec_falls_back_to_template_signature():
     # Заголовок не совпал ни с одним шаблоном, но специфика уже посчитала
     # сигнатурный матч (match_signature) в sp["template"].

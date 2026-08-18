@@ -372,6 +372,116 @@ def _shadow_compare(
     print(f"ALARM heading_divergence_changed_answer {scenario} {clause}: {alarm}", flush=True)
 
 
+def _metric_equals_limit(cellspec: dict, facts: dict) -> bool:
+    """Метрика ячейки — ГОЛЫЙ doc(ключ), и его значение по модулю в точности
+    равно порогу ячейки: тавтология, а не измерение.
+
+    Отличие от `_resolve_echoes_limit`: тот гасит эхо НА ВХОДЕ, в одной точке
+    резолва одного doc-ключа. Этот гард — по факту тавтологии НА ВЫХОДЕ,
+    равнодушный к тому, как значение попало в doc_facts (адресный резолв,
+    общий проход фактов, любой будущий источник); он ловит не одну лазейку, а
+    сам исход — метрика ячейки тождественно равна порогу.
+
+    Условие узкое нарочно: узел обязан быть ГОЛЫМ Doc, не частью Add/Sub/Ratio/
+    Agg — слагаемое, равное порогу, мыслимо законно (полис ровно на нужную
+    сумму), и это не его случай. Равенство — точное, не приближённое: иначе
+    гард начнёт бить законные ответы впритык."""
+    metric_ast = cellspec.get("metric_ast")
+    if not isinstance(metric_ast, Doc):
+        return False
+    raw_value = facts.get("doc_facts", {}).get(metric_ast.key)
+    if raw_value is None:
+        return False
+    try:
+        return abs(Decimal(str(raw_value))) == abs(Decimal(str(cellspec["limit"])))
+    except (InvalidOperation, TypeError, ValueError, KeyError):
+        return False
+
+
+def _fallback_ladder(
+    scenario: str,
+    clause: str,
+    quote: str,
+    spec_direction,
+    spec_limit,
+    raw: list,
+    facts: dict,
+    computed: list,
+    trace: dict,
+) -> tuple[dict, dict]:
+    """Эвристика по цитате → приор. Общий хвост лестницы (5.7): направление и
+    порог уже прочитаны (спекой или доносятся с ошибки), дальше решает либо
+    шаблон по ключевым словам цитаты, либо глобальный/семейный приор.
+
+    Вынесено из run_cell (ревью пост-приватного набора, раунд 1): у «спека
+    невалидна» и «спека валидна, но метрика — тавтология» разные входы, но
+    один и тот же хвост — дублировать его было дороже, чем параметризовать."""
+    tpl = heuristic_template(quote)
+    if tpl is not None:
+        try:
+            metric_ast = parse(TEMPLATES[tpl])
+            # Эвристика даёт метрику; статус берёт приор (направление/семья —
+            # из невалидной спеки, если прочитались), actual — посчитанное.
+            _, res = evidence.compute(
+                raw,
+                facts,
+                {"metric_ast": metric_ast, "direction": "max", "limit": Decimal(0), "trigger_ast": None},
+            )
+            value = abs(res.value)
+            mismatched = _family_mismatch(value, spec_limit, spec_direction)
+            # Семья считается по AST ЭТОГО ЖЕ шаблона, поэтому признанный
+            # промахом шаблон не имеет права кондиционировать ею приор: она
+            # заведомо не та, и ступень by[направление|семья] увела бы статус
+            # по чужой статистике (ревью PR #21). На публичном наборе это
+            # замаскировано — prior_status до неё не доходит, by_clause всегда
+            # попадает; на приватном номер пункта может и не найтись. None —
+            # честный глобальный приор.
+            #
+            # Осторожно при чтении отчёта: пометка fallback_coin_flip, которой
+            # приор себя при этом клеймит, приходит из fallback_cell СТРОКОЙ, а
+            # _alarm_kind считает видом только dict с "kind" — в run-report она
+            # неотличима от прочего мусора в "other" (ревью PR #21, круг 5).
+            # Видно её только в trace["alarms"] конкретной ячейки. Перевод пары
+            # fallback_used/fallback_coin_flip на словари — правка вне этого
+            # PR и не в окно: она сдвинет счётчик "other", на который ранбук
+            # ссылается ориентиром.
+            family = None if mismatched else family_of(metric_ast, spec_limit)
+            cell, alarms = fallback_cell(spec_direction, family, spec_limit, computed, clause=clause)
+            if mismatched:
+                # Эвристика по ключевым словам цитаты угадала не ту СЕМЬЮ:
+                # шаблон меряет доллары, а порог — коэффициент. Порог от
+                # fallback_cell остаётся: он хотя бы того же порядка, что
+                # искомое значение, а посчитанное — заведомо не оно.
+                # Словарём, а не строкой: _alarm_kind считает видом только
+                # dict с "kind", строка ушла бы в общий мусорный "other" и в
+                # run-report была бы неразличима. scenario/clause внутрь —
+                # от глобального дедупа точных дублей.
+                mismatch = {
+                    "kind": "heuristic_family_mismatch",
+                    "scenario": scenario,
+                    "clause": clause,
+                    "value": str(value),
+                    "limit": str(spec_limit),
+                }
+                alarms = alarms + [mismatch]
+                print(f"ALARM heuristic_family_mismatch {scenario} {clause}: {mismatch}", flush=True)
+            else:
+                cell["actual"] = q2(value)
+            # Мерж, не присваивание: trace может уже нести alarms с более
+            # раннего рубежа (rewrite/match_alarms/metric_equals_limit) —
+            # присваивание стёрло бы их (тот же класс бага, что ревью PR #9,
+            # 25-я волна, но здесь для heuristic-ветки, а не dsl-исключения).
+            trace.update(
+                path="heuristic_template", tier=1, template=tpl, alarms=trace.get("alarms", []) + alarms
+            )
+            return cell, trace
+        except Exception as exc:
+            trace["heuristic_error"] = repr(exc)
+    cell, alarms = fallback_cell(spec_direction, None, spec_limit, computed, clause=clause)
+    trace.update(path="prior", tier=2, alarms=trace.get("alarms", []) + alarms)
+    return cell, trace
+
+
 def run_cell(
     scenario: str,
     clause: str,
@@ -410,6 +520,23 @@ def run_cell(
             # дедупом точных дублей до «1».
             trace.setdefault("alarms", []).append({**alarm, "scenario": scenario, "clause": clause})
             print(f"ALARM {alarm['kind']} {scenario} {clause}: {alarm}")
+        if _metric_equals_limit(cellspec, facts):
+            # Метрика ячейки — голый doc(ключ), и он тождественно равен
+            # порогу: не измерение, тавтология «впритык соблюдено». Спека
+            # валидна формально, но обрабатывается как невалидная — лестница
+            # фолбэков решает статус приором, а не уверенным вердиктом на
+            # нулевом ярусе (ревью по приватному набору, раунд 1).
+            equal_alarm = {
+                "kind": "metric_equals_limit",
+                "scenario": scenario,
+                "clause": clause,
+                "limit": str(cellspec["limit"]),
+            }
+            trace.setdefault("alarms", []).append(equal_alarm)
+            print(f"ALARM metric_equals_limit {scenario} {clause}: {equal_alarm}", flush=True)
+            return _fallback_ladder(
+                scenario, clause, quote, cellspec["direction"], cellspec["limit"], raw, facts, computed, trace
+            )
         try:
             status, res = evidence.compute(raw, facts, cellspec)
             ev_txn, ev_trace = evidence.find(raw, facts, cellspec, status)
@@ -470,64 +597,7 @@ def run_cell(
     # (ревью PR #9, 6-я волна).
     spec_direction = getattr(cellspec_or_error, "spec_direction", None)
     spec_limit = getattr(cellspec_or_error, "spec_limit", None)
-    tpl = heuristic_template(quote)
-    if tpl is not None:
-        try:
-            metric_ast = parse(TEMPLATES[tpl])
-            # Эвристика даёт метрику; статус берёт приор (направление/семья —
-            # из невалидной спеки, если прочитались), actual — посчитанное.
-            _, res = evidence.compute(
-                raw,
-                facts,
-                {"metric_ast": metric_ast, "direction": "max", "limit": Decimal(0), "trigger_ast": None},
-            )
-            value = abs(res.value)
-            mismatched = _family_mismatch(value, spec_limit, spec_direction)
-            # Семья считается по AST ЭТОГО ЖЕ шаблона, поэтому признанный
-            # промахом шаблон не имеет права кондиционировать ею приор: она
-            # заведомо не та, и ступень by[направление|семья] увела бы статус
-            # по чужой статистике (ревью PR #21). На публичном наборе это
-            # замаскировано — prior_status до неё не доходит, by_clause всегда
-            # попадает; на приватном номер пункта может и не найтись. None —
-            # честный глобальный приор.
-            #
-            # Осторожно при чтении отчёта: пометка fallback_coin_flip, которой
-            # приор себя при этом клеймит, приходит из fallback_cell СТРОКОЙ, а
-            # _alarm_kind считает видом только dict с "kind" — в run-report она
-            # неотличима от прочего мусора в "other" (ревью PR #21, круг 5).
-            # Видно её только в trace["alarms"] конкретной ячейки. Перевод пары
-            # fallback_used/fallback_coin_flip на словари — правка вне этого
-            # PR и не в окно: она сдвинет счётчик "other", на который ранбук
-            # ссылается ориентиром.
-            family = None if mismatched else family_of(metric_ast, spec_limit)
-            cell, alarms = fallback_cell(spec_direction, family, spec_limit, computed, clause=clause)
-            if mismatched:
-                # Эвристика по ключевым словам цитаты угадала не ту СЕМЬЮ:
-                # шаблон меряет доллары, а порог — коэффициент. Порог от
-                # fallback_cell остаётся: он хотя бы того же порядка, что
-                # искомое значение, а посчитанное — заведомо не оно.
-                # Словарём, а не строкой: _alarm_kind считает видом только
-                # dict с "kind", строка ушла бы в общий мусорный "other" и в
-                # run-report была бы неразличима. scenario/clause внутрь —
-                # от глобального дедупа точных дублей.
-                mismatch = {
-                    "kind": "heuristic_family_mismatch",
-                    "scenario": scenario,
-                    "clause": clause,
-                    "value": str(value),
-                    "limit": str(spec_limit),
-                }
-                alarms = alarms + [mismatch]
-                print(f"ALARM heuristic_family_mismatch {scenario} {clause}: {mismatch}", flush=True)
-            else:
-                cell["actual"] = q2(value)
-            trace.update(path="heuristic_template", tier=1, template=tpl, alarms=alarms)
-            return cell, trace
-        except Exception as exc:
-            trace["heuristic_error"] = repr(exc)
-    cell, alarms = fallback_cell(spec_direction, None, spec_limit, computed, clause=clause)
-    trace.update(path="prior", tier=2, alarms=alarms)
-    return cell, trace
+    return _fallback_ladder(scenario, clause, quote, spec_direction, spec_limit, raw, facts, computed, trace)
 
 
 def _donor_rates(targets: list[str], scenario: str, facts_of) -> list[dict]:
