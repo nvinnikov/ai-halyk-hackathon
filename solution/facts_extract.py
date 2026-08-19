@@ -11,7 +11,12 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 18
+FACTS_VERSION = 20
+# v20 — RESOLVE_METRIC_PROMPT уточнён: условие срабатывания ковенанта
+# (порог другого показателя, событие) — не часть вычисляемой величины.
+# v19 — грамматика формульного резолва doc-ключа (RESOLVE_METRIC_PROMPT)
+# получила фильтр по контрагентам именованными множествами; литеральный
+# перечень имён по-прежнему отвергается.
 # v18 — обрыв цепочки владения по циклу или предельной глубине виден алярмом
 # ownership_chain_broken (ревью задачи 5, раунд 1); расчёт не меняется.
 # v17 — промпт таблицы владения просит долю держателя-посредника отдельной
@@ -1328,7 +1333,7 @@ def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) ->
     }
 
 
-RESOLVE_METRIC_SCHEMA_VERSION = "docmetric-1"
+RESOLVE_METRIC_SCHEMA_VERSION = "docmetric-4"
 
 RESOLVE_METRIC_SCHEMA = {
     "type": "object",
@@ -1350,7 +1355,19 @@ RESOLVE_METRIC_PROMPT = """Ниже — пункт кредитного дого
            | ratio(a, b) | sub(a, b) | add(a, ...) | max(a, ...) | min(a, ...)
   sign    := in | out | net
   filters := period(YYYY-MM-DD, YYYY-MM-DD) | quarter(n) | desc_contains('строка')
+           | counterparty_in(SET)
+  SET     := related_parties | unrestricted_subsidiaries
   CATEGORY := {categories}
+Фильтр по контрагентам — только через SET из грамматики: если пункт ограничивает
+операции с определённой группой контрагентов (связанные стороны, необременённые
+дочерние), используй соответствующее имя множества. Перечислять контрагентов
+поимённо в выражении нельзя — только эти два названных множества. Если пункт
+ограничивает операции с этой группой контрагентов безотносительно статьи (любые
+активы, любые платежи, любые операции), категория — ALL, а сама величина всё
+равно вычислима: пример формы — agg(ALL, sign, counterparty_in(SET)). Условие
+срабатывания ковенанта (порог другого показателя, наступление события) —
+не часть этой величины: выражение описывает саму сумму операций, а не
+условие, при котором ковенант применяется.
 Верни:
 - computable=true и expression с выражением — если величина вычислима из
   леджера по тексту пункта;
@@ -1376,7 +1393,7 @@ def resolve_doc_metric(wd: Path, dossier_art: dict, key: str, clause_quote: str)
     порогу» здесь невозможно синтаксически. Doc-узлы запрещены тоже —
     резолв не имеет права ссылаться на другие нерешённые ключи.
     """
-    from dsl import Agg, Const, Doc, DslError, parse, uses_ledger, walk
+    from dsl import Agg, Const, CounterpartyIn, Doc, DslError, parse, uses_ledger, walk
     from taxonomy import ROLLUPS, is_category
 
     categories = ", ".join(sorted(LEAVES | set(ROLLUPS)))
@@ -1432,6 +1449,11 @@ def resolve_doc_metric(wd: Path, dossier_art: dict, key: str, clause_quote: str)
         if isinstance(n, Doc | Const):
             return None
         if isinstance(n, Agg) and not is_category(n.category):
+            return None
+        if isinstance(n, CounterpartyIn) and not isinstance(n.setname, str):
+            # Литеральный перечень контрагентов — тот же путь, которым в расчёт
+            # заезжает выдумка модели; разрешены только именованные множества
+            # (грамматика промпта их и предлагает).
             return None
     return expr
 

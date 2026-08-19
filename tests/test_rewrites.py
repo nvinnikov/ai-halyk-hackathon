@@ -5,6 +5,7 @@ from rewrites import (
     cap_related_party_basket,
     flip_debt_incurrence_sign,
     narrow_opex,
+    quarterize_trigger,
     quarterly,
     resolve_percent_of_statute,
     widen_related_party,
@@ -233,14 +234,119 @@ def test_leaves_a_trigger_without_the_rollup_alone():
     assert [a["target"] for a in alarms] == ["metric"]
 
 
-def test_quarterization_never_touches_the_trigger():
-    """Квартальным бывает именно условие («если выручка любого квартала ниже
-    X»), поэтому квартализация остаётся правкой одной метрики."""
+def test_metric_and_trigger_quarterization_apply_independently():
+    """Квартальная цитата вправе квартализовать МЕТРИКУ и ТРИГГЕР одновременно
+    и независимо: у метрики без ratio() решает `quarterly` (не тронут этой
+    задачей), у триггера — `quarterize_trigger` (задача о квартализации
+    триггера). Обе правки трогают разные поля cellspec и не мешают друг
+    другу — это осознанный ответ на пересечение, а не случайность."""
     trigger = "lt(agg(REVENUE, in), const(500))"
     spec = _spec_with_trigger(trigger, metric="agg(REVENUE, in)")
     new, alarms = apply_final(spec, "в любом отдельном финансовом квартале", direction="min")
-    assert [a["kind"] for a in alarms] == ["metric_quarterized"]
-    assert unparse(new["trigger_ast"]) == trigger
+    assert [a["kind"] for a in alarms] == ["trigger_quarterized", "metric_quarterized"]
+    assert unparse(new["metric_ast"]).startswith("min(")
+    assert unparse(new["trigger_ast"]).startswith("lt(min(")
+    assert unparse(spec["trigger_ast"]) == trigger  # вход не мутирован
+
+
+# --- квартализация триггера: оператор сравнения сам говорит, какой квартал
+# худший (min для «меньше», max для «больше»), поэтому направление не нужно
+# запрашивать отдельно, в отличие от quarterly() для метрики. ------------------
+
+
+def test_quarterize_trigger_lt_measured_on_left_uses_min_quarter():
+    trigger = "lt(agg(REVENUE, in), const(500))"
+    quote = "если выручка за любой финансовый квартал окажется меньше суммы X"
+    ast, changed = quarterize_trigger(parse(trigger), quote)
+    assert changed
+    text = unparse(ast)
+    assert text.startswith("lt(min(")
+    assert text.endswith(", const(500))")
+    assert text.count("quarter(1)") == 1
+    assert text.count("quarter(4)") == 1
+
+
+def test_quarterize_trigger_gt_measured_on_left_uses_max_quarter():
+    trigger = "gt(agg(MARKETING, out), const(500))"
+    quote = "если расходы в любом финансовом квартале превысят сумму X"
+    ast, changed = quarterize_trigger(parse(trigger), quote)
+    assert changed
+    assert unparse(ast).startswith("gt(max(")
+
+
+def test_quarterize_trigger_lt_measured_on_right_uses_max_quarter():
+    """a < b, где измеряемая величина — b: срабатывает, когда b велика."""
+    trigger = "lt(const(500), agg(REVENUE, in))"
+    quote = "любой финансовый квартал"
+    ast, changed = quarterize_trigger(parse(trigger), quote)
+    assert changed
+    assert unparse(ast).startswith("lt(const(500), max(")
+
+
+def test_quarterize_trigger_gt_measured_on_right_uses_min_quarter():
+    """a > b, где измеряемая величина — b: срабатывает, когда b мала."""
+    trigger = "gt(const(500), agg(REVENUE, in))"
+    quote = "любой финансовый квартал"
+    ast, changed = quarterize_trigger(parse(trigger), quote)
+    assert changed
+    assert unparse(ast).startswith("gt(const(500), min(")
+
+
+def test_quarterize_trigger_ratio_side_quarterizes_both_aggregates():
+    """Измеряемая сторона сравнения не обязана быть голым agg() — если это
+    ratio() (или любое другое поддерево с несколькими агрегатами), `_quarterize`
+    расставляет ОДИН и тот же номер квартала во всех агрегатах внутри одной
+    копии, и min/max берётся по уже посчитанному отношению за каждый квартал,
+    а не по числителю/знаменателю раздельно. Неоднозначности, из-за которой
+    `quarterly()` отказывается трогать ratio() в МЕТРИКЕ (непонятно, какая
+    часть отношения поквартальна), здесь нет: вся сторона сравнения
+    квартализуется как единое целое."""
+    trigger = "lt(ratio(agg(REVENUE, in), agg(OTHER_OPEX, out)), const(2))"
+    ast, changed = quarterize_trigger(parse(trigger), "любой финансовый квартал")
+    assert changed
+    text = unparse(ast)
+    assert text.startswith("lt(min(")
+    assert text.count("quarter(1)") == 2  # и числитель, и знаменатель одного квартала
+    assert text.count("quarter(4)") == 2
+    assert "ratio(agg(REVENUE, in, quarter(1)), agg(OTHER_OPEX, out, quarter(1)))" in text
+    assert "ratio(agg(REVENUE, in, quarter(4)), agg(OTHER_OPEX, out, quarter(4)))" in text
+
+
+def test_quarterize_trigger_noop_without_quarterly_quote():
+    trigger = "lt(agg(REVENUE, in), const(500))"
+    ast, changed = quarterize_trigger(parse(trigger), "за период с 2025-01-01 по 2025-12-31")
+    assert not changed
+    assert unparse(ast) == trigger
+
+
+def test_quarterize_trigger_noop_when_trigger_is_none():
+    ast, changed = quarterize_trigger(None, "любой финансовый квартал")
+    assert ast is None
+    assert not changed
+
+
+def test_quarterize_trigger_noop_when_already_quarterly():
+    trigger = "lt(agg(REVENUE, in, quarter(2)), const(500))"
+    ast, changed = quarterize_trigger(parse(trigger), "любой финансовый квартал")
+    assert not changed
+    assert unparse(ast) == trigger
+
+
+def test_quarterize_trigger_noop_when_compared_side_has_no_ledger_aggregate():
+    """Сравниваются doc-величина и константа — квартализовать нечего."""
+    trigger = "lt(doc(some_threshold), const(500))"
+    ast, changed = quarterize_trigger(parse(trigger), "любой финансовый квартал")
+    assert not changed
+    assert unparse(ast) == trigger
+
+
+def test_quarterize_trigger_noop_when_both_sides_have_ledger_aggregate():
+    """Обе стороны движутся по кварталам одновременно — направление
+    неоднозначно, отказ дешевле угадывания."""
+    trigger = "lt(agg(REVENUE, in), agg(CAPEX, out))"
+    ast, changed = quarterize_trigger(parse(trigger), "любой финансовый квартал")
+    assert not changed
+    assert unparse(ast) == trigger
 
 
 # --- Task 1: платежи связанным сторонам читают все категории ----------------

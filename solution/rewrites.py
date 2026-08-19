@@ -13,6 +13,7 @@ from decimal import Decimal, InvalidOperation
 from dsl import (
     Add,
     Agg,
+    Cmp,
     Const,
     CounterpartyIn,
     Doc,
@@ -813,6 +814,77 @@ def quarterly(metric_ast, quote: str, direction: str | None) -> tuple[object, bo
     return (MinOf(args=parts) if direction == "min" else MaxOf(args=parts)), True
 
 
+def _has_ledger_aggregate(node: object) -> bool:
+    return any(isinstance(n, Agg) for n in walk(node))
+
+
+def quarterize_trigger(trigger_ast, quote: str) -> tuple[object, bool]:
+    """Поквартальное срабатывание ТРИГГЕРА, отдельно от квартализации метрики.
+
+    `quarterly` сознательно не трогает триггер (см. её докстринг): «если
+    выручка любого квартала ниже X» — это условие применимости ковенанта, а не
+    свойство измеряемой метрики, и квартализация знаменателя-отношения на
+    основании этой фразы была бы гаданием. Но само условие применимости
+    ОСТАЁТСЯ годовым — годовая выручка кратно больше любого одного квартала, и
+    триггер вида «меньше X» на годовой сумме почти никогда не срабатывает, хотя
+    поквартально мог бы: ковенант становится неприменимым там, где договор
+    считал его применимым.
+
+    Здесь неоднозначности из `quarterly` нет: `trigger_ast` — это `Cmp(op, a,
+    b)`, сравнение измеряемой стороны с порогом, и сам оператор говорит, какой
+    квартал худший — минимальный квартал измеряемой стороны у «меньше»/«не
+    больше», максимальный у «больше»/«не меньше». Дополнительно учитывается, на
+    какой стороне сравнения стоит измеряемая величина: `lt(порог, agg(...))`
+    («порог меньше метрики», т.е. метрика больше порога) срабатывает от
+    максимума измеряемой стороны так же, как `gt(agg(...), порог)`.
+
+    Отказы, каждый — прежнее поведение (годовой триггер остаётся годовым):
+      * триггера нет (`None`) — расчёт без триггера, квартализовать нечего;
+      * цитата не поквартальная (`_mentions_any_quarter`) — признака нет;
+      * в триггере уже есть `quarter(...)` — уже квартализован, повторно не
+        трогаем (идемпотентность);
+      * ни одна из сторон сравнения не читает леджер (например обе — `doc`/
+        `const`) — квартализовать нечего, это не про ковенант из фактов;
+      * ОБЕ стороны читают леджер — какая из них «худший квартал», а какая
+        порог, неразличимо, а квартализация обеих одновременно не имеет
+        единственного осмысленного сочетания — отказ дешевле угадывания.
+
+    Переиспользует `_quarterize` целиком (тот же приём, что у `quarterly`):
+    копия измеряемой стороны на каждый из 4 кварталов, годовой `period()`
+    снимается тем же кодом."""
+    if trigger_ast is None:
+        return trigger_ast, False
+    if not _mentions_any_quarter(quote):
+        return trigger_ast, False
+    if not isinstance(trigger_ast, Cmp):
+        return trigger_ast, False
+    if any(isinstance(n, Quarter) for n in walk(trigger_ast)):
+        return trigger_ast, False
+
+    a_measured = _has_ledger_aggregate(trigger_ast.a)
+    b_measured = _has_ledger_aggregate(trigger_ast.b)
+    if not a_measured and not b_measured:
+        return trigger_ast, False  # сравниваются doc/const — нечего квартализовать
+    if a_measured and b_measured:
+        return trigger_ast, False  # обе стороны движутся — направление неоднозначно
+
+    fires_when_small = trigger_ast.op in ("lt", "le")
+    if a_measured:
+        # a op b, измеряемая — a: срабатывает от минимума при "меньше", от
+        # максимума при "больше".
+        wrap = MinOf if fires_when_small else MaxOf
+        parts = tuple(_quarterize(trigger_ast.a, n) for n in (1, 2, 3, 4))
+        out = dataclasses.replace(trigger_ast, a=wrap(args=parts))
+    else:
+        # a op b, измеряемая — b: "a меньше b" срабатывает, когда b велика
+        # (максимум), "a больше b" — когда b мала (минимум): направление той же
+        # природы, но зеркальное относительно стороны.
+        wrap = MaxOf if fires_when_small else MinOf
+        parts = tuple(_quarterize(trigger_ast.b, n) for n in (1, 2, 3, 4))
+        out = dataclasses.replace(trigger_ast, b=wrap(args=parts))
+    return out, True
+
+
 def apply_final(
     cellspec: dict,
     quote: str,
@@ -843,10 +915,15 @@ def apply_final(
     quote пункта (последняя используется остальными переписываниями этой
     функции).
 
-    Квартализация триггера, наоборот, НЕ делается — сознательно и по причине,
-    описанной в докстринге quarterly: квартальным бывает именно условие
-    («если выручка любого квартала ниже X»), и тогда квартализовать надо не
-    его, а ничего.
+    Квартализация ТРИГГЕРА (в отличие от метрики) применяется —
+    `quarterize_trigger`, отдельный проход после сужения опекса/addback
+    триггера. У метрики квартальная фраза неоднозначна (какая часть
+    отношения поквартальна — см. докстринг `quarterly`), у триггера
+    неоднозначности нет: это сравнение измеряемой стороны с порогом, и
+    оператор сравнения сам говорит, какой квартал худший. Метрика и триггер
+    квартализуются независимо — обе правки вправе сработать на одной ячейке
+    одновременно, каждая по своему признаку (см. докстринг
+    `quarterize_trigger`).
 
     doc_facts/doc_fact_quotes (задача 4) — факты досье целиком (не только
     цитата пункта), нужны cap_related_party_basket: капнутая корзина
@@ -872,6 +949,7 @@ def apply_final(
     trigger = cellspec.get("trigger_ast")
     trigger_narrowed = False
     trigger_addback_applied = False
+    trigger_quartered = False
     if trigger is not None:
         trigger, trigger_narrowed = narrow_opex(trigger, quote)
         if trigger_narrowed:
@@ -886,6 +964,14 @@ def apply_final(
         trigger, trigger_addback_applied = add_ebitda_addback(trigger, ebitda_needs_addback)
         if trigger_addback_applied:
             alarms.append({"kind": "ebitda_addback_applied", "target": "trigger"})
+
+        # Порядок важен по той же причине, что у quarterly() ниже: сужение
+        # опекса и addback обязаны быть выбраны ДО квартализации триггера,
+        # которая копирует его поддерево четырежды — иначе они применялись бы
+        # в четырёх местах вместо одного.
+        trigger, trigger_quartered = quarterize_trigger(trigger, quote)
+        if trigger_quartered:
+            alarms.append({"kind": "trigger_quarterized", "op": trigger.op})
 
     ast, widened = widen_related_party(ast, quote)
     if widened:
@@ -914,6 +1000,6 @@ def apply_final(
     if not alarms:
         return cellspec, []
     out = {**cellspec, "metric_ast": ast, "metric_text": unparse(ast)}
-    if trigger_narrowed or trigger_addback_applied:
+    if trigger_narrowed or trigger_addback_applied or trigger_quartered:
         out["trigger_ast"] = trigger
     return out, alarms

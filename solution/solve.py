@@ -841,6 +841,11 @@ def _extracted_inputs(
             # _check при каждом чтении (задача 23), повторного похода к
             # модели не требует.
             spec_art = extract_specs(wd, dossiers[acc], set(_with_doc_facts(facts)["doc_facts"]))
+            # Тавтологичные ключи (значение числом решено, но равно порогу
+            # ячейки) объявляются нерешёнными заново — до формульного
+            # резолва, иначе он их не увидит: он берётся только за
+            # missing_doc_keys, а эти ключи формально валидны.
+            spec_art = _reopen_tautology_clauses(spec_art, _with_doc_facts(facts)["doc_facts"], sc)
             # Ярус после числового резолва: ключи, так и не нашедшиеся числом,
             # пробуются формулой по леджеру. Подстановка живёт в памяти прогона
             # и полностью детерминирована LLM-кэшем — артефакт спек на диске
@@ -894,6 +899,46 @@ def _extracted_inputs(
             }
         specs_by_sc[sc] = spec_art
     return facts_by_sc, specs_by_sc
+
+
+def _reopen_tautology_clauses(spec_art: dict, doc_facts: dict, scenario: str) -> dict:
+    """Валидная спека с ГОЛЫМ doc(ключ), чьё значение по модулю равно порогу
+    той же ячейки, — не измерение, а эхо порога (тот же признак, что у
+    `_metric_equals_limit`, только здесь проверяется НА ВХОДЕ формульного
+    резолва, а не на выходе ячейки). `_resolve_ledger_doc_metrics` берётся
+    только за ключи из missing_doc_keys — тавтологичный ключ формально решён
+    числом, поэтому без этого шага резолв его не видит вовсе. Мы объявляем
+    его нерешённым заново: спека помечается невалидной, а ключ возвращается в
+    missing_doc_keys, как если бы числового значения не находилось. Отказ
+    резолва (грамматика формульного резолва не выражает величину, или модель
+    промолчала) — прежнее поведение: клауза остаётся невалидной и уходит по
+    лестнице фолбэков; страховка на выходе ячейки (_metric_equals_limit в
+    run_cell) остаётся нетронутой и продолжает ловить любой источник
+    тавтологии, а не только этот."""
+    clauses = dict(spec_art.get("clauses", {}))
+    changed = False
+    for cl, sp in sorted(clauses.items()):
+        if not sp.get("valid") or sp.get("errors") or sp.get("missing_doc_keys"):
+            continue
+        try:
+            node = parse(sp["metric"])
+        except DslError:
+            continue
+        if not isinstance(node, Doc):
+            continue
+        raw_value = doc_facts.get(node.key)
+        if raw_value is None:
+            continue
+        try:
+            equal = abs(Decimal(str(raw_value))) == abs(Decimal(str(sp["limit"])))
+        except (InvalidOperation, TypeError, ValueError, KeyError):
+            continue
+        if not equal:
+            continue
+        print(f"ALARM doc_key_tautology_reopened {scenario} {cl}: {node.key}", flush=True)
+        clauses[cl] = {**sp, "valid": False, "missing_doc_keys": [node.key], "template": None}
+        changed = True
+    return {**spec_art, "clauses": clauses} if changed else spec_art
 
 
 def _resolve_ledger_doc_metrics(wd, dossier_art: dict, spec_art: dict, fact_keys: set, scenario: str) -> dict:

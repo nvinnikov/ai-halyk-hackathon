@@ -1467,3 +1467,22 @@ def test_resolve_doc_metric_rejects_constants_doc_and_garbage(tmp_path, monkeypa
 def test_resolve_doc_metric_not_computable_is_refusal(tmp_path, monkeypatch):
     monkeypatch.setattr(facts_extract.llm, "call", _metric_answer(computable=False, expression=""))
     assert facts_extract.resolve_doc_metric(tmp_path, _METRIC_DOSSIER, "external_index", "ц") is None
+
+
+def test_resolve_doc_metric_accepts_counterparty_named_set(tmp_path, monkeypatch):
+    """Фильтр по контрагентам — именованным множеством: механизм уже есть в
+    грамматике DSL, резолву формул не хватало только строчки в промпте."""
+    expr = "agg(ALL, out, counterparty_in(unrestricted_subsidiaries))"
+    monkeypatch.setattr(facts_extract.llm, "call", _metric_answer(expression=expr))
+    assert facts_extract.resolve_doc_metric(tmp_path, _METRIC_DOSSIER, "asset_transfer", "ц") == expr
+
+
+def test_resolve_doc_metric_rejects_literal_counterparty_names(tmp_path, monkeypatch):
+    """Литеральный список контрагентов в этом резолве запрещён — модель не
+    имеет права выдумывать имена, только ссылаться на именованные множества."""
+    for bad in (
+        "agg(ALL, out, counterparty_in(['ООО Ромашка']))",
+        "agg(ALL, out, counterparty_in('ООО Ромашка'))",
+    ):
+        monkeypatch.setattr(facts_extract.llm, "call", _metric_answer(expression=bad))
+        assert facts_extract.resolve_doc_metric(tmp_path, _METRIC_DOSSIER, "asset_transfer", "ц") is None

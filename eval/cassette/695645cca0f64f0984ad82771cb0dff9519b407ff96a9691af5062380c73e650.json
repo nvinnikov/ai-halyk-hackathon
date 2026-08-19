@@ -1,0 +1,6 @@
+{
+ "result": {
+  "computable": true,
+  "expression": "ratio(max(agg(REVENUE, in, quarter(1)), agg(REVENUE, in, quarter(2)), agg(REVENUE, in, quarter(3)), agg(REVENUE, in, quarter(4))), agg(REVENUE, in, period(2025-01-01, 2025-12-31)))"
+ }
+}
