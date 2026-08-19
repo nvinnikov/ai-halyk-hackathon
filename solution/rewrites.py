@@ -214,7 +214,21 @@ def apply_final(cellspec: dict, quote: str, direction: str | None = None) -> tup
     """Все финальные переписывания одним входом. cellspec не мутируется.
 
     Пустая цитата (эталонный режим) — ничего не переписываем: признак решения
-    живёт в тексте пункта, и без него правка была бы гаданием."""
+    живёт в тексте пункта, и без него правка была бы гаданием.
+
+    Сужение опекса применяется и к ТРИГГЕРУ (ревью финальной ветки, §5): выбор
+    прочтения EBITDA — свойство договора, а не места формулы, и одна и та же
+    EBITDA, посчитанная в метрике по статье, а в условии применимости по
+    роллапу, отличалась бы на два порядка. Триггер решает, применяется ли
+    ковенант вообще (несработавший даёт безусловный COMPLIANT), то есть это
+    цена статуса, а не точности. Тот же принцип уже действует у
+    solve._apply_ebitda_reading, который обрабатывает метрику и триггер
+    наравне.
+
+    Квартализация триггера, наоборот, НЕ делается — сознательно и по причине,
+    описанной в докстринге quarterly: квартальным бывает именно условие
+    («если выручка любого квартала ниже X»), и тогда квартализовать надо не
+    его, а ничего."""
     if not quote or cellspec.get("metric_ast") is None:
         return cellspec, []
     alarms: list[dict] = []
@@ -222,7 +236,23 @@ def apply_final(cellspec: dict, quote: str, direction: str | None = None) -> tup
 
     ast, narrowed = narrow_opex(ast, quote)
     if narrowed:
-        alarms.append({"kind": "opex_rollup_narrowed", "from": "OPEX_TOTAL", "to": "OTHER_OPEX"})
+        alarms.append(
+            {"kind": "opex_rollup_narrowed", "from": "OPEX_TOTAL", "to": "OTHER_OPEX", "target": "metric"}
+        )
+
+    trigger = cellspec.get("trigger_ast")
+    trigger_narrowed = False
+    if trigger is not None:
+        trigger, trigger_narrowed = narrow_opex(trigger, quote)
+        if trigger_narrowed:
+            alarms.append(
+                {
+                    "kind": "opex_rollup_narrowed",
+                    "from": "OPEX_TOTAL",
+                    "to": "OTHER_OPEX",
+                    "target": "trigger",
+                }
+            )
 
     # Порядок важен: квартализация копирует поддерево четырежды, и узкий опекс
     # обязан быть выбран ДО копирования — иначе он чинился бы в четырёх местах.
@@ -232,4 +262,7 @@ def apply_final(cellspec: dict, quote: str, direction: str | None = None) -> tup
 
     if not alarms:
         return cellspec, []
-    return {**cellspec, "metric_ast": ast, "metric_text": unparse(ast)}, alarms
+    out = {**cellspec, "metric_ast": ast, "metric_text": unparse(ast)}
+    if trigger_narrowed:
+        out["trigger_ast"] = trigger
+    return out, alarms

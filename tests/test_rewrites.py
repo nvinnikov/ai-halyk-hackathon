@@ -185,3 +185,50 @@ def test_ratio_nested_deeper_in_tree_is_left_alone():
     ast, changed = quarterly(parse(metric), quote, "min")
     assert not changed
     assert unparse(ast) == metric
+
+
+# --- §5 финального ревью: сужение опекса применяется и к триггеру ------------
+
+
+def _spec_with_trigger(trigger: str, metric: str = _EBITDA_BROAD) -> dict:
+    return {
+        "metric_ast": parse(metric),
+        "metric_text": metric,
+        "trigger_ast": parse(trigger),
+        "direction": "min",
+    }
+
+
+def test_narrows_the_trigger_together_with_the_metric():
+    """Выбор прочтения EBITDA — свойство договора, а не места формулы.
+
+    EBITDA, посчитанная в метрике по статье, а в условии применимости по
+    роллапу, отличалась бы на два порядка, и цена этого — статус: несработавший
+    триггер даёт безусловный COMPLIANT."""
+    spec = _spec_with_trigger(f"lt({_EBITDA_BROAD}, const(1000))")
+    new, alarms = apply_final(spec, "не допускать снижения EBITDA ниже $600,000.00")
+    assert unparse(new["metric_ast"]) == "sub(agg(REVENUE, in), agg(OTHER_OPEX, out))"
+    assert unparse(new["trigger_ast"]) == "lt(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), const(1000))"
+    assert [(a["kind"], a["target"]) for a in alarms] == [
+        ("opex_rollup_narrowed", "metric"),
+        ("opex_rollup_narrowed", "trigger"),
+    ]
+    assert unparse(spec["trigger_ast"]) == f"lt({_EBITDA_BROAD}, const(1000))"  # вход не мутирован
+
+
+def test_leaves_a_trigger_without_the_rollup_alone():
+    trigger = "gt(agg(FINANCING, in), const(500))"
+    spec = _spec_with_trigger(trigger)
+    new, alarms = apply_final(spec, "не допускать снижения EBITDA ниже $600,000.00")
+    assert unparse(new["trigger_ast"]) == trigger
+    assert [a["target"] for a in alarms] == ["metric"]
+
+
+def test_quarterization_never_touches_the_trigger():
+    """Квартальным бывает именно условие («если выручка любого квартала ниже
+    X»), поэтому квартализация остаётся правкой одной метрики."""
+    trigger = "lt(agg(REVENUE, in), const(500))"
+    spec = _spec_with_trigger(trigger, metric="agg(REVENUE, in)")
+    new, alarms = apply_final(spec, "в любом отдельном финансовом квартале", direction="min")
+    assert [a["kind"] for a in alarms] == ["metric_quarterized"]
+    assert unparse(new["trigger_ast"]) == trigger

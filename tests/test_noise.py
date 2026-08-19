@@ -96,3 +96,13 @@ def test_metric_without_aggregates_never_alarms():
 def test_missing_metric_is_not_fatal():
     assert noise.wide_rollup_reads(None) == []
     assert noise.rollup_alarm("ACC-0001", Decimal(1000), None) is None
+
+
+def test_mixed_tree_reports_only_the_rollup_that_is_not_narrowed():
+    """Сужение — свойство узла, а не дерева: перечень контрагентов на одном
+    узле не оправдывает голый роллап на другом (отложенная мелочь задачи 6)."""
+    node = parse("ratio(agg(ALL, out, counterparty_in(related_parties)), agg(OPEX_TOTAL, out))")
+    assert noise.wide_rollup_reads(node) == ["OPEX_TOTAL"]
+    ratio = noise.pollution_ratio(_rows([-100, -120, -300_000_000]))
+    got = noise.rollup_alarm("ACC-0001", ratio, node)
+    assert got is not None and got["categories"] == ["OPEX_TOTAL"]

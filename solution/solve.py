@@ -315,6 +315,7 @@ def _shadow_compare(
     status: str,
     res,
     ev_txn: str | None,
+    quote: str = "",
 ) -> None:
     """Теневой расчёт извлечённой формулы, подменённой шаблоном.
 
@@ -344,6 +345,14 @@ def _shadow_compare(
     if not shadow_text:
         return
     shadow_cs = {**cellspec, "metric_ast": parse(shadow_text), "metric_text": shadow_text}
+    # Обе стороны сравнения проходят ОДНИ И ТЕ ЖЕ финальные переписывания
+    # (ревью финальной ветки, §3). cellspec сюда приходит уже после
+    # apply_final, а извлечённая формула — сырой из спеки, и без этого вызова
+    # тень отвечала бы на другой вопрос: «изменили ли ответ подмена И
+    # переписывания вместе», приписывая подмене заголовка чужое расхождение.
+    # Ошибка была односторонней только по видимости: сузили одну сторону —
+    # алярм врёт именем, сузили обе — молчит честно.
+    shadow_cs, _rw = rewrites.apply_final(shadow_cs, quote, shadow_cs.get("direction"))
     shadow_status, shadow_res = evidence.compute(raw, facts, shadow_cs)
     shadow_actual = q2(abs(shadow_res.value))
     shadow_txn, _ = evidence.find(raw, facts, shadow_cs, shadow_status)
@@ -356,6 +365,11 @@ def _shadow_compare(
         "evidence_txn_id": shadow_txn,
         "changed_answer": changed,
     }
+    # Ключ появляется только тогда, когда переписывания тень действительно
+    # тронули: иначе форма блока в трейсе менялась бы на всех ячейках ради
+    # повторения metric.
+    if shadow_cs.get("metric_text") != shadow_text:
+        trace["shadow"]["metric_computed"] = shadow_cs.get("metric_text")
     if not changed:
         return
     alarm = {
@@ -501,12 +515,24 @@ def run_cell(
     спеки, в expected-режиме она пуста."""
     trace: dict = {"scenario": scenario, "clause": clause, "quote": quote}
     if isinstance(cellspec_or_error, dict):
-        cellspec, rewrite_alarms = rewrites.apply_final(
-            cellspec_or_error, quote, cellspec_or_error.get("direction")
-        )
+        # Переписывания — улучшение, а не условие расчёта, и стоят они ДО
+        # общего try ниже: без собственного перехвата их сбой (обход AST,
+        # unparse нового корня, регулярки по цитате) улетал бы во внешний
+        # except main, где ячейка — ещё скелет. Это мимо лестницы: прочитанные
+        # направление и порог выбрасываются, actual теряет порог, приор теряет
+        # семью. Инвариант fail-open требует обратного — сбой стоит яруса, а
+        # не прочитанного (ревью финальной ветки, §2). Считаем исходную спеку.
+        try:
+            cellspec, rewrite_alarms = rewrites.apply_final(
+                cellspec_or_error, quote, cellspec_or_error.get("direction")
+            )
+        except Exception as exc:
+            cellspec, rewrite_alarms = cellspec_or_error, []
+            trace["rewrite_error"] = repr(exc)
+            print(f"ALARM rewrite_failed {scenario} {clause}: {exc!r}", flush=True)
         for alarm in rewrite_alarms:
             trace.setdefault("alarms", []).append({**alarm, "scenario": scenario, "clause": clause})
-            print(f"ALARM {alarm['kind']} {scenario} {clause}: {alarm}")
+            print(f"ALARM {alarm['kind']} {scenario} {clause}: {alarm}", flush=True)
         trace["spec"] = {
             "quote": quote,
             "direction": cellspec["direction"],
@@ -554,7 +580,7 @@ def run_cell(
             )
             cell = {"status": status, "actual": q2(abs(res.value)), "evidence_txn_id": ev_txn}
             try:
-                _shadow_compare(trace, cellspec, raw, facts, scenario, clause, status, res, ev_txn)
+                _shadow_compare(trace, cellspec, raw, facts, scenario, clause, status, res, ev_txn, quote)
             except Exception as shadow_exc:
                 # Ячейка уже собрана и остаётся ярусом 0: диагностика не имеет
                 # права уронить расчёт во внешний except и заменить посчитанное
@@ -1516,6 +1542,120 @@ def _build_run_report(archive: Path, ds_hash: str, wd: Path, duration_s: float) 
     }
 
 
+def _cell_diagnostics(
+    trace: dict,
+    rows: list,
+    cellspec: dict,
+    quote: str,
+    account: str,
+    pollution: Decimal,
+    scenario: str,
+    clause: str,
+) -> None:
+    """Три диагностики поверх УЖЕ посчитанной ячейки: знак, шум, неразнесённые.
+
+    Все три смотрят на ПОСЛЕ-переписанную метрику. run_cell прогоняет спеку
+    через rewrites.apply_final (сужение опекса, квартализация) и считает уже
+    её, а cellspec на входе остаётся прежним — apply_final не мутирует.
+    Диагностика по исходному AST говорит про категорию, которую ячейка не
+    читает: ревью финальной ветки нашло ровно это у sign_divergence и
+    other_unassigned на пяти ячейках приватного прогона (сторно доложено по
+    роллапу, тогда как метрика считала статью). apply_final чистая и
+    идемпотентная, поэтому зовётся здесь один раз на все три.
+
+    Ни одна из трёх не имеет права стоить ячейки — ответ уже собран, — поэтому
+    каждая под своим except, а сбой самого переписывания оставляет исходную
+    метрику: врущая диагностика дешевле отсутствующей.
+    """
+    try:
+        final_spec, _rw = rewrites.apply_final(cellspec, quote, cellspec.get("direction"))
+    except Exception as exc:
+        trace["diagnostics_rewrite_error"] = repr(exc)
+        final_spec = cellspec
+    metric_ast = final_spec["metric_ast"]
+    trigger_ast = final_spec.get("trigger_ast")
+
+    # Знак расходной категории: дефолт out, а расхождение с net значит сторно
+    # внутри читаемой категории. Категории могут прийти от LLM — падение
+    # диагностики (KeyError в expand) не должно отбросить уже посчитанную
+    # ячейку.
+    try:
+        divergence = sign_divergence(rows, _metric_categories(metric_ast))
+        if divergence:
+            trace["sign_divergence"] = divergence
+    except Exception as exc:
+        trace["sign_divergence_error"] = repr(exc)
+
+    # Шум леджера дошёл до расчёта: счёт загрязнён И метрика читает роллап, не
+    # суженный перечнем. По отдельности ни одно из двух ничего не значит,
+    # поэтому алярм только на сочетании. Диагностика: строки не отбрасываются,
+    # вердикт не меняется, падение обхода не стоит ячейки.
+    try:
+        na = noise.rollup_alarm(account, pollution, metric_ast)
+        if na is not None:
+            # scenario/clause внутрь словаря по той же причине, что у
+            # other_unassigned: точный дедуп в _alarm_counts схлопнул бы разные
+            # ячейки в одну.
+            trace.setdefault("alarms", []).append({**na, "scenario": scenario, "clause": clause})
+            print(
+                f"ALARM polluted_rollup_read {scenario} {clause}: "
+                f"categories={','.join(na['categories'])} ratio={na['ratio']}",
+                flush=True,
+            )
+    except Exception as exc:
+        trace["polluted_rollup_read_error"] = repr(exc)
+
+    # Неразнесённые строки глазами этой ячейки (5.3): диагностика, вердикт не
+    # меняется. Падение обхода не стоит ячейки.
+    #
+    # Категории триггера учитываются наравне с категориями метрики:
+    # несработавший триггер даёт COMPLIANT безусловно (evidence.compute),
+    # поэтому потерянная строка в категории, которую читает только триггер,
+    # молча переворачивает статус так же, как строка в метрике.
+    try:
+        alarm_categories = _all_metric_categories(metric_ast)
+        if trigger_ast is not None:
+            alarm_categories |= _all_metric_categories(trigger_ast)
+        oa = cell_other_alarm(rows, alarm_categories, _metric_filters(metric_ast, trigger_ast))
+        if oa is not None:
+            trace["other_unassigned"] = oa
+            # И в общий alarms: сканеры run-report (_alarm_counts) и
+            # invariants._collect_report_alarms читают только alarms/fx_alarms,
+            # а строка ALARM в stdout тонет между fx и fallback. В окне решают
+            # по run-report — тот же приём, что для metric_substituted.
+            # scenario/clause внутрь словаря: иначе точный дедуп схлопнул бы
+            # одинаковые срабатывания разных ячеек в одно.
+            trace.setdefault("alarms", []).append(
+                {
+                    "kind": "other_unassigned",
+                    "scenario": scenario,
+                    "clause": clause,
+                    "blind": oa["blind"],
+                    "severity": oa["severity"],
+                    # severity=None (inputs_sum == 0) — это MAX, а не
+                    # отсутствие тяжести. В stdout это уже учтено, но решают по
+                    # run-report, и там сортировка по null уронила бы такую
+                    # ячейку вниз или упала бы с TypeError. Флаг даёт
+                    # сортируемый ключ: (not inputs_empty, severity).
+                    "inputs_empty": oa["severity"] is None,
+                    "other_sum": oa["other_sum"],
+                }
+            )
+            # severity=None означает inputs_sum == 0: метрика не видит НИ ОДНОЙ
+            # своей строки, весь объём осел в OTHER. Это максимальная тяжесть,
+            # и печатать её как None нельзя — разбор в окне идёт сортировкой по
+            # severity, и такая ячейка встала бы ниже любой с посчитанной долей.
+            print(
+                f"ALARM other_unassigned {scenario} {clause}: "
+                f"blind={','.join(oa['blind'])} "
+                f"severity={'MAX(inputs=0)' if oa['severity'] is None else oa['severity']} "
+                f"other_sum={oa['other_sum']}",
+                flush=True,
+            )
+    except Exception as exc:
+        trace["other_unassigned_error"] = repr(exc)
+
+
 def main(
     archive: Path, facts_source: str = "extracted", hide_templates: frozenset[str] = frozenset()
 ) -> dict:
@@ -1716,115 +1856,16 @@ def main(
                 if fx_alarms:
                     trace["fx_alarms"] = fx_alarms
                 if isinstance(cellspec_or_error, dict):
-                    # Знак расходной категории: дефолт out, а расхождение с net
-                    # значит сторно внутри читаемой категории. Категории могут
-                    # прийти от LLM — падение диагностики (KeyError в expand)
-                    # не должно отбросить уже посчитанную ячейку.
-                    try:
-                        divergence = sign_divergence(
-                            rows, _metric_categories(cellspec_or_error["metric_ast"])
-                        )
-                        if divergence:
-                            trace["sign_divergence"] = divergence
-                    except Exception as exc:
-                        trace["sign_divergence_error"] = repr(exc)
-                    # Шум леджера дошёл до расчёта: счёт загрязнён И метрика
-                    # читает роллап, не суженный перечнем. По отдельности ни
-                    # одно из двух ничего не значит, поэтому алярм только на
-                    # сочетании. Диагностика: строки не отбрасываются, вердикт
-                    # не меняется, падение обхода не стоит ячейки.
-                    #
-                    # Смотреть надо на ПОСЛЕ-переписанную метрику: run_cell
-                    # прогоняет спеку через rewrites.apply_final (сужение
-                    # опекса, квартализация) и считает уже её, а cellspec на
-                    # входе остаётся прежним — apply_final не мутирует. На
-                    # исходной метрике алярм поднимался бы ровно там, где
-                    # сужение УЖЕ починило широкое чтение, то есть говорил бы
-                    # неправду. apply_final чистая и идемпотентная, повторный
-                    # вызов даёт тот же AST, что посчитала ячейка.
-                    try:
-                        final_spec, _rw = rewrites.apply_final(
-                            cellspec_or_error, quote, cellspec_or_error.get("direction")
-                        )
-                        na = noise.rollup_alarm(
-                            index["scenario_to_account"].get(scenario, ""),
-                            pollution,
-                            final_spec["metric_ast"],
-                        )
-                        if na is not None:
-                            # scenario/clause внутрь словаря по той же причине,
-                            # что у other_unassigned: точный дедуп в
-                            # _alarm_counts схлопнул бы разные ячейки в одну.
-                            trace.setdefault("alarms", []).append(
-                                {**na, "scenario": scenario, "clause": clause}
-                            )
-                            print(
-                                f"ALARM polluted_rollup_read {scenario} {clause}: "
-                                f"categories={','.join(na['categories'])} ratio={na['ratio']}",
-                                flush=True,
-                            )
-                    except Exception as exc:
-                        trace["polluted_rollup_read_error"] = repr(exc)
-                    # Неразнесённые строки глазами этой ячейки (5.3): диагностика,
-                    # вердикт не меняется. Падение обхода не стоит ячейки.
-                    #
-                    # Категории триггера учитываются наравне с категориями метрики:
-                    # несработавший триггер даёт COMPLIANT безусловно (evidence.compute),
-                    # поэтому потерянная строка в категории, которую читает только
-                    # триггер, молча переворачивает статус так же, как строка в метрике.
-                    try:
-                        alarm_categories = _all_metric_categories(cellspec_or_error["metric_ast"])
-                        if cellspec_or_error["trigger_ast"] is not None:
-                            alarm_categories |= _all_metric_categories(cellspec_or_error["trigger_ast"])
-                        oa = cell_other_alarm(
-                            rows,
-                            alarm_categories,
-                            _metric_filters(
-                                cellspec_or_error["metric_ast"], cellspec_or_error["trigger_ast"]
-                            ),
-                        )
-                        if oa is not None:
-                            trace["other_unassigned"] = oa
-                            # И в общий alarms: сканеры run-report
-                            # (_alarm_counts) и invariants._collect_report_alarms
-                            # читают только alarms/fx_alarms, а строка ALARM в
-                            # stdout тонет между fx и fallback. В окне решают по
-                            # run-report — тот же приём, что для
-                            # metric_substituted. scenario/clause внутрь
-                            # словаря: иначе точный дедуп схлопнул бы
-                            # одинаковые срабатывания разных ячеек в одно.
-                            trace.setdefault("alarms", []).append(
-                                {
-                                    "kind": "other_unassigned",
-                                    "scenario": scenario,
-                                    "clause": clause,
-                                    "blind": oa["blind"],
-                                    "severity": oa["severity"],
-                                    # severity=None (inputs_sum == 0) — это MAX,
-                                    # а не отсутствие тяжести. В stdout это уже
-                                    # учтено, но решают по run-report, и там
-                                    # сортировка по null уронила бы такую ячейку
-                                    # вниз или упала бы с TypeError. Флаг даёт
-                                    # сортируемый ключ: (not inputs_empty, severity).
-                                    "inputs_empty": oa["severity"] is None,
-                                    "other_sum": oa["other_sum"],
-                                }
-                            )
-                            # severity=None означает inputs_sum == 0: метрика не
-                            # видит НИ ОДНОЙ своей строки, весь объём осел в
-                            # OTHER. Это максимальная тяжесть, и печатать её
-                            # как None нельзя — разбор в окне идёт сортировкой
-                            # по severity, и такая ячейка встала бы ниже любой
-                            # с посчитанной долей.
-                            print(
-                                f"ALARM other_unassigned {scenario} {clause}: "
-                                f"blind={','.join(oa['blind'])} "
-                                f"severity={'MAX(inputs=0)' if oa['severity'] is None else oa['severity']} "
-                                f"other_sum={oa['other_sum']}",
-                                flush=True,
-                            )
-                    except Exception as exc:
-                        trace["other_unassigned_error"] = repr(exc)
+                    _cell_diagnostics(
+                        trace,
+                        rows,
+                        cellspec_or_error,
+                        quote,
+                        index["scenario_to_account"].get(scenario, ""),
+                        pollution,
+                        scenario,
+                        clause,
+                    )
                     if trace.get("tier") == 0:
                         computed.append((cellspec_or_error["direction"], cell["actual"]))
                     if cell["evidence_txn_id"] is not None:
