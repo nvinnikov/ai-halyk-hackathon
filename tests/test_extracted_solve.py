@@ -1044,3 +1044,81 @@ def test_ledger_doc_metric_substitution_refuses_partial_and_dirty(monkeypatch):
     art = {"clauses": {"6.1": sp}, "alarms": []}
     out = solve._resolve_ledger_doc_metrics(Path("."), {"account_id": "A", "alarms": []}, art, set(), "SC")
     assert out["clauses"]["6.1"]["valid"] is False
+
+
+def test_reopen_tautology_flags_valid_bare_doc_equal_to_limit():
+    # Спека формально валидна (doc-ключ числом решён), но это эхо порога:
+    # голый doc(ключ), значение которого по модулю равно порогу ячейки.
+    # Перед формульным резолвом такая спека помечается как невалидная с
+    # ключом обратно в missing_doc_keys — резолву дают шанс, как если бы
+    # числового значения не нашлось.
+    sp = _spec(valid=True, missing_doc_keys=[], metric="doc(max_asset_transfer)", limit="250000")
+    art = {"clauses": {"6.1": sp}, "alarms": []}
+    doc_facts = {"max_asset_transfer": "250000"}
+    out = solve._reopen_tautology_clauses(art, doc_facts, "SC")
+    reopened = out["clauses"]["6.1"]
+    assert reopened["valid"] is False
+    assert reopened["missing_doc_keys"] == ["max_asset_transfer"]
+
+
+def test_reopen_tautology_ignores_partial_expression():
+    # doc() — слагаемое, не вся метрика: законное совпадение (полис ровно на
+    # нужную сумму) новый гейт не имеет права трогать.
+    sp = _spec(
+        valid=True,
+        missing_doc_keys=[],
+        metric="add(doc(policy_amount), agg(CAPEX, out))",
+        limit="250000",
+    )
+    art = {"clauses": {"6.1": sp}, "alarms": []}
+    doc_facts = {"policy_amount": "250000"}
+    out = solve._reopen_tautology_clauses(art, doc_facts, "SC")
+    assert out is art  # неизменная спека возвращается как есть, без изменений
+
+
+def test_reopen_tautology_ignores_value_below_limit():
+    # Тот же голый doc(), но значение не равно порогу — тавтологии нет.
+    sp = _spec(valid=True, missing_doc_keys=[], metric="doc(max_asset_transfer)", limit="250000")
+    art = {"clauses": {"6.1": sp}, "alarms": []}
+    doc_facts = {"max_asset_transfer": "100000"}
+    out = solve._reopen_tautology_clauses(art, doc_facts, "SC")
+    assert out["clauses"]["6.1"]["valid"] is True
+
+
+def test_reopen_tautology_ignores_already_invalid_clause():
+    # Спека, уже невалидная (например из-за других ошибок), не трогается:
+    # новый гейт работает только по формально валидным клаузам.
+    sp = _spec(valid=False, errors=["quote_unverified"], metric="doc(max_asset_transfer)", limit="250000")
+    art = {"clauses": {"6.1": sp}, "alarms": []}
+    doc_facts = {"max_asset_transfer": "250000"}
+    out = solve._reopen_tautology_clauses(art, doc_facts, "SC")
+    assert out is art
+
+
+def test_tautology_reopened_clause_gets_resolved_by_ledger_formula(monkeypatch, tmp_path):
+    """Сквозной сценарий: валидная спека с тавтологичным doc() проходит через
+    _extracted_inputs целиком — гейт отдаёт ключ обратно резолву, резолв
+    подставляет формулу по леджеру, ячейка выходит валидной без doc()."""
+    import facts_extract as fe
+
+    monkeypatch.setattr(solve, "find_inputs", lambda d: {"pdfs": []})
+    monkeypatch.setattr(
+        solve, "build_dossiers", lambda wd, pdfs, index, all_accounts=None: {"ACC-X": {"account_id": "ACC-X"}}
+    )
+    facts = fe._empty_facts()
+    facts["doc_facts"] = {"max_asset_transfer": "250000"}
+    monkeypatch.setattr(solve, "extract_facts", lambda wd, d: facts)
+    spec_art = {
+        "clauses": {
+            "6.1": _spec(valid=True, missing_doc_keys=[], metric="doc(max_asset_transfer)", limit="250000")
+        },
+        "alarms": [],
+    }
+    monkeypatch.setattr(solve, "extract_specs", lambda wd, d, keys: spec_art)
+    monkeypatch.setattr(solve, "resolve_doc_metric", lambda *a: "agg(FINANCING, out)")
+    index = {"scenario_to_account": {"S1": "ACC-X"}}
+    _facts_by_sc, specs_by_sc = solve._extracted_inputs(tmp_path, tmp_path, index, ["S1"])
+    fixed = specs_by_sc["S1"]["clauses"]["6.1"]
+    assert fixed["valid"] and fixed["missing_doc_keys"] == []
+    assert "doc(" not in fixed["metric"] and "agg(FINANCING, out)" in fixed["metric"]
+    parse(fixed["metric"])  # результат обязан разбираться грамматикой
