@@ -306,6 +306,60 @@ def test_resolve_doc_fact_negative_value_matches_unsigned_quote(tmp_path, monkey
     }
 
 
+def test_resolve_doc_fact_accepts_percent_of_statute(tmp_path, monkeypatch):
+    """«N% of/от <статья>» — не число, но опознаваемый процентный кэп
+    (rewrites.parse_percent_of_statute): _number_ok такую строку отсеивает,
+    и гейт резолва обязан пропустить её отдельно, иначе адресно найденный
+    процентный кэп теряется целиком (задача про процентный кэп из doc-ключа)."""
+    dossier = {
+        **DOSSIER,
+        "docs": DOSSIER["docs"]
+        + [
+            {
+                "file": "agreement.pdf",
+                "doc_type": "agreement",
+                "date": "2025-01-01",
+                "text": "добавления не превышают 5% of Revenue по условиям договора",
+            }
+        ],
+    }
+
+    def fake_call(prompt, schema, schema_version, **kw):
+        return {"found": True, "value": "5% of Revenue", "quote": "добавления не превышают 5% of Revenue"}
+
+    monkeypatch.setattr(facts_extract.llm, "call", facts_only(fake_call))
+    got = facts_extract.resolve_doc_fact(tmp_path, dossier, "ebitda_addback_limit", "потолок добавок")
+    assert got == {
+        "value": "5% of Revenue",
+        "quote": "добавления не превышают 5% of Revenue",
+        "quote_outside_agreement": False,
+    }
+
+
+def test_resolve_doc_fact_rejects_non_numeric_non_percent_value(tmp_path, monkeypatch):
+    """Строка вроде «3.00x» (порог с суффиксом кратности) не подходит ни под
+    число, ни под «N% статьи» — резолв обязан отказать, как и раньше:
+    расширение гейта не имеет права впустить произвольный текст."""
+    dossier = {
+        **DOSSIER,
+        "docs": DOSSIER["docs"]
+        + [
+            {
+                "file": "agreement.pdf",
+                "doc_type": "agreement",
+                "date": "2025-01-01",
+                "text": "порог 3.00x применяется",
+            }
+        ],
+    }
+
+    def fake_call(prompt, schema, schema_version, **kw):
+        return {"found": True, "value": "3.00x", "quote": "порог 3.00x применяется"}
+
+    monkeypatch.setattr(facts_extract.llm, "call", facts_only(fake_call))
+    assert facts_extract.resolve_doc_fact(tmp_path, dossier, "leverage_ratio", "порог") is None
+
+
 def test_empty_dossier_facts_alarmed_and_not_cached(tmp_path, monkeypatch):
     """Досье без документов — деградация с алярмом no_documents, артефакт не
     пишется: перезапуск после починки конвейера выше перепытается

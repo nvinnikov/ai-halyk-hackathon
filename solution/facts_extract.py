@@ -1277,8 +1277,21 @@ def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) ->
     if not art.get("found"):
         return None
     combined = "\n".join(sanitize_document(d["text"]) for d in own_docs)
-    if not verify_quote(art["quote"], combined) or not _number_ok(art["value"]):
-        return None  # непроверяемая цитата или мусорное число — факта нет
+    if not verify_quote(art["quote"], combined):
+        return None  # непроверяемая цитата — факта нет
+    # Значение — не всегда чистое число: адресный резолв величины вроде
+    # «не более N% of Revenue» честно возвращает её словами, раз в
+    # документах она не названа суммой. _number_ok такую строку отсеивает —
+    # признаёт её отдельно rewrites.parse_percent_of_statute (тот же разбор,
+    # которым потом эту строку подставляет в AST resolve_percent_of_statute).
+    # Любая ДРУГАЯ нечисловая строка (порог с суффиксом кратности вроде
+    # «x» и т.п.) гейт не проходит и отбрасывается, как и раньше. Плоский
+    # импорт по месту: модули solution не пакет, цикла нет (rewrites не
+    # импортирует facts_extract).
+    import rewrites
+
+    if not _number_ok(art["value"]) and rewrites.parse_percent_of_statute(art["value"]) is None:
+        return None  # ни число, ни процентный кэп статьи — мусор, факта нет
     # Число обязано присутствовать в верифицированной цитате (ревью PR #9,
     # 3-я волна): для порогов спек такая проверка есть (_limit_in_quote), а
     # doc()-факт точно так же способен тихо перевернуть вердикт. Плоский

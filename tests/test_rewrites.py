@@ -6,6 +6,7 @@ from rewrites import (
     flip_debt_incurrence_sign,
     narrow_opex,
     quarterly,
+    resolve_percent_of_statute,
     widen_related_party,
 )
 
@@ -741,4 +742,143 @@ def test_apply_final_does_not_cap_basket_by_default():
     spec = {"metric_ast": parse(_BASKET_METRIC), "metric_text": _BASKET_METRIC}
     new, alarms = apply_final(spec, "любая непустая цитата")
     assert new["metric_text"] == _BASKET_METRIC
+    assert alarms == []
+
+
+# --- Процентный кэп из doc-ключа: «N% of Revenue» вместо числа --------------
+
+_PERCENT_CAP_METRIC = (
+    "ratio(agg(FINANCING, in, period(2025-01-01, 2025-12-31)), "
+    "add(sub(agg(REVENUE, in, period(2025-01-01, 2025-12-31)), "
+    "agg(OPEX_TOTAL, out, period(2025-01-01, 2025-12-31))), "
+    "min(doc(ebitda_addbacks_material_total), doc(ebitda_addback_limit))))"
+)
+
+
+def test_resolves_percent_of_statute_using_matching_agg_in_metric():
+    """Doc-ключ резолвится строкой «N% статьи», а не числом: код разбирает её
+    сам и подставляет mul(agg(<та же статья>, <тот же знак/фильтры>),
+    const(доля)) вместо doc() — знак и period берутся у REVENUE-агрегата,
+    уже стоящего в этой же метрике, а не выдумываются заново."""
+    doc_facts = {
+        "ebitda_addbacks_material_total": "690314.22",
+        "ebitda_addback_limit": "5% of Revenue",
+    }
+    ast, changed = resolve_percent_of_statute(parse(_PERCENT_CAP_METRIC), doc_facts)
+    assert changed
+    assert unparse(ast) == (
+        "ratio(agg(FINANCING, in, period(2025-01-01, 2025-12-31)), "
+        "add(sub(agg(REVENUE, in, period(2025-01-01, 2025-12-31)), "
+        "agg(OPEX_TOTAL, out, period(2025-01-01, 2025-12-31))), "
+        "min(doc(ebitda_addbacks_material_total), "
+        "mul(agg(REVENUE, in, period(2025-01-01, 2025-12-31)), const(0.05)))))"
+    )
+
+
+def test_resolves_percent_of_statute_russian_wording():
+    doc_facts = {"cap_key": "5% от выручки"}
+    metric = "min(agg(REVENUE, in), doc(cap_key))"
+    ast, changed = resolve_percent_of_statute(parse(metric), doc_facts)
+    assert changed
+    assert unparse(ast) == "min(agg(REVENUE, in), mul(agg(REVENUE, in), const(0.05)))"
+
+
+def test_does_not_resolve_percent_cap_without_doc_key_in_facts():
+    ast, changed = resolve_percent_of_statute(parse(_PERCENT_CAP_METRIC), {})
+    assert not changed
+    assert unparse(ast) == _PERCENT_CAP_METRIC
+
+
+def test_does_not_resolve_when_value_is_plain_number():
+    """Обычное число проходит прежним, числовым, путём — здесь нечего делать."""
+    doc_facts = {"ebitda_addback_limit": "412025.87"}
+    ast, changed = resolve_percent_of_statute(parse(_PERCENT_CAP_METRIC), doc_facts)
+    assert not changed
+    assert unparse(ast) == _PERCENT_CAP_METRIC
+
+
+def test_does_not_resolve_when_no_matching_agg_in_metric():
+    """Период и знак нового агрегата выдумывать нельзя: нет одноимённого
+    агрегата в метрике — отказ, а не гадание фильтров."""
+    metric = "min(agg(OPEX_TOTAL, out), doc(ebitda_addback_limit))"
+    doc_facts = {"ebitda_addback_limit": "5% of Revenue"}
+    ast, changed = resolve_percent_of_statute(parse(metric), doc_facts)
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_does_not_resolve_when_matching_agg_is_ambiguous():
+    """Две категории REVENUE в метрике с разными фильтрами — молчаливый выбор
+    одной дороже отказа."""
+    metric = (
+        "min(sub(agg(REVENUE, in, period(2025-01-01, 2025-06-30)), "
+        "agg(REVENUE, in, period(2025-07-01, 2025-12-31))), doc(ebitda_addback_limit))"
+    )
+    doc_facts = {"ebitda_addback_limit": "5% of Revenue"}
+    ast, changed = resolve_percent_of_statute(parse(metric), doc_facts)
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_does_not_resolve_percent_out_of_range():
+    doc_facts = {"ebitda_addback_limit": "0% of Revenue"}
+    ast, changed = resolve_percent_of_statute(parse(_PERCENT_CAP_METRIC), doc_facts)
+    assert not changed
+    doc_facts = {"ebitda_addback_limit": "150% of Revenue"}
+    ast, changed = resolve_percent_of_statute(parse(_PERCENT_CAP_METRIC), doc_facts)
+    assert not changed
+
+
+def test_does_not_resolve_when_statute_is_ambiguous():
+    doc_facts = {"ebitda_addback_limit": "5% of Consulting and Marketing"}
+    ast, changed = resolve_percent_of_statute(parse(_PERCENT_CAP_METRIC), doc_facts)
+    assert not changed
+    assert unparse(ast) == _PERCENT_CAP_METRIC
+
+
+def test_does_not_resolve_when_statute_is_unrecognized():
+    doc_facts = {"ebitda_addback_limit": "5% of Special Expenses"}
+    ast, changed = resolve_percent_of_statute(parse(_PERCENT_CAP_METRIC), doc_facts)
+    assert not changed
+    assert unparse(ast) == _PERCENT_CAP_METRIC
+
+
+def test_percent_cap_nested_inside_add():
+    metric = f"add({_PERCENT_CAP_METRIC}, agg(ONE_OFF, out))"
+    doc_facts = {
+        "ebitda_addbacks_material_total": "690314.22",
+        "ebitda_addback_limit": "5% of Revenue",
+    }
+    ast, changed = resolve_percent_of_statute(parse(metric), doc_facts)
+    assert changed
+    assert "mul(agg(REVENUE, in, period(2025-01-01, 2025-12-31)), const(0.05))" in unparse(ast)
+
+
+def test_apply_final_resolves_percent_cap_and_reports_alarm():
+    spec = {
+        "metric_ast": parse(_PERCENT_CAP_METRIC),
+        "metric_text": _PERCENT_CAP_METRIC,
+        "direction": "max",
+    }
+    doc_facts = {
+        "ebitda_addbacks_material_total": "690314.22",
+        "ebitda_addback_limit": "5% of Revenue",
+    }
+    new, alarms = apply_final(
+        spec, "порог не превышать", "max", False, doc_facts=doc_facts, doc_fact_quotes={}
+    )
+    assert "mul(agg(REVENUE, in, period(2025-01-01, 2025-12-31)), const(0.05))" in new["metric_text"]
+    assert "doc_percent_of_statute_resolved" in [a["kind"] for a in alarms]
+    assert spec["metric_text"] == _PERCENT_CAP_METRIC  # исходный cellspec не мутирован
+
+
+def test_apply_final_does_not_resolve_percent_cap_by_default():
+    """Обратная совместимость: без doc_facts ничего не переписывается.
+
+    Метрика без EBITDA-подвыражения sub(REVENUE, OPEX_TOTAL) — чтобы не
+    зацепить не относящийся к делу narrow_opex, у которого своя проверка."""
+    metric = "min(agg(REVENUE, in), doc(ebitda_addback_limit))"
+    spec = {"metric_ast": parse(metric), "metric_text": metric}
+    new, alarms = apply_final(spec, "любая непустая цитата")
+    assert new["metric_text"] == metric
     assert alarms == []

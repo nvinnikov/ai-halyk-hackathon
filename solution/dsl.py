@@ -520,6 +520,8 @@ def unparse(node) -> str:
         return f"min({', '.join(unparse(a) for a in node.args)})"
     if isinstance(node, Const):
         return f"const({node.value})"
+    if isinstance(node, Mul):
+        return f"mul({unparse(node.a)}, {unparse(node.b)})"
     if isinstance(node, Cmp):
         return f"{node.op}({unparse(node.a)}, {unparse(node.b)})"
     raise TypeError(f"не узел DSL: {node!r}")

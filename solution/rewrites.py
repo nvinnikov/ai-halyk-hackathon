@@ -10,7 +10,22 @@ import dataclasses
 import re
 from decimal import Decimal, InvalidOperation
 
-from dsl import Add, Agg, Const, CounterpartyIn, Doc, MaxOf, MinOf, Period, Quarter, Ratio, Sub, unparse, walk
+from dsl import (
+    Add,
+    Agg,
+    Const,
+    CounterpartyIn,
+    Doc,
+    MaxOf,
+    MinOf,
+    Mul,
+    Period,
+    Quarter,
+    Ratio,
+    Sub,
+    unparse,
+    walk,
+)
 from specs_extract import _limit_in_quote
 from taxonomy import LEAVES
 
@@ -425,6 +440,10 @@ _STATUTE_PHRASE_RE = re.compile(
 # тот же, что у _mentions_incurrence/_mentions_repayment выше: основы слов,
 # проверяемые по токену (word.startswith), а не подстрокой по всему тексту —
 # иначе "current" ложно матчился бы стемом "rent" внутри "curRENT".
+#
+# REVENUE добавлена ради процентных кэпов из doc-ключа («N% of Revenue») —
+# resolve_percent_of_statute переиспользует ровно этот словарь, второй такой
+# не заводится.
 _STATUTE_CATEGORY_STEMS: dict[str, tuple[str, ...]] = {
     "CONSULTING": ("консультацион", "consulting"),
     "MARKETING": ("маркетинг", "реклам", "marketing", "advertis"),
@@ -437,6 +456,7 @@ _STATUTE_CATEGORY_STEMS: dict[str, tuple[str, ...]] = {
     "INTEREST": ("процент", "interest"),
     "CAPEX": ("капитальн", "capex", "capital expenditure"),
     "OTHER_OPEX": ("операционн", "operating expense"),
+    "REVENUE": ("выручк", "revenue"),
 }
 assert set(_STATUTE_CATEGORY_STEMS) <= LEAVES  # ключи — не выдуманные категории
 
@@ -450,13 +470,14 @@ def _mentions_up_to_cap(quote: str) -> bool:
     return bool(_UP_TO_RE.search(_normalize(quote)))
 
 
-def _match_statute_category(quote: str) -> str | None:
-    """Единственная категория, названная статьёй в «квалифицированных как …»,
-    или None — фразы нет, категория не распознана, либо распознано несколько."""
-    m = _STATUTE_PHRASE_RE.search(quote)
-    if m is None:
-        return None
-    phrase = _normalize(m.group(1))
+def _match_category_by_phrase(phrase: str) -> str | None:
+    """Единственная категория LEAVES, названная нормализованной фразой, или
+    None — не распознано, либо распознано несколько (однозначность несущая:
+    молчаливый выбор дороже отказа). Общая часть _match_statute_category и
+    resolve_percent_of_statute — статья ищется одним и тем же способом,
+    независимо от того, откуда взята сама фраза (цитата пункта или значение
+    doc-ключа)."""
+    phrase = _normalize(phrase)
     words = _WORD_RE.findall(phrase)
     matched = {
         category
@@ -465,6 +486,15 @@ def _match_statute_category(quote: str) -> str | None:
         if (stem in phrase if " " in stem else any(w.startswith(stem) for w in words))
     }
     return matched.pop() if len(matched) == 1 else None
+
+
+def _match_statute_category(quote: str) -> str | None:
+    """Единственная категория, названная статьёй в «квалифицированных как …»,
+    или None — фразы нет, категория не распознана, либо распознано несколько."""
+    m = _STATUTE_PHRASE_RE.search(quote)
+    if m is None:
+        return None
+    return _match_category_by_phrase(m.group(1))
 
 
 def _find_related_party_agg(node: object) -> Agg | None:
@@ -540,6 +570,121 @@ def cap_related_party_basket(
             if replacement is not None:
                 changed = True
                 return Sub(a=node.a, b=replacement)
+        if not hasattr(node, "__dataclass_fields__"):
+            return node
+        updates = {}
+        for name in node.__dataclass_fields__:
+            value = getattr(node, name)
+            if isinstance(value, tuple):
+                updates[name] = tuple(rewrite(c) if hasattr(c, "__dataclass_fields__") else c for c in value)
+            elif hasattr(value, "__dataclass_fields__"):
+                updates[name] = rewrite(value)
+        return dataclasses.replace(node, **updates) if updates else node
+
+    out = rewrite(metric_ast)
+    return (out, changed) if changed else (metric_ast, False)
+
+
+# Ковенант вида «разовые добавления к EBITDA не более N% of Revenue» (или
+# любой другой статьи, уже посчитанной где-то в этой же метрике) резолвится
+# адресным числовым резолвом (facts_extract.resolve_doc_fact) в строку — «5%
+# of Revenue», а не в число, потому что величина не названа суммой ни в одном
+# документе. facts_extract больше не отбрасывает такую строку (_number_ok
+# признаёт её опознаваемым процентным кэпом наравне с числом, тем же
+# parse_percent_of_statute), но АРИФМЕТИКУ строка не несёт — её обязан
+# посчитать код. Верная форма: mul(agg(<категория статьи>, <тот же знак/
+# фильтры, что у одноимённого агрегата в метрике>), const(N/100)).
+#
+# «Одноимённый агрегат» — единственное, что даёт знак и фильтры (период,
+# контрагентов): выдумывать их запрещено (см. брифинг задачи), поэтому
+# подстановка требует РОВНО ОДНОГО Agg той же категории в метрике; ноль или
+# больше одного — отказ, не гадание.
+_PERCENT_OF_STATUTE_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*%\s*(?:of|от)\s+([^.,;)\n]+)",
+    re.IGNORECASE,
+)
+
+
+def parse_percent_of_statute(value: str) -> tuple[Decimal, str] | None:
+    """«N% of/от <статья>» → (доля от 0 до 1, категория LEAVES), иначе None.
+
+    Три гейта, все обязательны — молчаливая подмена смысла ковенанта дороже
+    отказа:
+      1) доля разбирается регуляркой из значения doc-ключа;
+      2) доля в диапазоне (0; 100) — ноль и отрицательное не кэп, сто и
+         больше не отсечение, а признак неверного разбора;
+      3) статья сопоставляется РОВНО ОДНОЙ категории таксономии тем же
+         словарём и матчером, что и корзина связанных сторон
+         (_STATUTE_CATEGORY_STEMS, _match_category_by_phrase) — второй
+         словарь не заводится.
+
+    Переиспользуется facts_extract.resolve_doc_fact (гейт приёма значения) и
+    resolve_percent_of_statute (сама подстановка) — один разбор на обоих."""
+    if not value:
+        return None
+    m = _PERCENT_OF_STATUTE_RE.search(value)
+    if m is None:
+        return None
+    try:
+        pct = Decimal(m.group(1).replace(",", "."))
+    except InvalidOperation:
+        return None
+    if not (Decimal(0) < pct < Decimal(100)):
+        return None
+    category = _match_category_by_phrase(m.group(2))
+    if category is None:
+        return None
+    return pct / Decimal(100), category
+
+
+def _find_agg_by_category(node: object, category: str) -> Agg | None:
+    """Единственный Agg данной категории в дереве, иначе None — знак и
+    фильтры нового агрегата берутся у него, а не выдумываются заново."""
+    matches = [n for n in walk(node) if isinstance(n, Agg) and n.category == category]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _percent_cap_node(key: str, doc_facts: dict, root: object) -> object | None:
+    value = doc_facts.get(key)
+    if value is None:
+        return None
+    parsed = parse_percent_of_statute(str(value))
+    if parsed is None:
+        return None
+    fraction, category = parsed
+    source_agg = _find_agg_by_category(root, category)
+    if source_agg is None:
+        return None
+    return Mul(
+        a=Agg(category=category, sign=source_agg.sign, filters=source_agg.filters), b=Const(value=fraction)
+    )
+
+
+def resolve_percent_of_statute(metric_ast, doc_facts: dict | None) -> tuple[object, bool]:
+    """doc(<ключ>) → mul(agg(<категория>, <знак>, <фильтры>), const(доля)) —
+    процентный кэп, резолвленный строкой («N% of Revenue»), а не числом.
+
+    Заменяется ЛЮБОЙ Doc(key) в дереве, чьё значение в doc_facts разбирается
+    parse_percent_of_statute — узел может стоять где угодно (min/max/add,
+    не только вычитаемым, как в cap_related_party_basket), потому что
+    источник агрегата ищется по ВСЕЙ метрике (root), а не по локальному
+    поддереву узла. Любой из трёх гейтов parse_percent_of_statute или
+    отсутствие однозначного одноимённого агрегата — узел остаётся
+    прежним Doc, молча: как и у соседних переписываний, признание — по
+    доступным данным, а не по угадыванию."""
+    if metric_ast is None or not doc_facts:
+        return metric_ast, False
+
+    changed = False
+
+    def rewrite(node):
+        nonlocal changed
+        if isinstance(node, Doc):
+            replacement = _percent_cap_node(node.key, doc_facts, metric_ast)
+            if replacement is not None:
+                changed = True
+                return replacement
+            return node
         if not hasattr(node, "__dataclass_fields__"):
             return node
         updates = {}
@@ -706,6 +851,8 @@ def apply_final(
     doc_facts/doc_fact_quotes (задача 4) — факты досье целиком (не только
     цитата пункта), нужны cap_related_party_basket: капнутая корзина
     резолвится по СОБСТВЕННОЙ цитате doc-ключа, а не по цитате всего пункта.
+    resolve_percent_of_statute (процентный кэп) использует только doc_facts —
+    своей цитаты doc-ключа ей не нужно, признак целиком в самом значении.
     По умолчанию None — старые вызовы без этих kwarg-ов ничего не переписывают."""
     if not quote or cellspec.get("metric_ast") is None:
         return cellspec, []
@@ -747,6 +894,10 @@ def apply_final(
     ast, basket_capped = cap_related_party_basket(ast, doc_facts, doc_fact_quotes)
     if basket_capped:
         alarms.append({"kind": "related_party_basket_capped", "target": "metric"})
+
+    ast, percent_cap_resolved = resolve_percent_of_statute(ast, doc_facts)
+    if percent_cap_resolved:
+        alarms.append({"kind": "doc_percent_of_statute_resolved", "target": "metric"})
 
     ast, sign_flipped = flip_debt_incurrence_sign(ast, quote)
     if sign_flipped:
