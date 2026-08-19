@@ -1,0 +1,23 @@
+{
+ "result": {
+  "shares": [
+   {
+    "name": "Aral Export Traders LLP",
+    "quote": "Aral Export Traders LLP 12.4%",
+    "share_percent": "12.4"
+   },
+   {
+    "name": "Kostanay Field Services LLP",
+    "quote": "Kostanay Field Services LLP 19.6%",
+    "share_percent": "19.6"
+   },
+   {
+    "name": "Kostanay Investment Holding L.L.P.",
+    "quote": "Kostanay Investment Holding L.L.P. 29.3%",
+    "share_percent": "29.3"
+   }
+  ],
+  "threshold_percent": "20.0",
+  "threshold_quote": "Организации, в которых Группа владеет 20.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

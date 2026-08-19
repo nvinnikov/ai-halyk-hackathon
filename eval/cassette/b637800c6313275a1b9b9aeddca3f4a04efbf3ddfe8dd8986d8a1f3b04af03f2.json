@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "Пункт 6.1",
+    "confidence": 0.95,
+    "direction": "min",
+    "limit": "1.5",
+    "metric": "ratio(add(sub(agg(REVENUE, in), agg(OPEX_TOTAL, out)), agg(RENT, out)), add(agg(INTEREST, out), agg(RENT, out)))",
+    "quote": "Заёмщик, Aktobe Rail Logistics JSC, обязуется не допускать снижения Коэффициента покрытия постоянных платежей ниже 1.50x за период с 2025-01-01 по 2025-12-31.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.2",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "1000000.00",
+    "metric": "agg(RENT, out)",
+    "quote": "Превышение совокупными арендными платежами Заёмщика (Aktobe Rail Logistics JSC) величины $1,000,000.00 за период с 2025-01-01 по 2025-12-31 само по себе не влечёт Случая неисполнения, если страховые премии за тот же период составили не менее $200,000.00.",
+    "trigger": "lt(agg(INSURANCE, out), const(200000.00))"
+   },
+   {
+    "clause": "Пункт 6.3",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "400000.00",
+    "metric": "agg(ALL, out, counterparty_in(related_parties))",
+    "quote": "Заёмщик обязуется обеспечить, чтобы совокупный размер Ограниченных платежей, совершённых Aktobe Rail Logistics JSC в пользу любой связанной стороны в период с 2025-01-01 по 2025-12-31, не превышал $400,000.00.",
+    "trigger": null
+   }
+  ]
+ }
+}

@@ -1,0 +1,26 @@
+{
+ "result": {
+  "shares": [
+   {
+    "held_through": "",
+    "name": "Kazakhmys Smelting JSC",
+    "quote": "Kazakhmys Smelting JSC 6.9%",
+    "share_percent": "6.9"
+   },
+   {
+    "held_through": "",
+    "name": "Ulytau Capital LLP.",
+    "quote": "Ulytau Capital LLP. 39.7%",
+    "share_percent": "39.7"
+   },
+   {
+    "held_through": "",
+    "name": "Ural Haul Systems LLP",
+    "quote": "Ural Haul Systems LLP 31.4%",
+    "share_percent": "31.4"
+   }
+  ],
+  "threshold_percent": "34.0",
+  "threshold_quote": "Организации, в которых Группа владеет 34.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

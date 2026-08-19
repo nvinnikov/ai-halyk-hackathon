@@ -1,0 +1,34 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "max_debt_to_ebitda",
+    "quote": "отношение совокупного долга Заёмщика (Qostanay Grain Terminal JSC) к EBITDA не должно превышать 3.00x.",
+    "value": "3.00"
+   },
+   {
+    "key": "max_capex",
+    "quote": "совокупные расходы Qostanay Grain Terminal JSC по статье «Капитальные затраты» за период с 2025-01-01 по 2025-12-31 не превысят $2,500,000.00.",
+    "value": "2500000.00"
+   },
+   {
+    "key": "max_related_party_payments",
+    "quote": "совокупный объём платежей в пользу связанных сторон за период с 2025-01-01 по 2025-12-31 превышал $600,000.00.",
+    "value": "600000.00"
+   }
+  ],
+  "reclassifications": [
+   {
+    "counterparty": null,
+    "quote": "статья, переквалифицированная по итогам аудита как «Капитальные затраты», включается в расчёт, а её первоначальное отражение в учёте во внимание не принимается.",
+    "to_category": "CAPEX",
+    "txn_id": null
+   }
+  ],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

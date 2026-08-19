@@ -1,0 +1,23 @@
+{
+ "result": {
+  "shares": [
+   {
+    "name": "Qaraganda Holdings LLP",
+    "quote": "Qaraganda Holdings LLP 34.7%",
+    "share_percent": "34.7"
+   },
+   {
+    "name": "Qostanay Rail Operations LLP",
+    "quote": "Qostanay Rail Operations LLP 8.6%",
+    "share_percent": "8.6"
+   },
+   {
+    "name": "Temir Engineering Group",
+    "quote": "Temir Engineering Group 24.2%",
+    "share_percent": "24.2"
+   }
+  ],
+  "threshold_percent": "25.0",
+  "threshold_quote": "Организации, в которых Группа владеет 25.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

@@ -1,0 +1,22 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "ebitda_addback_1",
+    "quote": "Операция TXN-KC-OPX-12 ($24,324,463.35) является разовой статьёй, прибавляемой к EBITDA для целей ковенантов.",
+    "value": "24324463.35"
+   },
+   {
+    "key": "ebitda_addback_2",
+    "quote": "Операция TXN-KC-OPX-10 ($8,942,187.33) является разовой статьёй, прибавляемой к EBITDA для целей ковенантов.",
+    "value": "8942187.33"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

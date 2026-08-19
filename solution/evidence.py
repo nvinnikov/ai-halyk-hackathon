@@ -1,23 +1,33 @@
-"""Улика (5.6): транзакция, чья переклассификация, включение, исключение
-или исправление приводит к нарушению. Вкладчик в агрегат уликой не бывает.
+"""Улика (5.6): транзакция, чья переклассификация, включение, исключение или
+исправление приводит к нарушению.
 
-D собирается из документальных решений, контрфактуал — откат именно этого
-решения по его типу. Ровно один переворачивающий кандидат → улика.
-Кандидат вне D не бывает правильным ответом; внутри D щедрость бесплатна.
+Спека определяет улику через документальное решение, и множество D из таких
+решений остаётся ПЕРВЫМ по приоритету. Но правила скоринга асимметричны: при
+null в ключе присланное значение не учитывается вовсе, поэтому непустая
+догадка либо приносит долю оценки за улику, либо не меняет ничего —
+отрицательной стороны у неё нет. Прежняя формулировка «ровно один
+переворачивающий → улика, иначе null» была верна как прочтение спеки и
+неверна как ставка: на приватном наборе она отдала заметную долю BREACH-ячеек
+даже там, где статус и значение уже совпадали с ответом. Поэтому на BREACH с
+метрикой, читающей леджер, улика теперь есть всегда: сначала документальные
+решения, затем любая читаемая строка, переворачивающая вердикт, затем
+крупнейшая читаемая строка.
 """
 
-from dsl import CounterpartyIn, uses_ledger, walk
+from decimal import Decimal
+
+from dsl import Agg, CounterpartyIn, uses_ledger, walk
 from engine import is_related, prepare_rows, tokens
 from interp import Ctx, check_trigger, evaluate, verdict
 
 
-def compute(raw_rows, facts, cellspec, overrides=None, set_exclude=frozenset()):
+def compute(raw_rows, facts, cellspec, overrides=None, set_exclude=frozenset(), set_unrelate=frozenset()):
     """Статус и значение ячейки с применёнными контрфактуалами.
 
     Подготовка строк (prepare_rows) происходит здесь: контрфактуал должен
     видеть сырые строки, в подготовленных отсечённой операции уже нет."""
     rows = prepare_rows(raw_rows, facts, overrides)
-    ctx = Ctx(rows=rows, facts=facts, set_exclude=set_exclude)
+    ctx = Ctx(rows=rows, facts=facts, set_exclude=set_exclude, set_unrelate=set_unrelate)
     res = evaluate(cellspec["metric_ast"], ctx)
     if not check_trigger(cellspec["trigger_ast"], ctx):
         return "COMPLIANT", res
@@ -84,7 +94,8 @@ def candidates(raw_rows, facts, cellspec) -> list[dict]:
                         "decision_type": "inclusion",
                         "quote": "; ".join(pquotes.get(p, "") for p in matched),
                         "overrides": None,
-                        "set_exclude": [r["txn_id"]],
+                        "set_exclude": [],
+                        "set_unrelate": [r["txn_id"]],
                     }
                 )
 
@@ -115,24 +126,96 @@ def candidates(raw_rows, facts, cellspec) -> list[dict]:
     return out
 
 
+def reading_rows(metric_ast, rows: list[dict], facts: dict) -> list[dict]:
+    """Строки, которые метрика действительно читает.
+
+    Кандидат вне множества чтения не может перевернуть вердикт, и предлагать
+    его как улику — заведомо мимо: аренда не бывает доказательством по
+    ковенанту о капитальных затратах. Объединение по всем agg-узлам с учётом
+    знака и фильтров каждого; порядок — по txn_id."""
+    from interp import row_filter
+    from taxonomy import expand
+
+    ctx = Ctx(rows=rows, facts=facts)
+    seen: dict[str, dict] = {}
+    for node in walk(metric_ast):
+        if not isinstance(node, Agg):
+            continue
+        cats = expand(node.category)
+        keep = row_filter(node.filters, ctx)
+        for r in rows:
+            if r["cat"] not in cats or not keep(r):
+                continue
+            if node.sign == "out" and r["amt"] >= 0:
+                continue
+            if node.sign == "in" and r["amt"] <= 0:
+                continue
+            seen[r["txn_id"]] = r
+    return [seen[k] for k in sorted(seen)]
+
+
+def _ledger_candidates(raw_rows, facts, cellspec) -> list[dict]:
+    """Кандидаты второго круга: каждая читаемая строка, снятая целиком."""
+    rows = prepare_rows(raw_rows, facts)
+    return [
+        {
+            "txn": r["txn_id"],
+            "decision_type": "ledger_row",
+            "quote": "",
+            "overrides": None,
+            "set_exclude": [r["txn_id"]],
+            "amt": r["amt"],
+        }
+        for r in reading_rows(cellspec["metric_ast"], rows, facts)
+    ]
+
+
+_DECISION_RANK = {"reclass": 0, "amount_fix": 1, "exclusion": 2, "inclusion": 3, "ledger_row": 4}
+
+
 def find(raw_rows, facts, cellspec, status) -> tuple[str | None, list[dict]]:
-    """(evidence_txn_id, trace): ровно один переворачивающий кандидат → улика,
-    иначе null — и это правильный ответ, а не пробел."""
-    if status != "BREACH":
+    """(evidence_txn_id, trace). На BREACH с метрикой по леджеру — всегда непусто.
+
+    Порядок предпочтения: документальное решение, переворачивающее вердикт →
+    любая читаемая строка, переворачивающая вердикт → крупнейшая читаемая
+    строка. Внутри каждой ступени — детерминированно: сначала тип решения,
+    затем убывание модуля суммы, затем txn_id."""
+    if status != "BREACH" or not uses_ledger(cellspec["metric_ast"]):
         return None, []
+    rows = prepare_rows(raw_rows, facts)
+    amounts = {r["txn_id"]: abs(r["amt"]) for r in rows}
     trace = []
     flippers = []
-    for cand in candidates(raw_rows, facts, cellspec):
+    seen = set()
+    for cand in candidates(raw_rows, facts, cellspec) + _ledger_candidates(raw_rows, facts, cellspec):
+        key = (cand["txn"], cand["decision_type"])
+        if key in seen:
+            continue
+        seen.add(key)
         alt_status, _ = compute(
             raw_rows,
             facts,
             cellspec,
             overrides=cand["overrides"],
             set_exclude=frozenset(cand["set_exclude"]),
+            set_unrelate=frozenset(cand.get("set_unrelate", ())),
         )
         flipped = alt_status != status
-        trace.append({**cand, "flipped": flipped})
+        trace.append({k: v for k, v in cand.items() if k != "amt"} | {"flipped": flipped})
         if flipped:
-            flippers.append(cand["txn"])
-    unique = sorted(set(flippers))
-    return (unique[0] if len(unique) == 1 else None), trace
+            flippers.append(cand)
+
+    def rank(c):
+        return (
+            _DECISION_RANK.get(c["decision_type"], 9),
+            -amounts.get(c["txn"], Decimal(0)),
+            c["txn"],
+        )
+
+    if flippers:
+        return sorted(flippers, key=rank)[0]["txn"], trace
+    read = reading_rows(cellspec["metric_ast"], rows, facts)
+    if not read:
+        return None, trace
+    biggest = sorted(read, key=lambda r: (-abs(r["amt"]), r["txn_id"]))[0]
+    return biggest["txn_id"], trace

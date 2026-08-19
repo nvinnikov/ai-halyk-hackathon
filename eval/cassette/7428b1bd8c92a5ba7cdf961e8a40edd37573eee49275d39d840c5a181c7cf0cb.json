@@ -1,0 +1,18 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [
+   {
+    "counterparty": "Tengri Brand Studio",
+    "quote": "Сумма в размере $146,448.46, выплаченная контрагенту Tengri Brand Studio, первоначально учтённая как Консультационные услуги, переклассифицирована для целей соблюдения ковенантов как Маркетинговые расходы.",
+    "to_category": "MARKETING",
+    "txn_id": null
+   }
+  ],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

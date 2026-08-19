@@ -1,0 +1,206 @@
+{
+ "result": {
+  "categories": [
+   {
+    "category": "CAPEX",
+    "description": "5G radio access network equipment purchase"
+   },
+   {
+    "category": "RENT",
+    "description": "Advance storage contract settlement"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "Advisory services on plant logistics"
+   },
+   {
+    "category": "REVENUE",
+    "description": "Bulk cement sales — Q4 deliveries"
+   },
+   {
+    "category": "CAPEX",
+    "description": "Cold storage equipment purchase"
+   },
+   {
+    "category": "CAPEX",
+    "description": "Concentrator machinery instalment"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "Depot roof refurbishment works"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "Dispatch strategy consulting engagement"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "Distribution strategy consulting engagement"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "Emergency flood damage maintenance works"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "Engineering advisory on silo automation programme"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "Engineering advisory — silo expansion"
+   },
+   {
+    "category": "CAPEX",
+    "description": "Fibre backbone machinery installation"
+   },
+   {
+    "category": "CAPEX",
+    "description": "Flotation equipment purchase 2025"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "Freight logistics consulting engagement"
+   },
+   {
+    "category": "CAPEX",
+    "description": "Grain silo aeration equipment"
+   },
+   {
+    "category": "CAPEX",
+    "description": "Imported catalyst processing equipment"
+   },
+   {
+    "category": "CAPEX",
+    "description": "Imported clinker grinding equipment"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "Intercompany advisory retainer — H1 2025"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "Intercompany advisory settlement"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "Intercompany distribution settlement"
+   },
+   {
+    "category": "CAPEX",
+    "description": "Intra-group transfer of warehouse equipment"
+   },
+   {
+    "category": "CAPEX",
+    "description": "Kiln conveyor machinery upgrade"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "Legal and consulting fees 2025"
+   },
+   {
+    "category": "REVENUE",
+    "description": "Mobile service revenue settlement Q1 2025"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "Network operations and maintenance — full year"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "Non-recurring extruder line refurbishment programme"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "Non-recurring legacy 3G network refurbishment"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "Non-recurring storm damage repair to warehouse roof"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "Ordinary-course management advisory fees"
+   },
+   {
+    "category": "CAPEX",
+    "description": "Pipeline metering equipment purchase 2025"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "Plant operating costs and maintenance"
+   },
+   {
+    "category": "REVENUE",
+    "description": "Postpaid subscription revenue Q2 2025"
+   },
+   {
+    "category": "CAPEX",
+    "description": "Processing equipment transfer to group entity"
+   },
+   {
+    "category": "FINANCING",
+    "description": "Promissory note proceeds"
+   },
+   {
+    "category": "CAPEX",
+    "description": "Purchase of pelletising machinery instalment"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "Rail handling and maintenance costs"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "Rail siding maintenance and handling charges"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "Rail siding maintenance and operating costs"
+   },
+   {
+    "category": "CAPEX",
+    "description": "Refrigeration machinery instalment"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "Restructuring-related plant repair and line decommissioning"
+   },
+   {
+    "category": "CAPEX",
+    "description": "Rolling equipment transfer to group entity"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "Routine plant maintenance and operating costs"
+   },
+   {
+    "category": "FINANCING",
+    "description": "Senior term loan drawdown tranche A"
+   },
+   {
+    "category": "FINANCING",
+    "description": "Senior term loan drawdown — tranche A"
+   },
+   {
+    "category": "TAX",
+    "description": "Sewer discharge levy 2024"
+   },
+   {
+    "category": "TAX",
+    "description": "Sewer discharge levy — Atyrau terminal, July"
+   },
+   {
+    "category": "TAX",
+    "description": "Sewer discharge levy — Ekibastuz block B"
+   },
+   {
+    "category": "TAX",
+    "description": "Sewer discharge levy — Ekibastuz block B, November 2025"
+   },
+   {
+    "category": "TAX",
+    "description": "Sewer discharge levy — Oskemen unit, Q3 2026"
+   }
+  ]
+ }
+}

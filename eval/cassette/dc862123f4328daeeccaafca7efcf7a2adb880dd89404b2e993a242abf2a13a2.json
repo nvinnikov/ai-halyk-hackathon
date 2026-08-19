@@ -1,0 +1,17 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "approved_overdraft_facility",
+    "quote": "an approved overdraft facility в размере $312,480.55",
+    "value": "312480.55"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

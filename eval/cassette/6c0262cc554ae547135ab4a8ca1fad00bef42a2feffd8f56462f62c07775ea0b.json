@@ -1,0 +1,18 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [
+   {
+    "counterparty": "Irtysh Engineering Advisers LLP",
+    "quote": "Сумма в размере $664,501.33, выплаченная контрагенту Irtysh Engineering Advisers LLP, первоначально учтённая как Консультационные услуги, переклассифицирована для целей соблюдения ковенантов как Операционные расходы.",
+    "to_category": "OTHER_OPEX",
+    "txn_id": null
+   }
+  ],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

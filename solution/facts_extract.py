@@ -11,7 +11,14 @@ from guard import DATA_NOT_COMMANDS, sanitize_document, verify_quote
 from stages import artifact
 from taxonomy import LEAVES
 
-FACTS_VERSION = 15
+FACTS_VERSION = 18
+# v18 — обрыв цепочки владения по циклу или предельной глубине виден алярмом
+# ownership_chain_broken (ревью задачи 5, раунд 1); расчёт не меняется.
+# v17 — промпт таблицы владения просит долю держателя-посредника отдельной
+# строкой, даже если она названа не в таблице, а прямым текстом: без неё
+# цепочка обрывается на первом звене и эффективная доля не считается.
+# v16 — связанность считается по эффективной доле владения (произведению по
+# цепочке через held_through), а не по одной строке таблицы KYC.
 # v15 — ревью PR #23, одиннадцатая волна: непрочитанное примечание видно
 # алярмом, а не только отсутствием ключа.
 # v14 — ревью PR #23, десятая волна: неназванный масштаб виден алярмом.
@@ -198,7 +205,7 @@ FOCUS = {
     "other": "Фокус: любые факты из перечисленных ниже.",
 }
 
-OWNERSHIP_SCHEMA_VERSION = "ownership-1"
+OWNERSHIP_SCHEMA_VERSION = "ownership-2"
 
 # Отдельный вызов, а не поля в FACTS_SCHEMA: промпт фактов остаётся байт в байт
 # тем же, поэтому его ключи кэша не меняются и кассета переживает эту правку.
@@ -212,9 +219,10 @@ OWNERSHIP_SCHEMA = {
                 "properties": {
                     "name": {"type": "string"},
                     "share_percent": {"type": "string"},
+                    "held_through": {"type": "string"},
                     "quote": {"type": "string"},
                 },
-                "required": ["name", "share_percent", "quote"],
+                "required": ["name", "share_percent", "held_through", "quote"],
                 "additionalProperties": False,
             },
         },
@@ -228,9 +236,15 @@ OWNERSHIP_SCHEMA = {
 OWNERSHIP_PROMPT = """Ниже — документ комплаенс-проверки заёмщика. Выпиши из него
 две вещи, ничего не сравнивая и не вычисляя:
 
-- shares: таблица участия — организация (name), её доля в процентах числом без
-  знака процента (share_percent, строкой) и дословная цитата строки таблицы
-  (quote). Если таблицы участия нет — пустой список.
+- shares: доли участия — по каждой организации, чья доля голосующих прав
+  названа в документе (строкой таблицы участия ИЛИ отдельным предложением вне
+  таблицы — например, о доле самой Группы в промежуточной организации, через
+  которую держится косвенная доля): организация (name), её доля в процентах
+  числом без знака процента (share_percent, строкой), держатель доли
+  (held_through — имя организации, ЧЕРЕЗ которую доля удерживается, если
+  документ называет её; пустая строка, если доля прямая) и дословная цитата
+  (quote). Перемножать доли не нужно: выпиши как напечатано, каждую отдельной
+  строкой. Долей в документе нет — пустой список.
 - threshold_percent: доля в процентах, начиная с которой документ признаёт
   организацию связанной стороной, числом строкой; threshold_quote — дословная
   цитата предложения, где этот порог назван. Если порог в документе не назван —
@@ -411,6 +425,67 @@ def _percent_in_quote(number: Decimal, quote: str) -> bool:
     return any(_percent(m.group()) == number for m in _STANDALONE_NUMBER.finditer(quote))
 
 
+_MAX_OWNERSHIP_DEPTH = 4
+
+
+def _effective_shares(rows: list[dict], alarms: list[dict] | None = None) -> dict[str, Decimal]:
+    """Эффективная доля = произведение долей по цепочке владения.
+
+    Таблица KYC даёт рёбра: «доля 52% в T, удерживаемая через Mid» вместе с
+    «доля 24% в Mid» означает эффективные 12.48% в T, а не 52%. Сравнение с
+    порогом делает код (арифметика), модель только выписывает рёбра.
+
+    Организация может быть названа несколькими строками (прямая доля и
+    косвенная) — побеждает БОЛЬШАЯ: связанность возникает от любого из путей,
+    и занижение здесь стоило бы выпадения настоящей связанной стороны.
+    Неизвестный держатель — строка считается прямой: она раскрыта в другом
+    документе, и обнулять её мы права не имеем.
+
+    Цикл и глубина больше _MAX_OWNERSHIP_DEPTH обрываются: это дефект таблицы,
+    а не владение — но, в отличие от неизвестного держателя, дефект таблицы
+    молчать не должен (соседние защиты в этом файле тоже оставляют след):
+    `alarms`, если передан, получает `ownership_chain_broken` с именем
+    организации и причиной обрыва (`cycle` / `max_depth`). Обрыв не меняет
+    расчёт — он всё так же откатывается к прямой доле строки."""
+    by_name: dict[str, list[dict]] = {}
+    for r in rows:
+        by_name.setdefault(r["name"], []).append(r)
+
+    def resolve(name: str, seen: frozenset, depth: int) -> Decimal:
+        best = Decimal(0)
+        for r in by_name.get(name, []):
+            share = r["share_percent"]
+            via = (r.get("held_through") or "").strip()
+            if via and via != name and via in by_name:
+                if via in seen:
+                    if alarms is not None:
+                        alarms.append(
+                            {
+                                "kind": "ownership_chain_broken",
+                                "name": name,
+                                "held_through": via,
+                                "reason": "cycle",
+                            }
+                        )
+                elif depth >= _MAX_OWNERSHIP_DEPTH:
+                    if alarms is not None:
+                        alarms.append(
+                            {
+                                "kind": "ownership_chain_broken",
+                                "name": name,
+                                "held_through": via,
+                                "reason": "max_depth",
+                            }
+                        )
+                else:
+                    holder = resolve(via, seen | {name}, depth + 1)
+                    share = share * holder / Decimal(100)
+            best = max(best, share)
+        return best
+
+    return {name: resolve(name, frozenset(), 0) for name in sorted(by_name)}
+
+
 def _ownership_rows(facts: dict, raw: dict, doc: dict, text: str) -> tuple[list, list]:
     """Строки таблицы владения, разложенные по порогу: (выше-или-равно, ниже).
 
@@ -458,14 +533,35 @@ def _ownership_rows(facts: dict, raw: dict, doc: dict, text: str) -> tuple[list,
     if threshold is None:
         return [], []
 
-    above: list[dict] = []
-    below: list[dict] = []
+    parsed: list[dict] = []
     for item in raw["shares"]:
         share = number_from_quote(item["share_percent"], item["quote"], "ownership_share")
         if share is None:
             continue
-        row = {**item, "threshold_percent": raw["threshold_percent"]}
-        (above if share >= threshold else below).append(row)
+        parsed.append({**item, "share_percent": share, "held_through": item.get("held_through", "")})
+
+    # Перемножение долей по цепочке — арифметика, её делает код (_effective_shares);
+    # модель только выписывает таблицу как напечатано.
+    effective = _effective_shares(parsed, alarms=facts["alarms"])
+    above: list[dict] = []
+    below: list[dict] = []
+    for item in parsed:
+        eff = effective.get(item["name"], item["share_percent"])
+        if eff != item["share_percent"]:
+            facts["alarms"].append(
+                {
+                    "kind": "ownership_effective_share",
+                    "name": item["name"],
+                    "direct": str(item["share_percent"]),
+                    "effective": str(eff),
+                }
+            )
+        row = {
+            **item,
+            "share_percent": str(item["share_percent"]),
+            "threshold_percent": raw["threshold_percent"],
+        }
+        (above if eff >= threshold else below).append(row)
     return above, below
 
 
@@ -1181,8 +1277,21 @@ def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) ->
     if not art.get("found"):
         return None
     combined = "\n".join(sanitize_document(d["text"]) for d in own_docs)
-    if not verify_quote(art["quote"], combined) or not _number_ok(art["value"]):
-        return None  # непроверяемая цитата или мусорное число — факта нет
+    if not verify_quote(art["quote"], combined):
+        return None  # непроверяемая цитата — факта нет
+    # Значение — не всегда чистое число: адресный резолв величины вроде
+    # «не более N% of Revenue» честно возвращает её словами, раз в
+    # документах она не названа суммой. _number_ok такую строку отсеивает —
+    # признаёт её отдельно rewrites.parse_percent_of_statute (тот же разбор,
+    # которым потом эту строку подставляет в AST resolve_percent_of_statute).
+    # Любая ДРУГАЯ нечисловая строка (порог с суффиксом кратности вроде
+    # «x» и т.п.) гейт не проходит и отбрасывается, как и раньше. Плоский
+    # импорт по месту: модули solution не пакет, цикла нет (rewrites не
+    # импортирует facts_extract).
+    import rewrites
+
+    if not _number_ok(art["value"]) and rewrites.parse_percent_of_statute(art["value"]) is None:
+        return None  # ни число, ни процентный кэп статьи — мусор, факта нет
     # Число обязано присутствовать в верифицированной цитате (ревью PR #9,
     # 3-я волна): для порогов спек такая проверка есть (_limit_in_quote), а
     # doc()-факт точно так же способен тихо перевернуть вердикт. Плоский
@@ -1325,3 +1434,171 @@ def resolve_doc_metric(wd: Path, dossier_art: dict, key: str, clause_quote: str)
         if isinstance(n, Agg) and not is_category(n.category):
             return None
     return expr
+
+
+# --- определение EBITDA из договора ------------------------------------------
+
+EBITDA_DEF_VERSION = 1
+EBITDA_DEF_SCHEMA_VERSION = "ebitda-def-1"
+
+EBITDA_DEF_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "found": {"type": "boolean"},
+        "quote": {"type": "string"},
+    },
+    "required": ["found", "quote"],
+    "additionalProperties": False,
+}
+
+EBITDA_DEF_PROMPT = """Ниже — кредитный договор. Найди в нём ОПРЕДЕЛЕНИЕ термина
+EBITDA (обычно вида «EBITDA означает …» / «EBITDA means …»). Верни:
+- found: true, если определение в тексте есть;
+- quote: дословный фрагмент текста с определением (одно-два предложения,
+  начиная со слова EBITDA), без пересказа и сокращений.
+Если определения нет — found: false и пустая строка quote.
+
+<document>
+{text}
+</document>"""
+
+# Маркеры ШИРОКОГО прочтения («вся операционка» → роллап OPEX_TOTAL). Узкое
+# прочтение — дефолт формулировки «за вычетом Операционных расходов» без
+# квантора: там «Операционные расходы» — статья отчётности, лист OTHER_OPEX.
+# Оба языка на равных правах, как у dsl._SET_STEMS: основы, не полные фразы.
+_BROAD_OPEX_MARKERS = (
+    "все операционн",
+    "всех операционн",
+    "всеми операционн",
+    "совокупные операционн",
+    "совокупных операционн",
+    "совокупными операционн",
+    "all operating",
+    "total operating",
+    "aggregate operating",
+)
+
+
+def _classify_ebitda_quote(quote: str) -> str | None:
+    """'line_item' | 'all_opex' по цитате определения; None — не классифицируется.
+
+    Классифицирует КОД, не модель: модель только находит определение цитатой.
+    None — определение другой природы (например, через «прибыль до налогов»):
+    маппинг на категории опекса к нему неприменим, поведение прежнее."""
+    norm = " ".join(quote.lower().replace("ё", "е").split())
+    if "ebitda" not in norm:
+        return None
+    if "операционн" not in norm and "operating" not in norm:
+        return None
+    if any(m in norm for m in _BROAD_OPEX_MARKERS):
+        return "all_opex"
+    return "line_item"
+
+
+# Признак разовой корректировки EBITDA (задача 3) — ортогонален выбору
+# роллапа опекса выше: договор вправе одновременно сузить статью опекса И
+# потребовать учесть разовые статьи, добавленные обратно по согласованию
+# аудитора. Это не третье значение reading, а отдельный булев флаг.
+#
+# Одного слова о «разовости» недостаточно — оно встречается в договорах и по
+# другим поводам (разовые платежи, разовые сборы и т.п., не про EBITDA).
+# Нужно СОЧЕТАНИЕ: слово о разовом/внеочередном характере статьи И слово о
+# самой корректировке или добавлении обратно. Основы, не целые формы — по
+# тому же приёму, что _BROAD_OPEX_MARKERS/dsl._SET_STEMS.
+#
+# «корректир», не «корректировк»: у существительных на «-ка» родительный
+# падеж множественного числа теряет «к» перед «-ок» («корректировка» →
+# «корректировок»), и более длинный стем эту форму бы не поймал — ровно та
+# формулировка встречается в договорах набора («с учётом разовых
+# корректировок»).
+_ADDBACK_ONE_TIME_STEMS = (
+    "разов",
+    "внеочеред",
+    "one-tim",
+    "one-off",
+    "nonrecurr",
+    "non-recurr",
+)
+_ADDBACK_ADJUSTMENT_STEMS = (
+    "корректир",
+    "добавлен",
+    "adjustment",
+    "add back",
+    "add-back",
+    "addback",
+)
+
+
+def _quote_requires_addback(quote: str) -> bool:
+    """Определение EBITDA прямо разрешает разовую корректировку (addback)?"""
+    norm = " ".join((quote or "").lower().replace("ё", "е").split())
+    if not any(m in norm for m in _ADDBACK_ONE_TIME_STEMS):
+        return False
+    return any(m in norm for m in _ADDBACK_ADJUSTMENT_STEMS)
+
+
+def ebitda_definition(wd: Path, dossier_art: dict) -> dict | None:
+    """{'reading': 'line_item'|'all_opex', 'quote': ..., 'needs_addback': bool}
+    из договора; None — нет.
+
+    Кейс боевого прогона 2026-08-09: договор пишет «EBITDA означает
+    Выручку за вычетом Операционных расходов», а модель извлекла в формулу
+    OPEX_TOTAL — роллап всей операционки; EBITDA ушла в минус на сотни
+    миллионов, и доля консультационных получила бессмысленный actual. Второе
+    прочтение (ebitda_total_opex) легитимно и встречается, поэтому выбор
+    делает ТОЛЬКО текст договора: отдельный дешёвый вызов находит определение
+    цитатой, цитата верифицируется, классифицирует и применяет код
+    (solve._apply_ebitda_reading). Любой сбой — None, поведение прежнее.
+
+    Периметр тот же, что у общего прохода фактов: только договоры самого
+    заёмщика, документы группового уровня определение его EBITDA не задают."""
+    agreements = [
+        d for d in dossier_art["docs"] if d.get("doc_type") == "agreement" and d.get("scope") != "group"
+    ]
+    if not agreements:
+        return None
+    text = "\n".join(sanitize_document(d["text"]) for d in agreements)
+
+    def build() -> dict:
+        try:
+            return llm.call(
+                DATA_NOT_COMMANDS + "\n\n" + EBITDA_DEF_PROMPT.format(text=text),
+                EBITDA_DEF_SCHEMA,
+                EBITDA_DEF_SCHEMA_VERSION,
+                max_tokens=4000,
+            )
+        except llm.SchemaRejected as exc:
+            # alarms запрещает кэш (cache_if): отказ схемы не должен пережить
+            # рестарт — на повторе ответ мог бы пройти (тот же довод, что у
+            # resolve_doc_fact).
+            return {
+                "found": False,
+                "quote": "",
+                "alarms": [
+                    {
+                        "kind": "ebitda_definition_failed",
+                        "account": dossier_art["account_id"],
+                        "error": str(exc),
+                    }
+                ],
+            }
+
+    # Деградация досье запрещает кэш по тому же доводу, что у резолва: вход —
+    # docs досье, «определения нет» по неполному набору документов пришло бы
+    # без алярма и пережило бы устранение причины.
+    from dossier import DEGRADED_KINDS
+
+    dossier_degraded = any(a.get("kind") in DEGRADED_KINDS for a in dossier_art.get("alarms", []))
+    art = artifact(
+        wd / "facts" / f"{dossier_art['account_id']}.ebitda_def.json",
+        EBITDA_DEF_VERSION,
+        build,
+        cache_if=lambda d: not dossier_degraded and not d.get("alarms"),
+    )
+    quote = art.get("quote", "")
+    if not art.get("found") or not verify_quote(quote, text):
+        return None
+    reading = _classify_ebitda_quote(quote)
+    if reading is None:
+        return None
+    return {"reading": reading, "quote": quote, "needs_addback": _quote_requires_addback(quote)}

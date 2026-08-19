@@ -264,48 +264,63 @@ def test_substituted_template_does_not_inherit_period_filter():
     assert cellspec["shadow_metric_text"] == sp["metric"]
 
 
-def test_ledger_doc_metric_substitution_repairs_invalid_spec(monkeypatch):
-    """Леджерный doc-ключ (боевой кейс: principal_payments в знаменателе DSCR)
-    — второй ярус резолва: формула вместо числа. Спека, невалидная только
-    из-за недостающего ключа, чинится подстановкой и считается ярусом 0."""
-    monkeypatch.setattr(solve, "resolve_doc_metric", lambda *a: "agg(FINANCING, out)")
-    sp = _spec(
-        valid=False,
-        missing_doc_keys=["principal_payments"],
-        metric=(
-            "ratio(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), "
-            "add(agg(INTEREST, out), doc('principal_payments')))"
-        ),
-        direction="min",
-        limit="1.25",
+def test_ebitda_reading_rewrites_extracted_formula():
+    """Определение EBITDA из договора главнее извлечённой формулы (кейс J3 6.2
+    боевого прогона): модель взяла роллап OPEX_TOTAL при договорном «за вычетом
+    Операционных расходов» — EBITDA в минус на сотни миллионов. Переписывается
+    только EBITDA-подвыражение, фильтры и знак узла сохраняются, подмена видна
+    алярмом и тенью."""
+    metric = (
+        "ratio(agg(CONSULTING, out, period(2025-01-01, 2025-12-31)), "
+        "sub(agg(REVENUE, in, period(2025-01-01, 2025-12-31)), "
+        "agg(OPEX_TOTAL, out, period(2025-01-01, 2025-12-31))))"
     )
-    art = {"clauses": {"6.1": sp}, "alarms": []}
-    out = solve._resolve_ledger_doc_metrics(Path("."), {"account_id": "A", "alarms": []}, art, set(), "SC")
-    fixed = out["clauses"]["6.1"]
-    assert fixed["valid"] and fixed["missing_doc_keys"] == []
-    assert "doc(" not in fixed["metric"] and "agg(FINANCING, out)" in fixed["metric"]
-    parse(fixed["metric"])  # результат обязан разбираться грамматикой
+    sp = _spec(metric=metric, limit="0.20")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.2", ebitda_reading="line_item")
+    assert "OTHER_OPEX" in cellspec["metric_text"] and "OPEX_TOTAL" not in cellspec["metric_text"]
+    assert "period(2025-01-01, 2025-12-31)" in cellspec["metric_text"]  # фильтры целы
+    alarm = next(a for a in cellspec["match_alarms"] if a["kind"] == "ebitda_definition_applied")
+    assert alarm["reading"] == "line_item" and alarm["target"] == "metric"
+    assert cellspec["shadow_metric_text"] == metric  # подмена видна тени
 
 
-def test_ledger_doc_metric_substitution_refuses_partial_and_dirty(monkeypatch):
-    # Спека с ДРУГИМИ ошибками не трогается: метрике нельзя верить целиком.
-    monkeypatch.setattr(solve, "resolve_doc_metric", lambda *a: "agg(FINANCING, out)")
-    dirty = _spec(valid=False, errors=["quote_unverified"], missing_doc_keys=["k"], metric="doc(k)")
-    art = {"clauses": {"6.1": dirty}, "alarms": []}
-    out = solve._resolve_ledger_doc_metrics(Path("."), {"account_id": "A", "alarms": []}, art, set(), "SC")
-    assert out["clauses"]["6.1"]["valid"] is False
-    # Отказ резолва — прежнее поведение, лестница.
-    monkeypatch.setattr(solve, "resolve_doc_metric", lambda *a: None)
-    sp = _spec(valid=False, missing_doc_keys=["k"], metric="doc(k)")
-    art = {"clauses": {"6.1": sp}, "alarms": []}
-    out = solve._resolve_ledger_doc_metrics(Path("."), {"account_id": "A", "alarms": []}, art, set(), "SC")
-    assert out["clauses"]["6.1"]["valid"] is False
-    # Ключ, не найденный в тексте метрики (иная форма записи), — отказ, не риск.
-    monkeypatch.setattr(solve, "resolve_doc_metric", lambda *a: "agg(FINANCING, out)")
-    sp = _spec(valid=False, missing_doc_keys=["other_name"], metric="doc(k)")
-    art = {"clauses": {"6.1": sp}, "alarms": []}
-    out = solve._resolve_ledger_doc_metrics(Path("."), {"account_id": "A", "alarms": []}, art, set(), "SC")
-    assert out["clauses"]["6.1"]["valid"] is False
+def test_ebitda_reading_rewrites_template_and_trigger():
+    # Определение главнее и канона шаблонов: _EBITDA зашивает OTHER_OPEX, а
+    # договор вправе выбрать второе прочтение (ebitda_total_opex).
+    heading = title_key("Минимальный коэффициент покрытия процентов")
+    sp = _spec(
+        title_key=heading,
+        direction="min",
+        metric="ratio(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), agg(INTEREST, out))",
+        trigger="gt(ratio(agg(FINANCING, in), sub(agg(REVENUE, in), agg(OTHER_OPEX, out))), const(3.0))",
+    )
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1", ebitda_reading="all_opex")
+    assert "OPEX_TOTAL" in cellspec["metric_text"]
+    targets = {a["target"] for a in cellspec["match_alarms"] if a["kind"] == "ebitda_definition_applied"}
+    assert targets == {"metric", "trigger"}
+    # Триггер переписан в AST, не только в тексте алярма.
+    from dsl import Agg as _Agg
+    from dsl import walk as _walk
+
+    trig_cats = {n.category for n in _walk(cellspec["trigger_ast"]) if isinstance(n, _Agg)}
+    assert "OPEX_TOTAL" in trig_cats and "OTHER_OPEX" not in trig_cats
+
+
+def test_ebitda_reading_noop_when_matching_or_absent():
+    metric = "ratio(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), agg(INTEREST, out))"
+    sp = _spec(metric=metric, direction="min")
+    # Совпадающее прочтение — переписывать нечего, алярма нет.
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1", ebitda_reading="line_item")
+    assert cellspec["metric_text"] == metric
+    assert not any(a["kind"] == "ebitda_definition_applied" for a in cellspec.get("match_alarms", []))
+    # Нет определения — поведение прежнее (fail-open).
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1")
+    assert cellspec["metric_text"] == metric
+    # Голый роллап вне EBITDA-подвыражения не трогается: «доля в операционных
+    # расходах» оперирует своей статьёй независимо от определения EBITDA.
+    sp = _spec(metric="ratio(agg(CONSULTING, out), agg(OPEX_TOTAL, out))")
+    cellspec, _ = solve._extracted_cellspec(sp, "6.1", ebitda_reading="line_item")
+    assert cellspec["metric_text"] == "ratio(agg(CONSULTING, out), agg(OPEX_TOTAL, out))"
 
 
 def test_resolve_echoes_limit_guard():
@@ -325,6 +340,24 @@ def test_resolve_echoes_limit_guard():
     assert not solve._resolve_echoes_limit("9400001", "9400000", False)
     assert not solve._resolve_echoes_limit("н/д", "9400000", False)
     assert not solve._resolve_echoes_limit("100", None, False)
+
+
+def test_echo_guard_forgives_outside_quote_for_a_part_of_metric():
+    assert not solve._resolve_echoes_limit(
+        "250000", Decimal("250000"), quote_outside_agreement=True, whole_metric=False
+    )
+
+
+def test_echo_guard_is_unconditional_when_doc_is_the_whole_metric():
+    assert solve._resolve_echoes_limit(
+        "250000", Decimal("250000"), quote_outside_agreement=True, whole_metric=True
+    )
+
+
+def test_echo_guard_ignores_values_below_limit():
+    assert not solve._resolve_echoes_limit(
+        "249999", Decimal("250000"), quote_outside_agreement=True, whole_metric=True
+    )
 
 
 def test_extracted_cellspec_no_shadow_when_template_matches_extracted():
@@ -363,6 +396,9 @@ def test_shadow_records_both_answers_and_alarms_when_they_differ():
     # Шаблон считает CAPEX (50 — COMPLIANT), извлечённая формула — TAX
     # (500 — BREACH). Ячейка остаётся шаблонной, но расхождение ОТВЕТА
     # обязано попасть и в трейс, и в alarms: только его читает run-report.
+    # Улика теневой BREACH-ветки больше не null (новая политика evidence.find):
+    # единственная читаемая строка TAX одновременно и переворачивающий
+    # кандидат (её снятие даёт 0 <= порога), поэтому она — улика.
     rows = [_row("TXN-1", "CAPEX", "-50"), _row("TXN-2", "TAX", "-500")]
     cellspec = _shadow_cellspec("agg(TAX, out)")
     cell, trace = solve.run_cell("SC-S", "6.1", rows, {}, cellspec, [])
@@ -371,7 +407,7 @@ def test_shadow_records_both_answers_and_alarms_when_they_differ():
         "metric": "agg(TAX, out)",
         "status": "BREACH",
         "actual": 500.0,
-        "evidence_txn_id": None,
+        "evidence_txn_id": "TXN-2",
         "changed_answer": True,
     }
     got = [a for a in trace["alarms"] if a["kind"] == "heading_divergence_changed_answer"]
@@ -618,6 +654,82 @@ def test_run_cell_match_alarms_reach_trace_alarms():
     _cell, trace = solve.run_cell("SC-X", "9.9", [], {}, cellspec, [])
     got = [a for a in trace["alarms"] if a["kind"] == "heading_signature_divergence"]
     assert got and got[0]["scenario"] == "SC-X" and got[0]["clause"] == "9.9"
+
+
+def test_bare_doc_metric_equal_to_limit_falls_off_dsl_tier():
+    # Метрика ячейки — голый doc(ключ), значение из фактов равно порогу:
+    # тавтология «впритык соблюдено», не измерение. Ячейка уходит на лестницу
+    # фолбэков (без цитаты heuristic_template не матчится — ярус приора),
+    # алярм metric_equals_limit поднят.
+    cellspec = {
+        "metric_ast": parse("doc(max_asset_transfer)"),
+        "metric_text": "doc(max_asset_transfer)",
+        "direction": "max",
+        "limit": Decimal("250000"),
+        "trigger_ast": None,
+    }
+    facts = {"doc_facts": {"max_asset_transfer": "250000"}}
+    cell, trace = solve.run_cell("SC-T", "6.1", [], facts, cellspec, [])
+    assert trace["path"] != "dsl"
+    assert trace["tier"] == 2
+    kinds = [a["kind"] for a in trace["alarms"] if isinstance(a, dict)]
+    assert "metric_equals_limit" in kinds
+    assert cell["actual"] == 250000.0  # приор держит порог, не тавтологичное значение
+
+
+def test_bare_doc_metric_below_limit_computes_normally():
+    # Тот же голый doc(), но значение НЕ равно порогу — тавтологии нет,
+    # ячейка считается на нулевом ярусе как обычно.
+    cellspec = {
+        "metric_ast": parse("doc(max_asset_transfer)"),
+        "metric_text": "doc(max_asset_transfer)",
+        "direction": "max",
+        "limit": Decimal("250000"),
+        "trigger_ast": None,
+    }
+    facts = {"doc_facts": {"max_asset_transfer": "100000"}}
+    cell, trace = solve.run_cell("SC-T", "6.1", [], facts, cellspec, [])
+    assert trace["path"] == "dsl"
+    assert cell["status"] == "COMPLIANT" and cell["actual"] == 100000.0
+    kinds = [a["kind"] for a in trace.get("alarms", []) if isinstance(a, dict)]
+    assert "metric_equals_limit" not in kinds
+
+
+def test_doc_as_part_of_expression_equal_to_limit_is_not_a_tautology():
+    # doc() — только СЛАГАЕМОЕ метрики, не вся метрика: законное совпадение
+    # (полис ровно на нужную сумму) гард не имеет права трогать.
+    cellspec = {
+        "metric_ast": parse("add(doc(policy_amount), agg(CAPEX, out))"),
+        "metric_text": "add(doc(policy_amount), agg(CAPEX, out))",
+        "direction": "max",
+        "limit": Decimal("250000"),
+        "trigger_ast": None,
+    }
+    facts = {"doc_facts": {"policy_amount": "250000"}}
+    cell, trace = solve.run_cell("SC-T", "6.1", [], facts, cellspec, [])
+    assert trace["path"] == "dsl"
+    assert cell["status"] == "COMPLIANT" and cell["actual"] == 250000.0
+    kinds = [a["kind"] for a in trace.get("alarms", []) if isinstance(a, dict)]
+    assert "metric_equals_limit" not in kinds
+
+
+def test_ledger_metric_coincidentally_equal_to_limit_is_not_a_tautology():
+    # Метрика по леджеру (не doc()), чьё посчитанное значение случайно
+    # совпало с порогом, — законный ответ впритык, не тавтология: метрика
+    # измерена, а не эхнута из текста договора.
+    cellspec = {
+        "metric_ast": parse("agg(CAPEX, out)"),
+        "metric_text": "agg(CAPEX, out)",
+        "direction": "max",
+        "limit": Decimal("100"),
+        "trigger_ast": None,
+    }
+    rows = [_row("TXN-1", "CAPEX", "-100")]
+    cell, trace = solve.run_cell("SC-T", "6.1", rows, {}, cellspec, [])
+    assert trace["path"] == "dsl"
+    assert cell["status"] == "COMPLIANT" and cell["actual"] == 100.0
+    kinds = [a["kind"] for a in trace.get("alarms", []) if isinstance(a, dict)]
+    assert "metric_equals_limit" not in kinds
 
 
 def test_extracted_cellspec_falls_back_to_template_signature():
@@ -888,3 +1000,47 @@ def test_derived_key_veto_still_fires_on_exact_heading_match():
     cellspec, quote = solve._extracted_cellspec(sp, "6.1", fact_keys=frozenset())
     assert isinstance(cellspec, ValueError)
     assert quote == "цитата пункта"
+
+
+def test_ledger_doc_metric_substitution_repairs_invalid_spec(monkeypatch):
+    """Леджерный doc-ключ (боевой кейс: principal_payments в знаменателе DSCR)
+    — второй ярус резолва: формула вместо числа. Спека, невалидная только
+    из-за недостающего ключа, чинится подстановкой и считается ярусом 0."""
+    monkeypatch.setattr(solve, "resolve_doc_metric", lambda *a: "agg(FINANCING, out)")
+    sp = _spec(
+        valid=False,
+        missing_doc_keys=["principal_payments"],
+        metric=(
+            "ratio(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), "
+            "add(agg(INTEREST, out), doc('principal_payments')))"
+        ),
+        direction="min",
+        limit="1.25",
+    )
+    art = {"clauses": {"6.1": sp}, "alarms": []}
+    out = solve._resolve_ledger_doc_metrics(Path("."), {"account_id": "A", "alarms": []}, art, set(), "SC")
+    fixed = out["clauses"]["6.1"]
+    assert fixed["valid"] and fixed["missing_doc_keys"] == []
+    assert "doc(" not in fixed["metric"] and "agg(FINANCING, out)" in fixed["metric"]
+    parse(fixed["metric"])  # результат обязан разбираться грамматикой
+
+
+def test_ledger_doc_metric_substitution_refuses_partial_and_dirty(monkeypatch):
+    # Спека с ДРУГИМИ ошибками не трогается: метрике нельзя верить целиком.
+    monkeypatch.setattr(solve, "resolve_doc_metric", lambda *a: "agg(FINANCING, out)")
+    dirty = _spec(valid=False, errors=["quote_unverified"], missing_doc_keys=["k"], metric="doc(k)")
+    art = {"clauses": {"6.1": dirty}, "alarms": []}
+    out = solve._resolve_ledger_doc_metrics(Path("."), {"account_id": "A", "alarms": []}, art, set(), "SC")
+    assert out["clauses"]["6.1"]["valid"] is False
+    # Отказ резолва — прежнее поведение, лестница.
+    monkeypatch.setattr(solve, "resolve_doc_metric", lambda *a: None)
+    sp = _spec(valid=False, missing_doc_keys=["k"], metric="doc(k)")
+    art = {"clauses": {"6.1": sp}, "alarms": []}
+    out = solve._resolve_ledger_doc_metrics(Path("."), {"account_id": "A", "alarms": []}, art, set(), "SC")
+    assert out["clauses"]["6.1"]["valid"] is False
+    # Ключ, не найденный в тексте метрики (иная форма записи), — отказ, не риск.
+    monkeypatch.setattr(solve, "resolve_doc_metric", lambda *a: "agg(FINANCING, out)")
+    sp = _spec(valid=False, missing_doc_keys=["other_name"], metric="doc(k)")
+    art = {"clauses": {"6.1": sp}, "alarms": []}
+    out = solve._resolve_ledger_doc_metrics(Path("."), {"account_id": "A", "alarms": []}, art, set(), "SC")
+    assert out["clauses"]["6.1"]["valid"] is False

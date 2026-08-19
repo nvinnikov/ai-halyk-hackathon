@@ -1,0 +1,16 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [],
+  "related_parties": [
+   {
+    "name": "Syrdarya Capital, LLP",
+    "quote": "Syrdarya Capital, LLP 27.8% Организации, в которых Группе принадлежит не менее одной пятой голосующих прав, признаются связанными сторонами для целей Договора."
+   }
+  ],
+  "unrestricted_subsidiaries": []
+ }
+}

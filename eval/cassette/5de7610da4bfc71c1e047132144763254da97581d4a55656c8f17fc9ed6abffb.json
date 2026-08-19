@@ -1,0 +1,62 @@
+{
+ "result": {
+  "categories": [
+   {
+    "category": "UTILITIES",
+    "description": "Sewer discharge levy — Shymkent depot, Q4 2026"
+   },
+   {
+    "category": "UTILITIES",
+    "description": "Sewer discharge levy — Uralsk annex"
+   },
+   {
+    "category": "UTILITIES",
+    "description": "Sewer discharge levy — instalment 1"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "Storm damage emergency repair works"
+   },
+   {
+    "category": "OTHER_OPEX",
+    "description": "Storm damage repair — microwave link restoration"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "Strategy consulting engagement 2025"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "Strategy consulting retainer — network roadmap"
+   },
+   {
+    "category": "FINANCING",
+    "description": "Syndicated term loan drawdown 2025"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "Technical advisory on elevator throughput planning"
+   },
+   {
+    "category": "CONSULTING",
+    "description": "Technical advisory retainer"
+   },
+   {
+    "category": "FINANCING",
+    "description": "Term loan principal repayment 2025"
+   },
+   {
+    "category": "CAPEX",
+    "description": "Transfer of production line machinery and tooling"
+   },
+   {
+    "category": "REVENUE",
+    "description": "Wholesale interconnect revenue Q4 2025"
+   },
+   {
+    "category": "FINANCING",
+    "description": "Working-capital term loan drawdown"
+   }
+  ]
+ }
+}

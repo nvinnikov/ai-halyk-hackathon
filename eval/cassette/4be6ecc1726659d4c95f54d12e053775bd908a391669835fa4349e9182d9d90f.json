@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "Пункт 6.1",
+    "confidence": 1.0,
+    "direction": "max",
+    "limit": "1.5",
+    "metric": "ratio(agg(FINANCING, in), add(sub(agg(REVENUE, in), agg(OPEX_TOTAL, out)), doc(ebitda_addbacks_material_total)))",
+    "quote": "Заёмщик, Taraz Mobile Networks JSC, обязуется не допускать превышения Коэффициентом долговой нагрузки величины 1.50x за период с 2025-01-01 по 2025-12-31.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.2",
+    "confidence": 1.0,
+    "direction": "max",
+    "limit": "0.8",
+    "metric": "ratio(agg(CAPEX, out), agg(REVENUE, in))",
+    "quote": "Taraz Mobile Networks JSC обязуется обеспечить, чтобы за период с 2025-01-01 по 2025-12-31 Капитальные вложения не превышали 80 процентов совокупной выручки Заёмщика за тот же период, определённой по данным аудированной финансовой отчётности.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.3",
+    "confidence": 1.0,
+    "direction": "max",
+    "limit": "20000000",
+    "metric": "agg(ALL, out, counterparty_in(related_parties))",
+    "quote": "Заёмщик, Taraz Mobile Networks JSC, обязуется не допускать, чтобы совокупный объём платежей в пользу связанных сторон за период с 2025-01-01 по 2025-12-31 превышал $20,000,000.00.",
+    "trigger": null
+   }
+  ]
+ }
+}

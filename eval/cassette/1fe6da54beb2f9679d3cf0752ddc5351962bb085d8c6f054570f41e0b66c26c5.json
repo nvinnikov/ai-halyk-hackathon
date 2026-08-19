@@ -1,0 +1,38 @@
+{
+ "result": {
+  "shares": [
+   {
+    "held_through": "",
+    "name": "Aral Agro Trading LLP",
+    "quote": "Aral Agro Trading LLP 9.4%",
+    "share_percent": "9.4"
+   },
+   {
+    "held_through": "",
+    "name": "Astana Agro Media LLP",
+    "quote": "Astana Agro Media LLP 28.6%",
+    "share_percent": "28.6"
+   },
+   {
+    "held_through": "Aktobe Grain Ventures LLP",
+    "name": "Sarybel Logistics Group LLP",
+    "quote": "Sarybel Logistics Group LLP 52.0%",
+    "share_percent": "52.0"
+   },
+   {
+    "held_through": "",
+    "name": "Turgai Capital Partners, LLP",
+    "quote": "Turgai Capital Partners, LLP 41.3%",
+    "share_percent": "41.3"
+   },
+   {
+    "held_through": "",
+    "name": "Aktobe Grain Ventures LLP",
+    "quote": "Группе принадлежит 24.0% голосующих прав в Aktobe Grain Ventures LLP.",
+    "share_percent": "24.0"
+   }
+  ],
+  "threshold_percent": "30.0",
+  "threshold_quote": "Организации, в которых Группа владеет 30.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

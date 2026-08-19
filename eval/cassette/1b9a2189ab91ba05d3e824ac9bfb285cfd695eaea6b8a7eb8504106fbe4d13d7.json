@@ -1,0 +1,26 @@
+{
+ "result": {
+  "shares": [
+   {
+    "held_through": "",
+    "name": "\"Taraz Holding Advisers\" LLP",
+    "quote": "\"Taraz Holding Advisers\" LLP 44.2%",
+    "share_percent": "44.2"
+   },
+   {
+    "held_through": "",
+    "name": "Eurasian Development Bank",
+    "quote": "Eurasian Development Bank 7.3%",
+    "share_percent": "7.3"
+   },
+   {
+    "held_through": "",
+    "name": "Zhambyl Commodities JSC",
+    "quote": "Zhambyl Commodities JSC 29.6%",
+    "share_percent": "29.6"
+   }
+  ],
+  "threshold_percent": "30.0",
+  "threshold_quote": "Организации, в которых Группа владеет 30.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

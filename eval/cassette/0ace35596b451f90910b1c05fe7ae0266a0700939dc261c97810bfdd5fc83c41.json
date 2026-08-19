@@ -1,0 +1,16 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [],
+  "related_parties": [
+   {
+    "name": "Syrdarya Capital L.L.P.",
+    "quote": "Syrdarya Capital L.L.P. 32.1% Turkestan Rail Operations LLP 24.6% Организации, в которых Группе принадлежит не менее одной четверти голосующих прав, признаются связанными сторонами для целей Договора."
+   }
+  ],
+  "unrestricted_subsidiaries": []
+ }
+}

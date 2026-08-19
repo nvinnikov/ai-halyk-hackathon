@@ -1,0 +1,42 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "Пункт 6.1",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "600000",
+    "metric": "agg(MARKETING, out, period(2025-01-01,2025-12-31))",
+    "quote": "Turgai Grain Terminals JSC не вправе допускать, чтобы такие совокупные расходы за период с 2025-01-01 по 2025-12-31 превысили $600,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.2",
+    "confidence": 0.95,
+    "direction": "min",
+    "limit": "4000000",
+    "metric": "agg(REVENUE, in, period(2025-01-01,2025-12-31))",
+    "quote": "Заёмщик, Turgai Grain Terminals JSC, обязуется не допускать снижения Выручки за любой финансовый квартал, оканчивающийся в период с 2025-01-01 по 2025-12-31, ниже $4,000,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.3",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "700000",
+    "metric": "agg(ALL, out, period(2025-01-01,2025-12-31), counterparty_in(related_parties))",
+    "quote": "В период с 2025-01-01 по 2025-12-31 Turgai Grain Terminals JSC не вправе совершать Ограниченные платежи в пользу связанных сторон на совокупную сумму свыше $700,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.4",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "0.32",
+    "metric": "ratio(agg(CAPEX, out, period(2025-01-01,2025-12-31)), agg(REVENUE, in, period(2025-01-01,2025-12-31)))",
+    "quote": "Если Выручка за любой финансовый квартал, оканчивающийся в течение периода с 2025-01-01 по 2025-12-31, окажется менее $4,000,000.00, то Turgai Grain Terminals JSC обязуется не допускать превышения отношения Капитальных затрат к Выручке за указанный период в целом значения 0.32x.",
+    "trigger": "lt(agg(REVENUE, in, period(2025-01-01,2025-12-31)), const(4000000))"
+   }
+  ]
+ }
+}

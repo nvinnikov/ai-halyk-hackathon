@@ -1,0 +1,23 @@
+{
+ "result": {
+  "shares": [
+   {
+    "name": "Alatau Advisory Partners, LLP",
+    "quote": "Alatau Advisory Partners, LLP 28.4%",
+    "share_percent": "28.4"
+   },
+   {
+    "name": "East Kazakhstan Trading JSC",
+    "quote": "East Kazakhstan Trading JSC 5.4%",
+    "share_percent": "5.4"
+   },
+   {
+    "name": "Irtysh Brand Holdings LLP",
+    "quote": "Irtysh Brand Holdings LLP 22.7%",
+    "share_percent": "22.7"
+   }
+  ],
+  "threshold_percent": "25.0",
+  "threshold_quote": "Организации, в которых Группа владеет 25.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

@@ -1,0 +1,19 @@
+{
+ "result": {
+  "additions": "",
+  "additions_quote": "",
+  "amount_scale": "1",
+  "closing_quote": "Net book value at the end of the year | $137,161,528.16",
+  "closing_value": "137161528.16",
+  "currency": "USD",
+  "depreciation": "20800686.32",
+  "depreciation_quote": "Depreciation charge for the year | $20,800,686.32",
+  "no_disposals": true,
+  "no_disposals_quote": "There were no disposals of property, plant and equipment during the year.",
+  "opening_quote": "Net book value at the beginning of the year | $133,282,932.15",
+  "opening_value": "133282932.15",
+  "other_movements": false,
+  "other_movements_quote": "",
+  "units_quote": "All amounts in United States dollars unless otherwise stated"
+ }
+}

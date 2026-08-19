@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "6.1",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "3.0",
+    "metric": "ratio(agg(FINANCING, in, period(2025-01-01,2025-12-31)), sub(agg(REVENUE, in, period(2025-01-01,2025-12-31)), agg(OPEX_TOTAL, out, period(2025-01-01,2025-12-31))))",
+    "quote": "В течение периода с 2025-01-01 по 2025-12-31 отношение совокупного долга Заёмщика (Qostanay Grain Terminal JSC) к EBITDA не должно превышать 3.00x.",
+    "trigger": null
+   },
+   {
+    "clause": "6.2",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "2500000",
+    "metric": "agg(CAPEX, out, period(2025-01-01,2025-12-31))",
+    "quote": "Условием предоставления заёмных средств является то, что совокупные расходы Qostanay Grain Terminal JSC по статье «Капитальные затраты» за период с 2025-01-01 по 2025-12-31 не превысят $2,500,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "6.3",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "600000",
+    "metric": "agg(ALL, out, period(2025-01-01,2025-12-31), counterparty_in(related_parties))",
+    "quote": "Заёмщик, Qostanay Grain Terminal JSC, обязуется не допускать, чтобы совокупный объём платежей в пользу связанных сторон за период с 2025-01-01 по 2025-12-31 превышал $600,000.00.",
+    "trigger": null
+   }
+  ]
+ }
+}

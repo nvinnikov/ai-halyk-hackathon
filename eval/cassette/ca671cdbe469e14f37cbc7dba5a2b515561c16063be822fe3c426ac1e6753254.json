@@ -1,0 +1,26 @@
+{
+ "result": {
+  "shares": [
+   {
+    "held_through": "",
+    "name": "Kyzylorda Drilling Personnel LLP",
+    "quote": "Kyzylorda Drilling Personnel LLP 36.2%",
+    "share_percent": "36.2"
+   },
+   {
+    "held_through": "",
+    "name": "Syrdarya Capital Holding, LLP",
+    "quote": "Syrdarya Capital Holding, LLP 44.6%",
+    "share_percent": "44.6"
+   },
+   {
+    "held_through": "",
+    "name": "Ural Rig Manufacturing LLP",
+    "quote": "Ural Rig Manufacturing LLP 10.7%",
+    "share_percent": "10.7"
+   }
+  ],
+  "threshold_percent": "38.0",
+  "threshold_quote": "Организации, в которых Группа владеет 38.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

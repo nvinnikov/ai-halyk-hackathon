@@ -1,0 +1,32 @@
+{
+ "result": {
+  "shares": [
+   {
+    "held_through": "",
+    "name": "Astana Energy Media LLP",
+    "quote": "Astana Energy Media LLP 23.8%",
+    "share_percent": "23.8"
+   },
+   {
+    "held_through": "Ereymentau Grid Ventures LLP",
+    "name": "Bayanaul Power Trading LLP",
+    "quote": "Bayanaul Power Trading LLP 58.0%",
+    "share_percent": "58.0"
+   },
+   {
+    "held_through": "",
+    "name": "Ekibastuz Plant Services LLP",
+    "quote": "Ekibastuz Plant Services LLP 8.6%",
+    "share_percent": "8.6"
+   },
+   {
+    "held_through": "",
+    "name": "Ereymentau Capital Partners L.L.P.",
+    "quote": "Ereymentau Capital Partners L.L.P. 44.2%",
+    "share_percent": "44.2"
+   }
+  ],
+  "threshold_percent": "25.0",
+  "threshold_quote": "Организации, в которых Группа владеет 25.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

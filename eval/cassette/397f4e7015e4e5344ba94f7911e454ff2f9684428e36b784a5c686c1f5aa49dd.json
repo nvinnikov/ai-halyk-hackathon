@@ -1,0 +1,32 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "max_leverage_ratio",
+    "quote": "допускает превышение Коэффициентом долговой нагрузки (отношение совокупного долга к EBITDA) величины 3.50x",
+    "value": "3.50"
+   },
+   {
+    "key": "max_capex",
+    "quote": "допускает превышение совокупными Капитальными затратами величины $2,000,000.00",
+    "value": "2000000"
+   },
+   {
+    "key": "max_fiscal_burden_ratio",
+    "quote": "Совокупные налоги и уплаченные проценты Заёмщика (Pavlodar Chemical Combine JSC) за период с 2025-01-01 по 2025-12-31, выраженные в виде доли от выручки за тот же период, не должны превышать 0.23x.",
+    "value": "0.23"
+   },
+   {
+    "key": "max_related_party_payments",
+    "quote": "совокупный размер Ограниченных платежей, совершённых Pavlodar Chemical Combine JSC в пользу любой связанной стороны в период с 2025-01-01 по 2025-12-31, не превышал $450,000.00.",
+    "value": "450000"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

@@ -1,0 +1,26 @@
+{
+ "result": {
+  "shares": [
+   {
+    "held_through": "",
+    "name": "\"Taraz Holding Group\" LLP",
+    "quote": "| \"Taraz Holding Group\" LLP | 46.8% |",
+    "share_percent": "46.8"
+   },
+   {
+    "held_through": "",
+    "name": "Taraz Kiln Services LLP",
+    "quote": "| Taraz Kiln Services LLP | 38.1% |",
+    "share_percent": "38.1"
+   },
+   {
+    "held_through": "",
+    "name": "Ural Grinding Works LLP",
+    "quote": "| Ural Grinding Works LLP | 11.5% |",
+    "share_percent": "11.5"
+   }
+  ],
+  "threshold_percent": "40.0",
+  "threshold_quote": "Организации, в которых Группа владеет 40.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

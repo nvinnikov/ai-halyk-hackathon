@@ -1,0 +1,23 @@
+{
+ "result": {
+  "shares": [
+   {
+    "name": "Astana Capital Advisers L.L.P.",
+    "quote": "Astana Capital Advisers L.L.P. 33.6%",
+    "share_percent": "33.6"
+   },
+   {
+    "name": "Kokshetau Facility Services LLP",
+    "quote": "Kokshetau Facility Services LLP 15.0%",
+    "share_percent": "15.0"
+   },
+   {
+    "name": "Meridian Restructuring Advisers",
+    "quote": "Meridian Restructuring Advisers 19.8%",
+    "share_percent": "19.8"
+   }
+  ],
+  "threshold_percent": "20.0",
+  "threshold_quote": "Организации, в которых Группа владеет 20.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

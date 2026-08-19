@@ -1,0 +1,17 @@
+{
+ "result": {
+  "amount_corrections": [
+   {
+    "corrected_amount": "6082920.03",
+    "quote": "Операция TXN-S1-0029 (KTZ Freight Services JSC): сумма не отражена в выгрузке реестра; фактическая сумма операции составляет $6,082,920.03 (поступление).",
+    "txn_id": "TXN-S1-0029"
+   }
+  ],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "Section 5.1",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "500000.00",
+    "metric": "doc(unrestricted_subsidiary_transfer_limit)",
+    "quote": "The Borrower, Altai Metals Holding B.V ., shall not, at any time during the period from 2025-01-01 to 2025-12-31 when its Net Leverage Ratio exceeds 2.50x, sell, transfer, contribute or otherwise dispose of any asset constituting Collateral to any Unrestricted Subsidiary where the aggregate value of all such transfers exceeds $500,000.00.",
+    "trigger": "gt(ratio(sub(agg(FINANCING, in), agg(FINANCING, out)), sub(agg(REVENUE, in), agg(OPEX_TOTAL, out))), const(2.5))"
+   },
+   {
+    "clause": "Section 5.2",
+    "confidence": 0.98,
+    "direction": "max",
+    "limit": "3.0",
+    "metric": "ratio(sub(agg(FINANCING, in), agg(FINANCING, out)), sub(agg(REVENUE, in), agg(OPEX_TOTAL, out)))",
+    "quote": "The Borrower, Altai Metals Holding B.V ., shall not permit its Net Leverage Ratio to exceed 3.00x as measured over the period from 2025-01-01 to 2025-12-31.",
+    "trigger": null
+   },
+   {
+    "clause": "Section 5.3",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "0.30",
+    "metric": "doc(max_quarterly_revenue_concentration)",
+    "quote": "The Borrower, Altai Metals Holding B.V ., shall not permit Revenue recognised in any single fiscal quarter falling within the period from 2025-01-01 to 2025-12-31 to exceed 0.30x, expressed as a multiple of Revenue for that period taken as a whole.",
+    "trigger": null
+   }
+  ]
+ }
+}

@@ -1,0 +1,29 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [
+   {
+    "quote": "Операция TXN-X1-0090 (счёт-фактура от 2025-12-19) относится к услугам, оказанным в период с 2026-01-12 по 2026-03-20.",
+    "txn_id": "TXN-X1-0090"
+   }
+  ],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [
+   {
+    "counterparty": "Kostanay Silo Services LLP",
+    "quote": "Сумма в размере $1,286,431.94, выплаченная контрагенту Kostanay Silo Services LLP, первоначально учтённая как Консультационные услуги, переклассифицирована для целей соблюдения ковенантов как Капитальные затраты.",
+    "to_category": "CAPEX",
+    "txn_id": null
+   },
+   {
+    "counterparty": "Turgai Elevator Assets LLP",
+    "quote": "Сумма в размере $966,318.27, выплаченная контрагенту Turgai Elevator Assets LLP, первоначально учтённая как Консультационные услуги, переклассифицирована для целей соблюдения ковенантов как Капитальные затраты.",
+    "to_category": "CAPEX",
+    "txn_id": null
+   }
+  ],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

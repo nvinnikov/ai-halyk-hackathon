@@ -1,0 +1,23 @@
+{
+ "result": {
+  "shares": [
+   {
+    "name": "Alatau Holdings LLP",
+    "quote": "Alatau Holdings LLP 37.2%",
+    "share_percent": "37.2"
+   },
+   {
+    "name": "Almaty Media Partners LLP",
+    "quote": "Almaty Media Partners LLP 29.1%",
+    "share_percent": "29.1"
+   },
+   {
+    "name": "Tengri Brand Studio",
+    "quote": "Tengri Brand Studio 11.8%",
+    "share_percent": "11.8"
+   }
+  ],
+  "threshold_percent": "30.0",
+  "threshold_quote": "Организации, в которых Группа владеет 30.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

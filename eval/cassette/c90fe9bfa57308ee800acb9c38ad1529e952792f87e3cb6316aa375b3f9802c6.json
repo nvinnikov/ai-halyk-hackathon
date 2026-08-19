@@ -1,0 +1,26 @@
+{
+ "result": {
+  "shares": [
+   {
+    "held_through": "",
+    "name": "Atyrau Energy Supply JSC",
+    "quote": "Atyrau Energy Supply JSC 8.8%",
+    "share_percent": "8.8"
+   },
+   {
+    "held_through": "",
+    "name": "Atyrau Holding Group L.L.P.",
+    "quote": "Atyrau Holding Group L.L.P. 37.9%",
+    "share_percent": "37.9"
+   },
+   {
+    "held_through": "",
+    "name": "Atyrau Pump Station Services LLP",
+    "quote": "Atyrau Pump Station Services LLP 29.3%",
+    "share_percent": "29.3"
+   }
+  ],
+  "threshold_percent": "32.0",
+  "threshold_quote": "Организации, в которых Группа владеет 32.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

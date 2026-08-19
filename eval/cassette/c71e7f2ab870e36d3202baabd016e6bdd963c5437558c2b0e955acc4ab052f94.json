@@ -1,0 +1,26 @@
+{
+ "result": {
+  "shares": [
+   {
+    "held_through": "",
+    "name": "Almaty Chill Logistics LLP",
+    "quote": "| Almaty Chill Logistics LLP | 8.6% |",
+    "share_percent": "8.6"
+   },
+   {
+    "held_through": "",
+    "name": "Tien Shan Advisory Bureau",
+    "quote": "| Tien Shan Advisory Bureau | 23.4% |",
+    "share_percent": "23.4"
+   },
+   {
+    "held_through": "",
+    "name": "Zhetysu Capital Partners LLP",
+    "quote": "| Zhetysu Capital Partners LLP | 31.2% |",
+    "share_percent": "31.2"
+   }
+  ],
+  "threshold_percent": "25.0",
+  "threshold_quote": "Организации, в которых Группа владеет 25.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

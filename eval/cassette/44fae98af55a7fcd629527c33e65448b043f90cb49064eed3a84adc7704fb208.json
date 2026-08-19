@@ -1,0 +1,33 @@
+{
+ "result": {
+  "shares": [
+   {
+    "name": "Aktobe Capital Advisers LLP",
+    "quote": "Aktobe Capital Advisers LLP 37.4%",
+    "share_percent": "37.4"
+   },
+   {
+    "name": "Aktobe Utilities Services LLP",
+    "quote": "Aktobe Utilities Services LLP 11.2%",
+    "share_percent": "11.2"
+   },
+   {
+    "name": "Ilek Trading House LLP",
+    "quote": "Ilek Trading House LLP 33.1%",
+    "share_percent": "33.1"
+   },
+   {
+    "name": "Kaspi Industrial Repairs LLP",
+    "quote": "Kaspi Industrial Repairs LLP 28.9%",
+    "share_percent": "28.9"
+   },
+   {
+    "name": "Zhaiyk Polymer Trading LLP",
+    "quote": "Zhaiyk Polymer Trading LLP 61.0%",
+    "share_percent": "61.0"
+   }
+  ],
+  "threshold_percent": "30",
+  "threshold_quote": "Организации, в которых Группе принадлежит не менее трёх десятых голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

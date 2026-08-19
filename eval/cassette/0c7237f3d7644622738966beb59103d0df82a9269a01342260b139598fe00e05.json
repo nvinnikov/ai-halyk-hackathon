@@ -1,0 +1,26 @@
+{
+ "result": {
+  "shares": [
+   {
+    "held_through": "",
+    "name": "Beineu Holdings LLP",
+    "quote": "Beineu Holdings LLP 41.8%",
+    "share_percent": "41.8"
+   },
+   {
+    "held_through": "",
+    "name": "Mangystau Utilities LLP",
+    "quote": "Mangystau Utilities LLP 24.3%",
+    "share_percent": "24.3"
+   },
+   {
+    "held_through": "",
+    "name": "Ural Turbine Works LLP",
+    "quote": "Ural Turbine Works LLP 9.2%",
+    "share_percent": "9.2"
+   }
+  ],
+  "threshold_percent": "25.0",
+  "threshold_quote": "Организации, в которых Группа владеет 25.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

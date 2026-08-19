@@ -1,0 +1,26 @@
+{
+ "result": {
+  "shares": [
+   {
+    "held_through": "",
+    "name": "\"Irtysh Capital\" LLP",
+    "quote": "\"Irtysh Capital\" LLP 26.9%",
+    "share_percent": "26.9"
+   },
+   {
+    "held_through": "",
+    "name": "Kazphosphate Trading JSC",
+    "quote": "Kazphosphate Trading JSC 7.5%",
+    "share_percent": "7.5"
+   },
+   {
+    "held_through": "",
+    "name": "Ural Process Engineering LLP",
+    "quote": "Ural Process Engineering LLP 19.4%",
+    "share_percent": "19.4"
+   }
+  ],
+  "threshold_percent": "20.0",
+  "threshold_quote": "Организации, в которых Группа владеет 20.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

@@ -1,0 +1,26 @@
+{
+ "result": {
+  "shares": [
+   {
+    "held_through": "",
+    "name": "Aktau Holdings LLP",
+    "quote": "Aktau Holdings LLP 34.5%",
+    "share_percent": "34.5"
+   },
+   {
+    "held_through": "",
+    "name": "Kaspi Marine Engineering LLP",
+    "quote": "Kaspi Marine Engineering LLP 18.7%",
+    "share_percent": "18.7"
+   },
+   {
+    "held_through": "",
+    "name": "Ural Crane Works LLP",
+    "quote": "Ural Crane Works LLP 6.2%",
+    "share_percent": "6.2"
+   }
+  ],
+  "threshold_percent": "20.0",
+  "threshold_quote": "Организации, в которых Группа владеет 20.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+ }
+}

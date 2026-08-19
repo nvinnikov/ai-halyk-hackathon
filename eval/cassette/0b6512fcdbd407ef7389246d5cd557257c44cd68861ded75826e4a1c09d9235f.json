@@ -1,0 +1,33 @@
+{
+ "result": {
+  "covenants": [
+   {
+    "clause": "Пункт 6.1",
+    "confidence": 0.95,
+    "direction": "max",
+    "limit": "3.00",
+    "metric": "ratio(agg(FINANCING,in,period(2025-01-01,2025-12-31)),add(sub(agg(REVENUE,in,period(2025-01-01,2025-12-31)),agg(OPEX_TOTAL,out,period(2025-01-01,2025-12-31))),min(doc(ebitda_addbacks_material_total),doc(ebitda_addback_limit))))",
+    "quote": "Заёмщик, Kokshetau Machinery JSC, обязуется не допускать превышения Коэффициентом чистой долговой нагрузки величины 3.00x за период с 2025-01-01 по 2025-12-31.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.2",
+    "confidence": 1.0,
+    "direction": "min",
+    "limit": "7200000",
+    "metric": "agg(REVENUE,in,period(2025-01-01,2025-12-31))",
+    "quote": "Условием предоставления заёмных средств является то, что совокупные поступления Kokshetau Machinery JSC по указанной статье за период с 2025-01-01 по 2025-12-31 будут не ниже $7,200,000.00.",
+    "trigger": null
+   },
+   {
+    "clause": "Пункт 6.3",
+    "confidence": 1.0,
+    "direction": "max",
+    "limit": "240000",
+    "metric": "agg(ALL,out,period(2025-01-01,2025-12-31),counterparty_in(related_parties))",
+    "quote": "Заёмщик обязуется обеспечить, чтобы совокупный размер Ограниченных платежей, совершённых Kokshetau Machinery JSC в пользу любой связанной стороны в период с 2025-01-01 по 2025-12-31, не превышал $240,000.00.",
+    "trigger": null
+   }
+  ]
+ }
+}

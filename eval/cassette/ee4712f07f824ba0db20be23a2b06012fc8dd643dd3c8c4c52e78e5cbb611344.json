@@ -1,0 +1,18 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [
+   {
+    "counterparty": null,
+    "quote": "Операция TXN-S2-0010, датированная 2026-01-05, включена в ковенантный период 2025 года. Основание: Товары отгружены и риски переданы до конца года; выручка признаётся в ковенантном периоде 2025 года по методу начисления.",
+    "to_category": "REVENUE",
+    "txn_id": "TXN-S2-0010"
+   }
+  ],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}

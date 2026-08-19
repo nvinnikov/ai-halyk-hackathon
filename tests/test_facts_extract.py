@@ -1,6 +1,9 @@
 """Извлечение с цитатой на каждый факт; слияние документов детерминировано."""
 
+from decimal import Decimal
+
 import facts_extract
+from facts_extract import _effective_shares
 
 DOSSIER = {
     "account_id": "ACC-1",
@@ -303,6 +306,60 @@ def test_resolve_doc_fact_negative_value_matches_unsigned_quote(tmp_path, monkey
     }
 
 
+def test_resolve_doc_fact_accepts_percent_of_statute(tmp_path, monkeypatch):
+    """«N% of/от <статья>» — не число, но опознаваемый процентный кэп
+    (rewrites.parse_percent_of_statute): _number_ok такую строку отсеивает,
+    и гейт резолва обязан пропустить её отдельно, иначе адресно найденный
+    процентный кэп теряется целиком (задача про процентный кэп из doc-ключа)."""
+    dossier = {
+        **DOSSIER,
+        "docs": DOSSIER["docs"]
+        + [
+            {
+                "file": "agreement.pdf",
+                "doc_type": "agreement",
+                "date": "2025-01-01",
+                "text": "добавления не превышают 5% of Revenue по условиям договора",
+            }
+        ],
+    }
+
+    def fake_call(prompt, schema, schema_version, **kw):
+        return {"found": True, "value": "5% of Revenue", "quote": "добавления не превышают 5% of Revenue"}
+
+    monkeypatch.setattr(facts_extract.llm, "call", facts_only(fake_call))
+    got = facts_extract.resolve_doc_fact(tmp_path, dossier, "ebitda_addback_limit", "потолок добавок")
+    assert got == {
+        "value": "5% of Revenue",
+        "quote": "добавления не превышают 5% of Revenue",
+        "quote_outside_agreement": False,
+    }
+
+
+def test_resolve_doc_fact_rejects_non_numeric_non_percent_value(tmp_path, monkeypatch):
+    """Строка вроде «3.00x» (порог с суффиксом кратности) не подходит ни под
+    число, ни под «N% статьи» — резолв обязан отказать, как и раньше:
+    расширение гейта не имеет права впустить произвольный текст."""
+    dossier = {
+        **DOSSIER,
+        "docs": DOSSIER["docs"]
+        + [
+            {
+                "file": "agreement.pdf",
+                "doc_type": "agreement",
+                "date": "2025-01-01",
+                "text": "порог 3.00x применяется",
+            }
+        ],
+    }
+
+    def fake_call(prompt, schema, schema_version, **kw):
+        return {"found": True, "value": "3.00x", "quote": "порог 3.00x применяется"}
+
+    monkeypatch.setattr(facts_extract.llm, "call", facts_only(fake_call))
+    assert facts_extract.resolve_doc_fact(tmp_path, dossier, "leverage_ratio", "порог") is None
+
+
 def test_empty_dossier_facts_alarmed_and_not_cached(tmp_path, monkeypatch):
     """Досье без документов — деградация с алярмом no_documents, артефакт не
     пишется: перезапуск после починки конвейера выше перепытается
@@ -335,7 +392,15 @@ OWNERSHIP_DOSSIER = {
 
 def ownership(shares, threshold="20.0", threshold_quote="Группа владеет 20.0% и более"):
     return {
-        "shares": [{"name": n, "share_percent": s, "quote": q} for n, s, q in shares],
+        "shares": [
+            {
+                "name": row[0],
+                "share_percent": row[1],
+                "quote": row[2],
+                "held_through": row[3] if len(row) > 3 else "",
+            }
+            for row in shares
+        ],
         "threshold_percent": threshold,
         "threshold_quote": threshold_quote,
     }
@@ -599,6 +664,126 @@ def test_ownership_unverifiable_threshold_quote_ignored(tmp_path, monkeypatch):
     assert any(
         a["kind"] == "quote_unverified" and a["field"] == "ownership_threshold" for a in facts["alarms"]
     )
+
+
+def _s(name, pct, via=""):
+    return {"name": name, "share_percent": Decimal(pct), "held_through": via, "quote": ""}
+
+
+def test_direct_share_is_itself():
+    assert _effective_shares([_s("A LLP", "41.3")]) == {"A LLP": Decimal("41.3")}
+
+
+def test_indirect_share_is_a_product():
+    rows = [_s("Mid LLP", "24.0"), _s("Target LLP", "52.0", via="Mid LLP")]
+    got = _effective_shares(rows)
+    assert got["Target LLP"] == Decimal("12.48")
+
+
+def test_three_links_multiply():
+    rows = [_s("A", "50"), _s("B", "50", via="A"), _s("C", "50", via="B")]
+    assert _effective_shares(rows)["C"] == Decimal("12.5")
+
+
+def test_unknown_holder_keeps_direct_value_and_does_not_crash():
+    got = _effective_shares([_s("X LLP", "30.0", via="Nowhere LLP")])
+    assert got["X LLP"] == Decimal("30.0")
+
+
+def test_cycle_does_not_hang():
+    rows = [_s("A", "50", via="B"), _s("B", "50", via="A")]
+    got = _effective_shares(rows)
+    assert set(got) == {"A", "B"}
+
+
+def test_largest_path_wins_when_entity_listed_twice():
+    rows = [_s("Mid", "20"), _s("T", "10"), _s("T", "90", via="Mid")]
+    # прямая 10% против косвенной 18% — берём большую
+    assert _effective_shares(rows)["T"] == Decimal("18")
+
+
+def test_cycle_raises_chain_broken_alarm():
+    alarms: list = []
+    rows = [_s("A", "50", via="B"), _s("B", "50", via="A")]
+    _effective_shares(rows, alarms=alarms)
+    alarm = next(a for a in alarms if a["kind"] == "ownership_chain_broken")
+    assert alarm["reason"] == "cycle"
+    assert alarm["name"] in {"A", "B"}
+
+
+def test_depth_limit_raises_chain_broken_alarm():
+    alarms: list = []
+    rows = [
+        _s("L0", "50", via="L1"),
+        _s("L1", "50", via="L2"),
+        _s("L2", "50", via="L3"),
+        _s("L3", "50", via="L4"),
+        _s("L4", "50", via="L5"),
+        _s("L5", "50"),
+    ]
+    _effective_shares(rows, alarms=alarms)
+    alarm = next(a for a in alarms if a["kind"] == "ownership_chain_broken")
+    assert alarm["reason"] == "max_depth"
+    assert alarm["name"] == "L4"
+    assert alarm["held_through"] == "L5"
+
+
+# --- эффективная доля через полный путь извлечения фактов --------------------
+
+CHAIN_TEXT = (
+    "Организация Доля голосующих прав Mid Holding LLP 15.0% "
+    "Target LLP 54.0% Direct Party LLP 25.0% "
+    "Организации, в которых Группа владеет 20.0% и более голосующих прав, "
+    "признаются связанными сторонами для целей Договора. "
+    "Доля в Target LLP удерживается косвенно через Mid Holding LLP."
+)
+CHAIN_DOSSIER = {
+    "account_id": "ACC-1",
+    "scenario_id": "S1",
+    "docs": [{"file": "kyc.pdf", "doc_type": "kyc", "date": "2025-12-31", "text": CHAIN_TEXT}],
+    "docs_rejected": [],
+    "quarantined": [],
+}
+
+
+def test_effective_share_dilutes_chain_but_keeps_unrelated_direct_share(tmp_path, monkeypatch):
+    """Прямая доля Target LLP (54.0%) не ниже порога (20.0%), но она удерживается
+    косвенно через Mid Holding LLP (15.0%): эффективная доля 8.10% ниже порога,
+    и Target LLP в набор связанных сторон не попадает. Рядом — Direct Party LLP
+    с прямой долей 25.0% и без держателя: она обязана попасть, иначе тест не
+    отличит сработавшую дилюцию от сломанного разбора по порогу целиком."""
+    own = ownership(
+        [
+            ("Mid Holding LLP", "15.0", "Mid Holding LLP 15.0%"),
+            ("Target LLP", "54.0", "Target LLP 54.0%", "Mid Holding LLP"),
+            ("Direct Party LLP", "25.0", "Direct Party LLP 25.0%"),
+        ]
+    )
+    monkeypatch.setattr(facts_extract.llm, "call", _dispatch([], own))
+    facts = facts_extract.extract_facts(tmp_path, CHAIN_DOSSIER)
+    assert facts["related_parties"] == ["Direct Party LLP"]
+
+
+def test_effective_share_removal_alarm_shows_direct_and_effective(tmp_path, monkeypatch):
+    """Модель назвала Target LLP связанной стороной по прямой доле (54.0%);
+    таблица раскрывает держателя (Mid Holding LLP, 15.0%), эффективная доля —
+    8.10%, ниже порога. Снятие видно алярмом с обеими величинами."""
+    own = ownership(
+        [
+            ("Mid Holding LLP", "15.0", "Mid Holding LLP 15.0%"),
+            ("Target LLP", "54.0", "Target LLP 54.0%", "Mid Holding LLP"),
+        ]
+    )
+    model = [{"name": "Target LLP", "quote": "Target LLP 54.0%"}]
+    monkeypatch.setattr(facts_extract.llm, "call", _dispatch(model, own))
+    facts = facts_extract.extract_facts(tmp_path, CHAIN_DOSSIER)
+    assert facts["related_parties"] == []
+    dilution = next(a for a in facts["alarms"] if a["kind"] == "ownership_effective_share")
+    assert dilution["name"] == "Target LLP"
+    assert dilution["direct"] == "54.0"
+    assert dilution["effective"] == "8.10"
+    removal = next(a for a in facts["alarms"] if a["kind"] == "ownership_below_threshold")
+    assert removal["name"] == "Target LLP"
 
 
 # --- капитальные затраты Группы (документ группового уровня) -----------------
@@ -1113,6 +1298,132 @@ def test_group_capex_incomplete_movement_is_named(tmp_path, monkeypatch):
     assert facts_extract.GROUP_CAPEX_KEY not in facts["doc_facts"]
     alarm = next(a for a in facts["alarms"] if a["kind"] == "group_capex_movement_incomplete")
     assert alarm["fields"] == ["opening"]
+
+
+# --- определение EBITDA из договора ------------------------------------------
+
+_EBITDA_DEF_NARROW = "EBITDA означает Выручку за вычетом Операционных расходов, как раскрыто в примечаниях."
+_EBITDA_DEF_BROAD = "EBITDA означает выручку за вычетом всех операционных расходов за период."
+
+
+def _agreement_dossier(definition: str) -> dict:
+    return {
+        "account_id": "ACC-1",
+        "scenario_id": "S1",
+        "docs": [
+            {
+                "file": "agreement.pdf",
+                "doc_type": "agreement",
+                "date": "2025-01-01",
+                "text": f"Кредитный договор. {definition} Прочие условия.",
+            }
+        ],
+        "docs_rejected": [],
+        "quarantined": [],
+        "alarms": [],
+    }
+
+
+def _def_call(found: bool, quote: str):
+    def call(prompt, schema, schema_version, **kw):
+        assert schema_version == facts_extract.EBITDA_DEF_SCHEMA_VERSION
+        return {"found": found, "quote": quote}
+
+    return call
+
+
+def test_ebitda_definition_classified_by_code():
+    """Классифицирует КОД по цитате, модель только находит определение: статья
+    без квантора — line_item, квантор всеобщности — all_opex, определение
+    другой природы или не про метрику — None."""
+    assert facts_extract._classify_ebitda_quote(_EBITDA_DEF_NARROW) == "line_item"
+    assert facts_extract._classify_ebitda_quote(_EBITDA_DEF_BROAD) == "all_opex"
+    assert (
+        facts_extract._classify_ebitda_quote("EBITDA means Revenue less total operating costs") == "all_opex"
+    )
+    assert facts_extract._classify_ebitda_quote("EBITDA means profit before tax and depreciation") is None
+    assert facts_extract._classify_ebitda_quote("операционные расходы без определения метрики") is None
+
+
+def test_quote_requires_addback_needs_both_onetime_and_adjustment_words():
+    """Признак ортогонален выбору роллапа опекса (задача 3): договор вправе
+    сузить статью И потребовать разовую корректировку одновременно. Одного
+    слова о «разовости» недостаточно — оно встречается и по другим поводам,
+    поэтому нужно СОЧЕТАНИЕ со словом о самой корректировке/добавлении."""
+    assert facts_extract._quote_requires_addback(
+        "EBITDA рассчитывается как Выручка за вычетом Операционных расходов "
+        "с учётом разовых корректировок, согласованных аудитором."
+    )
+    assert facts_extract._quote_requires_addback(
+        "EBITDA — Выручку за вычетом Операционных расходов, увеличенную на "
+        "любые разовые статьи, добавленные аудиторами Заёмщика обратно к EBITDA."
+    )
+    assert facts_extract._quote_requires_addback(
+        "EBITDA means Revenue less Operating Expenses, adjusted for any "
+        "one-time addback items agreed by the auditors."
+    )
+    # Только «разовость» без слова о корректировке/добавлении — не сигнал.
+    assert not facts_extract._quote_requires_addback(
+        "разовые платежи по договору не включаются в состав операционных расходов"
+    )
+    # Только слово о корректировке без «разовости» — тоже не сигнал: узкое
+    # прочтение опекса (_EBITDA_DEF_NARROW) само по себе ничего не требует.
+    assert not facts_extract._quote_requires_addback(_EBITDA_DEF_NARROW)
+    assert not facts_extract._quote_requires_addback(_EBITDA_DEF_BROAD)
+
+
+def test_ebitda_definition_line_item(tmp_path, monkeypatch):
+    monkeypatch.setattr(facts_extract.llm, "call", _def_call(True, _EBITDA_DEF_NARROW))
+    got = facts_extract.ebitda_definition(tmp_path, _agreement_dossier(_EBITDA_DEF_NARROW))
+    assert got == {"reading": "line_item", "quote": _EBITDA_DEF_NARROW, "needs_addback": False}
+
+
+def test_ebitda_definition_broad(tmp_path, monkeypatch):
+    monkeypatch.setattr(facts_extract.llm, "call", _def_call(True, _EBITDA_DEF_BROAD))
+    got = facts_extract.ebitda_definition(tmp_path, _agreement_dossier(_EBITDA_DEF_BROAD))
+    assert got is not None and got["reading"] == "all_opex" and got["needs_addback"] is False
+
+
+def test_ebitda_definition_with_addback_clause(tmp_path, monkeypatch):
+    """Определение и про статью опекса (line_item), и про разовую
+    корректировку одновременно — оба признака независимы (кейс S3 6.1)."""
+    quote = (
+        "EBITDA рассчитывается как Выручка за вычетом Операционных расходов "
+        "с учётом разовых корректировок, согласованных аудитором."
+    )
+    monkeypatch.setattr(facts_extract.llm, "call", _def_call(True, quote))
+    got = facts_extract.ebitda_definition(tmp_path, _agreement_dossier(quote))
+    assert got == {"reading": "line_item", "quote": quote, "needs_addback": True}
+
+
+def test_ebitda_definition_unverified_quote_is_dropped(tmp_path, monkeypatch):
+    # Цитата не из договора — факта нет (контракт guard, как у всех потребителей).
+    monkeypatch.setattr(
+        facts_extract.llm, "call", _def_call(True, "EBITDA означает что-то выдуманное про операционные")
+    )
+    assert facts_extract.ebitda_definition(tmp_path, _agreement_dossier(_EBITDA_DEF_NARROW)) is None
+
+
+def test_ebitda_definition_without_agreement_is_none(tmp_path, monkeypatch):
+    def boom(*a, **kw):
+        raise AssertionError("вызова быть не должно: договора в досье нет")
+
+    monkeypatch.setattr(facts_extract.llm, "call", boom)
+    assert facts_extract.ebitda_definition(tmp_path, DOSSIER) is None
+
+
+def test_ebitda_definition_schema_failure_not_cached(tmp_path, monkeypatch):
+    def rejected(prompt, schema, schema_version, **kw):
+        raise facts_extract.llm.SchemaRejected("bad")
+
+    monkeypatch.setattr(facts_extract.llm, "call", rejected)
+    dossier = _agreement_dossier(_EBITDA_DEF_NARROW)
+    assert facts_extract.ebitda_definition(tmp_path, dossier) is None
+    # Отказ не закреплён артефактом: на повторе (после устранения причины)
+    # вызов уйдёт заново, а не вернёт found=false с диска.
+    assert not (tmp_path / "facts" / "ACC-1.ebitda_def.json").exists()
+    monkeypatch.setattr(facts_extract.llm, "call", _def_call(True, _EBITDA_DEF_NARROW))
+    assert facts_extract.ebitda_definition(tmp_path, dossier) is not None
 
 
 # --- resolve_doc_metric -------------------------------------------------------

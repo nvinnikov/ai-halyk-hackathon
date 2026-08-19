@@ -1,0 +1,16 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [],
+  "reclassifications": [],
+  "related_parties": [
+   {
+    "name": "Esil Capital Partners LLP.",
+    "quote": "Esil Capital Partners LLP. 36.5% Организации, в которых Группа владеет 25.0% и более голосующих прав, признаются связанными сторонами для целей Договора."
+   }
+  ],
+  "unrestricted_subsidiaries": []
+ }
+}

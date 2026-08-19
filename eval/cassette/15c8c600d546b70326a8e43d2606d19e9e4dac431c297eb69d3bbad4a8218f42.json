@@ -1,0 +1,27 @@
+{
+ "result": {
+  "amount_corrections": [],
+  "excluded_txns": [],
+  "fx_rates": [],
+  "numeric_facts": [
+   {
+    "key": "general_permitted_debt_basket",
+    "quote": "Заёмщик, Taraz Trade Finance JSC, обязуется не допускать превышения совокупной суммой основного долга, привлечённого в рамках Общей разрешённой долговой корзины за период с 2025-01-01 по 2025-12-31, величины $2,500,000.00 в любой момент времени.",
+    "value": "2500000"
+   },
+   {
+    "key": "minimum_revenue",
+    "quote": "Совокупный объём поступлений Заёмщика (Taraz Trade Finance JSC) по статье «Выручка» за период с 2025-01-01 по 2025-12-31 должен быть не ниже $7,300,000.00.",
+    "value": "7300000"
+   },
+   {
+    "key": "maximum_related_party_payments",
+    "quote": "В период с 2025-01-01 по 2025-12-31 Taraz Trade Finance JSC не вправе совершать Ограниченные платежи в пользу связанных сторон на совокупную сумму свыше $255,000.00.",
+    "value": "255000"
+   }
+  ],
+  "reclassifications": [],
+  "related_parties": [],
+  "unrestricted_subsidiaries": []
+ }
+}
