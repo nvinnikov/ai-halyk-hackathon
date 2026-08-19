@@ -292,6 +292,26 @@ def test_quarterize_trigger_gt_measured_on_right_uses_min_quarter():
     assert unparse(ast).startswith("gt(const(500), min(")
 
 
+def test_quarterize_trigger_ratio_side_quarterizes_both_aggregates():
+    """Измеряемая сторона сравнения не обязана быть голым agg() — если это
+    ratio() (или любое другое поддерево с несколькими агрегатами), `_quarterize`
+    расставляет ОДИН и тот же номер квартала во всех агрегатах внутри одной
+    копии, и min/max берётся по уже посчитанному отношению за каждый квартал,
+    а не по числителю/знаменателю раздельно. Неоднозначности, из-за которой
+    `quarterly()` отказывается трогать ratio() в МЕТРИКЕ (непонятно, какая
+    часть отношения поквартальна), здесь нет: вся сторона сравнения
+    квартализуется как единое целое."""
+    trigger = "lt(ratio(agg(REVENUE, in), agg(OTHER_OPEX, out)), const(2))"
+    ast, changed = quarterize_trigger(parse(trigger), "любой финансовый квартал")
+    assert changed
+    text = unparse(ast)
+    assert text.startswith("lt(min(")
+    assert text.count("quarter(1)") == 2  # и числитель, и знаменатель одного квартала
+    assert text.count("quarter(4)") == 2
+    assert "ratio(agg(REVENUE, in, quarter(1)), agg(OTHER_OPEX, out, quarter(1)))" in text
+    assert "ratio(agg(REVENUE, in, quarter(4)), agg(OTHER_OPEX, out, quarter(4)))" in text
+
+
 def test_quarterize_trigger_noop_without_quarterly_quote():
     trigger = "lt(agg(REVENUE, in), const(500))"
     ast, changed = quarterize_trigger(parse(trigger), "за период с 2025-01-01 по 2025-12-31")
