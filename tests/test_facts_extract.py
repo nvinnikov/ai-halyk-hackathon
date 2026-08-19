@@ -1291,16 +1291,55 @@ def test_ebitda_definition_classified_by_code():
     assert facts_extract._classify_ebitda_quote("операционные расходы без определения метрики") is None
 
 
+def test_quote_requires_addback_needs_both_onetime_and_adjustment_words():
+    """Признак ортогонален выбору роллапа опекса (задача 3): договор вправе
+    сузить статью И потребовать разовую корректировку одновременно. Одного
+    слова о «разовости» недостаточно — оно встречается и по другим поводам,
+    поэтому нужно СОЧЕТАНИЕ со словом о самой корректировке/добавлении."""
+    assert facts_extract._quote_requires_addback(
+        "EBITDA рассчитывается как Выручка за вычетом Операционных расходов "
+        "с учётом разовых корректировок, согласованных аудитором."
+    )
+    assert facts_extract._quote_requires_addback(
+        "EBITDA — Выручку за вычетом Операционных расходов, увеличенную на "
+        "любые разовые статьи, добавленные аудиторами Заёмщика обратно к EBITDA."
+    )
+    assert facts_extract._quote_requires_addback(
+        "EBITDA means Revenue less Operating Expenses, adjusted for any "
+        "one-time addback items agreed by the auditors."
+    )
+    # Только «разовость» без слова о корректировке/добавлении — не сигнал.
+    assert not facts_extract._quote_requires_addback(
+        "разовые платежи по договору не включаются в состав операционных расходов"
+    )
+    # Только слово о корректировке без «разовости» — тоже не сигнал: узкое
+    # прочтение опекса (_EBITDA_DEF_NARROW) само по себе ничего не требует.
+    assert not facts_extract._quote_requires_addback(_EBITDA_DEF_NARROW)
+    assert not facts_extract._quote_requires_addback(_EBITDA_DEF_BROAD)
+
+
 def test_ebitda_definition_line_item(tmp_path, monkeypatch):
     monkeypatch.setattr(facts_extract.llm, "call", _def_call(True, _EBITDA_DEF_NARROW))
     got = facts_extract.ebitda_definition(tmp_path, _agreement_dossier(_EBITDA_DEF_NARROW))
-    assert got == {"reading": "line_item", "quote": _EBITDA_DEF_NARROW}
+    assert got == {"reading": "line_item", "quote": _EBITDA_DEF_NARROW, "needs_addback": False}
 
 
 def test_ebitda_definition_broad(tmp_path, monkeypatch):
     monkeypatch.setattr(facts_extract.llm, "call", _def_call(True, _EBITDA_DEF_BROAD))
     got = facts_extract.ebitda_definition(tmp_path, _agreement_dossier(_EBITDA_DEF_BROAD))
-    assert got is not None and got["reading"] == "all_opex"
+    assert got is not None and got["reading"] == "all_opex" and got["needs_addback"] is False
+
+
+def test_ebitda_definition_with_addback_clause(tmp_path, monkeypatch):
+    """Определение и про статью опекса (line_item), и про разовую
+    корректировку одновременно — оба признака независимы (кейс S3 6.1)."""
+    quote = (
+        "EBITDA рассчитывается как Выручка за вычетом Операционных расходов "
+        "с учётом разовых корректировок, согласованных аудитором."
+    )
+    monkeypatch.setattr(facts_extract.llm, "call", _def_call(True, quote))
+    got = facts_extract.ebitda_definition(tmp_path, _agreement_dossier(quote))
+    assert got == {"reading": "line_item", "quote": quote, "needs_addback": True}
 
 
 def test_ebitda_definition_unverified_quote_is_dropped(tmp_path, monkeypatch):

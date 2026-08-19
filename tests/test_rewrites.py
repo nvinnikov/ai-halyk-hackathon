@@ -1,5 +1,12 @@
 from dsl import parse, unparse
-from rewrites import apply_final, flip_debt_incurrence_sign, narrow_opex, quarterly, widen_related_party
+from rewrites import (
+    add_ebitda_addback,
+    apply_final,
+    flip_debt_incurrence_sign,
+    narrow_opex,
+    quarterly,
+    widen_related_party,
+)
 
 _EBITDA_BROAD = "sub(agg(REVENUE, in), agg(OPEX_TOTAL, out))"
 
@@ -461,3 +468,109 @@ def test_does_not_flip_net_sign():
     ast, changed = flip_debt_incurrence_sign(parse(metric), "задолженность, привлечённая за период")
     assert not changed
     assert unparse(ast) == metric
+
+
+# --- Task 3: разовые корректировки EBITDA (addback) -------------------------
+
+
+def test_adds_addback_to_ebitda_subexpression_when_needed():
+    """S3 6.1: договор требует учесть разовую корректировку EBITDA, и
+    признак пришёл готовым булем (needs_addback=True из
+    facts_extract._quote_requires_addback) — cам текст цитаты сюда не
+    передаётся, только вердикт."""
+    metric = "sub(agg(REVENUE, in), agg(OTHER_OPEX, out))"
+    ast, changed = add_ebitda_addback(parse(metric), True)
+    assert changed
+    assert (
+        unparse(ast)
+        == "add(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), doc(ebitda_addbacks_material_total))"
+    )
+
+
+def test_does_not_add_addback_when_not_needed():
+    metric = "sub(agg(REVENUE, in), agg(OTHER_OPEX, out))"
+    ast, changed = add_ebitda_addback(parse(metric), False)
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_does_not_add_addback_when_doc_key_already_present():
+    """Часть заёмщиков (X2 6.2/6.4) вписывает addback в формулу сама — модель
+    прочла его прямо в тексте пункта. Повторное добавление удвоило бы
+    корректировку, поэтому переписывание обязано молчать целиком."""
+    metric = "add(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), doc(ebitda_addbacks_material_total))"
+    ast, changed = add_ebitda_addback(parse(metric), True)
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_adds_addback_inside_ratio_denominator():
+    metric = "ratio(agg(FINANCING, in), sub(agg(REVENUE, in), agg(OTHER_OPEX, out)))"
+    ast, changed = add_ebitda_addback(parse(metric), True)
+    assert changed
+    assert unparse(ast) == (
+        "ratio(agg(FINANCING, in), "
+        "add(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), doc(ebitda_addbacks_material_total)))"
+    )
+
+
+def test_adds_addback_to_composite_opex_subtrahend():
+    """Форма, где вычитаемое составное (несколько названных статей суммой) —
+    та же граница, что у narrow_opex.test_narrows_composite_subtrahend."""
+    metric = "sub(agg(REVENUE, in), add(agg(OTHER_OPEX, out), agg(PAYROLL, out)))"
+    ast, changed = add_ebitda_addback(parse(metric), True)
+    assert changed
+    assert unparse(ast) == (
+        "add(sub(agg(REVENUE, in), add(agg(OTHER_OPEX, out), agg(PAYROLL, out))), "
+        "doc(ebitda_addbacks_material_total))"
+    )
+
+
+def test_does_not_touch_non_ebitda_sub():
+    """Вычитаемое не про EBITDA (B3-паттерн, капнутая корзина): a — не
+    REVENUE, переписывание не имеет права его трогать."""
+    metric = "sub(agg(ALL, out, counterparty_in(related_parties)), doc(related_party_consulting_basket))"
+    ast, changed = add_ebitda_addback(parse(metric), True)
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_apply_final_applies_addback_and_reports_alarm():
+    metric = "ratio(agg(FINANCING, in), sub(agg(REVENUE, in), agg(OTHER_OPEX, out)))"
+    spec = {"metric_ast": parse(metric), "metric_text": metric, "direction": "max"}
+    new, alarms = apply_final(spec, "квоту не превышать", "max", True)
+    assert new["metric_text"] == (
+        "ratio(agg(FINANCING, in), "
+        "add(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), doc(ebitda_addbacks_material_total)))"
+    )
+    assert "ebitda_addback_applied" in [a["kind"] for a in alarms]
+    assert spec["metric_text"] == metric  # исходный cellspec не мутирован
+
+
+def test_apply_final_does_not_add_addback_by_default():
+    """Обратная совместимость: старые вызовы apply_final без четвёртого
+    параметра ничего не переписывают — новый параметр обязан иметь дефолт."""
+    metric = "sub(agg(REVENUE, in), agg(OTHER_OPEX, out))"
+    spec = {"metric_ast": parse(metric), "metric_text": metric}
+    new, alarms = apply_final(spec, "любая непустая цитата")
+    assert new["metric_text"] == metric
+    assert alarms == []
+
+
+def test_apply_final_applies_addback_to_trigger_too():
+    """Определение EBITDA — свойство договора, а не места формулы: тот же
+    принцип, что у narrow_opex применительно к триггеру (apply_final,
+    докстринг)."""
+    metric = "agg(CAPEX, out)"
+    trigger = "gt(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), const(1000))"
+    spec = {
+        "metric_ast": parse(metric),
+        "metric_text": metric,
+        "trigger_ast": parse(trigger),
+    }
+    new, alarms = apply_final(spec, "любая непустая цитата", None, True)
+    assert unparse(new["trigger_ast"]) == (
+        "gt(add(sub(agg(REVENUE, in), agg(OTHER_OPEX, out)), doc(ebitda_addbacks_material_total)), "
+        "const(1000))"
+    )
+    assert "ebitda_addback_applied" in [a["kind"] for a in alarms]

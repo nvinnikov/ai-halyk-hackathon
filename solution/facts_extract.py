@@ -1482,8 +1482,51 @@ def _classify_ebitda_quote(quote: str) -> str | None:
     return "line_item"
 
 
+# Признак разовой корректировки EBITDA (задача 3) — ортогонален выбору
+# роллапа опекса выше: договор вправе одновременно сузить статью опекса И
+# потребовать учесть разовые статьи, добавленные обратно по согласованию
+# аудитора. Это не третье значение reading, а отдельный булев флаг.
+#
+# Одного слова о «разовости» недостаточно — оно встречается в договорах и по
+# другим поводам (разовые платежи, разовые сборы и т.п., не про EBITDA).
+# Нужно СОЧЕТАНИЕ: слово о разовом/внеочередном характере статьи И слово о
+# самой корректировке или добавлении обратно. Основы, не целые формы — по
+# тому же приёму, что _BROAD_OPEX_MARKERS/dsl._SET_STEMS.
+#
+# «корректир», не «корректировк»: у существительных на «-ка» родительный
+# падеж множественного числа теряет «к» перед «-ок» («корректировка» →
+# «корректировок»), и более длинный стем эту форму бы не поймал — ровно та
+# формулировка встречается в договорах набора («с учётом разовых
+# корректировок»).
+_ADDBACK_ONE_TIME_STEMS = (
+    "разов",
+    "внеочеред",
+    "one-tim",
+    "one-off",
+    "nonrecurr",
+    "non-recurr",
+)
+_ADDBACK_ADJUSTMENT_STEMS = (
+    "корректир",
+    "добавлен",
+    "adjustment",
+    "add back",
+    "add-back",
+    "addback",
+)
+
+
+def _quote_requires_addback(quote: str) -> bool:
+    """Определение EBITDA прямо разрешает разовую корректировку (addback)?"""
+    norm = " ".join((quote or "").lower().replace("ё", "е").split())
+    if not any(m in norm for m in _ADDBACK_ONE_TIME_STEMS):
+        return False
+    return any(m in norm for m in _ADDBACK_ADJUSTMENT_STEMS)
+
+
 def ebitda_definition(wd: Path, dossier_art: dict) -> dict | None:
-    """{'reading': 'line_item'|'all_opex', 'quote': ...} из договора; None — нет.
+    """{'reading': 'line_item'|'all_opex', 'quote': ..., 'needs_addback': bool}
+    из договора; None — нет.
 
     Кейс боевого прогона 2026-08-09: договор пишет «EBITDA означает
     Выручку за вычетом Операционных расходов», а модель извлекла в формулу
@@ -1545,4 +1588,4 @@ def ebitda_definition(wd: Path, dossier_art: dict) -> dict | None:
     reading = _classify_ebitda_quote(quote)
     if reading is None:
         return None
-    return {"reading": reading, "quote": quote}
+    return {"reading": reading, "quote": quote, "needs_addback": _quote_requires_addback(quote)}

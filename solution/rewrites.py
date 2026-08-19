@@ -9,7 +9,7 @@
 import dataclasses
 import re
 
-from dsl import Add, Agg, CounterpartyIn, MaxOf, MinOf, Period, Quarter, Ratio, Sub, unparse, walk
+from dsl import Add, Agg, CounterpartyIn, Doc, MaxOf, MinOf, Period, Quarter, Ratio, Sub, unparse, walk
 from taxonomy import LEAVES
 
 # Маркеры прямого широкого прочтения: договор сам говорит «все операционные».
@@ -85,6 +85,76 @@ def narrow_opex(metric_ast, quote: str) -> tuple[object, bool]:
             return node
         # Несовпавший узел (в т.ч. Sub другой формы) всё равно спускается в
         # детей — вложенная форма sub(sub(...), ...) иначе не переписалась бы.
+        updates = {}
+        for name in node.__dataclass_fields__:
+            value = getattr(node, name)
+            if isinstance(value, tuple):
+                updates[name] = tuple(rewrite(c) if hasattr(c, "__dataclass_fields__") else c for c in value)
+            elif hasattr(value, "__dataclass_fields__"):
+                updates[name] = rewrite(value)
+        return dataclasses.replace(node, **updates) if updates else node
+
+    out = rewrite(metric_ast)
+    return (out, changed) if changed else (metric_ast, False)
+
+
+# Категории, которые в этом конвейере вообще бывают вычитаемым в
+# EBITDA-подвыражении (narrow_opex/solve._apply_ebitda_reading различают
+# ровно эти две — статья и роллап). Addback-переписывание опирается на тот
+# же канон, а не на «любой agg», чтобы не расширять границу за пределы того,
+# что остальной EBITDA-механизм вообще умеет строить.
+_EBITDA_OPEX_CATEGORIES = ("OTHER_OPEX", "OPEX_TOTAL")
+_EBITDA_ADDBACK_DOC_KEY = "ebitda_addbacks_material_total"
+
+
+def _is_ebitda_opex_subtrahend(node: object) -> bool:
+    if isinstance(node, Agg):
+        return node.category in _EBITDA_OPEX_CATEGORIES
+    if isinstance(node, Add):
+        return any(isinstance(arg, Agg) and arg.category in _EBITDA_OPEX_CATEGORIES for arg in node.args)
+    return False
+
+
+def add_ebitda_addback(metric_ast, needs_addback: bool) -> tuple[object, bool]:
+    """Разовая корректировка EBITDA, разрешённая договором (задача 3).
+
+    Определение EBITDA вправе одновременно сузить статью опекса (narrow_opex)
+    И потребовать учесть разовые статьи, добавленные обратно по согласованию
+    аудитора, — это ОТДЕЛЬНЫЙ признак договора, не третье прочтение. Поэтому
+    вход — уже готовый булев вердикт (facts_extract._quote_requires_addback),
+    а не текст цитаты: само переписывание ничего не парсит.
+
+    Переписывается ТОЛЬКО EBITDA-подвыражение — sub(agg(REVENUE, in, ...),
+    agg(<категория опекса>, out, ...)), включая форму, где вычитаемое
+    составное (add с категорией опекса среди прямых аргументов) — ровно та
+    же граница, что у narrow_opex. Всякий иной агрегат (числитель левереджа,
+    платежи связанным сторонам и т.п.) не трогается: их a — не REVENUE, и
+    условие входа их не пропускает.
+
+    Идемпотентно: если derived-ключ корректировки уже встречается где-то в
+    дереве — переписывание молчит целиком. Часть заёмщиков вписывает addback
+    в формулу сама (модель прочла его прямо в тексте самого пункта, а не в
+    отдельном определении EBITDA, — наблюдалось на приватном наборе), и
+    повторное добавление удвоило бы корректировку."""
+    if not needs_addback or metric_ast is None:
+        return metric_ast, False
+    if any(isinstance(n, Doc) and n.key == _EBITDA_ADDBACK_DOC_KEY for n in walk(metric_ast)):
+        return metric_ast, False
+
+    changed = False
+
+    def rewrite(node):
+        nonlocal changed
+        if (
+            isinstance(node, Sub)
+            and isinstance(node.a, Agg)
+            and node.a.category == "REVENUE"
+            and _is_ebitda_opex_subtrahend(node.b)
+        ):
+            changed = True
+            return Add(args=(node, Doc(key=_EBITDA_ADDBACK_DOC_KEY)))
+        if not hasattr(node, "__dataclass_fields__"):
+            return node
         updates = {}
         for name in node.__dataclass_fields__:
             value = getattr(node, name)
@@ -416,7 +486,12 @@ def quarterly(metric_ast, quote: str, direction: str | None) -> tuple[object, bo
     return (MinOf(args=parts) if direction == "min" else MaxOf(args=parts)), True
 
 
-def apply_final(cellspec: dict, quote: str, direction: str | None = None) -> tuple[dict, list[dict]]:
+def apply_final(
+    cellspec: dict,
+    quote: str,
+    direction: str | None = None,
+    ebitda_needs_addback: bool = False,
+) -> tuple[dict, list[dict]]:
     """Все финальные переписывания одним входом. cellspec не мутируется.
 
     Пустая цитата (эталонный режим) — ничего не переписываем: признак решения
@@ -429,7 +504,15 @@ def apply_final(cellspec: dict, quote: str, direction: str | None = None) -> tup
     ковенант вообще (несработавший даёт безусловный COMPLIANT), то есть это
     цена статуса, а не точности. Тот же принцип уже действует у
     solve._apply_ebitda_reading, который обрабатывает метрику и триггер
-    наравне.
+    наравне. Разовая корректировка EBITDA (задача 3, add_ebitda_addback) —
+    того же рода свойство договора, и применяется к триггеру по тому же
+    доводу.
+
+    ebitda_needs_addback — уже готовый вердикт (facts_extract._quote_
+    requires_addback), а не текст цитаты определения EBITDA: cellspec несёт
+    его отдельным полем, потому что цитата определения — не то же самое, что
+    quote пункта (последняя используется остальными переписываниями этой
+    функции).
 
     Квартализация триггера, наоборот, НЕ делается — сознательно и по причине,
     описанной в докстринге quarterly: квартальным бывает именно условие
@@ -446,8 +529,13 @@ def apply_final(cellspec: dict, quote: str, direction: str | None = None) -> tup
             {"kind": "opex_rollup_narrowed", "from": "OPEX_TOTAL", "to": "OTHER_OPEX", "target": "metric"}
         )
 
+    ast, addback_applied = add_ebitda_addback(ast, ebitda_needs_addback)
+    if addback_applied:
+        alarms.append({"kind": "ebitda_addback_applied", "target": "metric"})
+
     trigger = cellspec.get("trigger_ast")
     trigger_narrowed = False
+    trigger_addback_applied = False
     if trigger is not None:
         trigger, trigger_narrowed = narrow_opex(trigger, quote)
         if trigger_narrowed:
@@ -459,6 +547,9 @@ def apply_final(cellspec: dict, quote: str, direction: str | None = None) -> tup
                     "target": "trigger",
                 }
             )
+        trigger, trigger_addback_applied = add_ebitda_addback(trigger, ebitda_needs_addback)
+        if trigger_addback_applied:
+            alarms.append({"kind": "ebitda_addback_applied", "target": "trigger"})
 
     ast, widened = widen_related_party(ast, quote)
     if widened:
@@ -479,6 +570,6 @@ def apply_final(cellspec: dict, quote: str, direction: str | None = None) -> tup
     if not alarms:
         return cellspec, []
     out = {**cellspec, "metric_ast": ast, "metric_text": unparse(ast)}
-    if trigger_narrowed:
+    if trigger_narrowed or trigger_addback_applied:
         out["trigger_ast"] = trigger
     return out, alarms

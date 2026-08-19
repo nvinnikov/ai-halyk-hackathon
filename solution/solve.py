@@ -359,7 +359,9 @@ def _shadow_compare(
     # переписывания вместе», приписывая подмене заголовка чужое расхождение.
     # Ошибка была односторонней только по видимости: сузили одну сторону —
     # алярм врёт именем, сузили обе — молчит честно.
-    shadow_cs, _rw = rewrites.apply_final(shadow_cs, quote, shadow_cs.get("direction"))
+    shadow_cs, _rw = rewrites.apply_final(
+        shadow_cs, quote, shadow_cs.get("direction"), shadow_cs.get("ebitda_needs_addback", False)
+    )
     shadow_status, shadow_res = evidence.compute(raw, facts, shadow_cs)
     shadow_actual = q2(abs(shadow_res.value))
     shadow_txn, _ = evidence.find(raw, facts, shadow_cs, shadow_status)
@@ -531,7 +533,10 @@ def run_cell(
         # не прочитанного (ревью финальной ветки, §2). Считаем исходную спеку.
         try:
             cellspec, rewrite_alarms = rewrites.apply_final(
-                cellspec_or_error, quote, cellspec_or_error.get("direction")
+                cellspec_or_error,
+                quote,
+                cellspec_or_error.get("direction"),
+                cellspec_or_error.get("ebitda_needs_addback", False),
             )
         except Exception as exc:
             cellspec, rewrite_alarms = cellspec_or_error, []
@@ -1131,6 +1136,7 @@ def _extracted_cellspec(
     hide_templates: frozenset = frozenset(),
     fact_keys: frozenset | None = None,
     ebitda_reading: str | None = None,
+    ebitda_needs_addback: bool = False,
 ) -> tuple[object, str]:
     """Cellspec-или-ошибка + цитата пункта из извлечённой спеки (правка 3).
 
@@ -1315,6 +1321,12 @@ def _extracted_cellspec(
         }
         if match_alarms:
             cellspec["match_alarms"] = match_alarms
+        if ebitda_needs_addback:
+            # Проводка признака до rewrites.apply_final (задача 3): та же
+            # схема, что у "direction" — поле cellspec, а не отдельный
+            # аргумент через все промежуточные вызовы (_shadow_compare,
+            # _cell_diagnostics читают его через .get(), как и direction).
+            cellspec["ebitda_needs_addback"] = True
         # Тень для диагностики (не для расчёта): ячейку считает шаблон, но
         # извлечённая формула сохраняется, чтобы run_cell посчитал её вторым
         # проходом. Без этого подмена видна только текстами двух формул, а
@@ -1652,7 +1664,9 @@ def _cell_diagnostics(
     метрику: врущая диагностика дешевле отсутствующей.
     """
     try:
-        final_spec, _rw = rewrites.apply_final(cellspec, quote, cellspec.get("direction"))
+        final_spec, _rw = rewrites.apply_final(
+            cellspec, quote, cellspec.get("direction"), cellspec.get("ebitda_needs_addback", False)
+        )
     except Exception as exc:
         trace["diagnostics_rewrite_error"] = repr(exc)
         final_spec = cellspec
@@ -1917,13 +1931,15 @@ def main(
                 try:
                     if facts_source == "extracted":
                         sp = specs_by_sc[scenario]["clauses"].get(clause_map.get(clause, clause))
+                        sc_ebitda_def = specs_by_sc[scenario].get("ebitda_reading") or {}
                         cellspec_or_error, quote = _extracted_cellspec(
                             sp,
                             clause,
                             scenario,
                             hide_templates,
                             fact_keys=frozenset(facts.get("doc_facts", {})),
-                            ebitda_reading=(specs_by_sc[scenario].get("ebitda_reading") or {}).get("reading"),
+                            ebitda_reading=sc_ebitda_def.get("reading"),
+                            ebitda_needs_addback=sc_ebitda_def.get("needs_addback", False),
                         )
                     else:
                         cellspec_or_error = legacy_spec_to_cellspec(_expected_specs()[scenario][clause])
