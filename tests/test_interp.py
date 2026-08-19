@@ -6,6 +6,7 @@ import pytest
 
 from dsl import parse
 from interp import Ctx, check_trigger, evaluate, verdict
+from templates import TEMPLATES
 
 
 def row(txn, cat, amt, cp="X", desc="d", date="2025-06-01"):
@@ -169,3 +170,48 @@ def test_set_exclude_removes_row_from_plain_agg():
     without = evaluate(ast, Ctx(rows=rows, facts={}, set_exclude=frozenset({"T-1"})))
     assert full.value == Decimal("140")
     assert without.value == Decimal("40")
+
+
+def _related_share_rows() -> list[dict]:
+    """Строка связанной стороны стоит и в числителе, и в знаменателе доли."""
+    return [
+        _row("T-1", "OTHER_OPEX", "-100", cp="Ertis Capital LLP"),
+        _row("T-2", "OTHER_OPEX", "-100", cp="Ertis Capital LLP"),
+        _row("T-3", "OTHER_OPEX", "-200"),
+    ]
+
+
+def test_set_exclude_removes_the_row_from_numerator_and_denominator_alike():
+    """Снятие ОПЕРАЦИИ глобально: строки нет ни в числителе, ни в знаменателе.
+
+    Это контрфактуал кандидата-строки леджера — «этой операции не было», — и он
+    обязан работать в любом агрегате, иначе кандидатом могла бы быть только
+    строка связанной стороны."""
+    rows = _related_share_rows()
+    facts = {"related_parties": ["Ertis Capital LLP"]}
+    ast = parse(TEMPLATES["related_share_opex"])
+    full = evaluate(ast, Ctx(rows=rows, facts=facts))
+    without = evaluate(ast, Ctx(rows=rows, facts=facts, set_exclude=frozenset({"T-1"})))
+    assert full.value == Decimal("200") / Decimal("400")
+    assert without.value == Decimal("100") / Decimal("300")
+
+
+def test_set_unrelate_touches_the_numerator_and_leaves_the_denominator_whole():
+    """Откат ПРИЗНАНИЯ связанности — только под фильтром по контрагенту.
+
+    Финальное ревью ветки, §4: подъём set_exclude в начало предиката сделал
+    отсечение глобальным и молча переопределил контрфактуал inclusion —
+    (N−r)/D превратилось в (N−r)/(D−r), а второе всегда больше, то есть на
+    max-ковенанте документальный кандидат переворачивал бы РЕЖЕ и уступал бы
+    улику догадке по леджеру. Отменяется решение «этот контрагент связан», а не
+    «этой операции не было», поэтому знаменатель, считающий те же расходы без
+    фильтра, обязан остаться полным."""
+    rows = _related_share_rows()
+    facts = {"related_parties": ["Ertis Capital LLP"]}
+    ast = parse(TEMPLATES["related_share_opex"])
+    without = evaluate(ast, Ctx(rows=rows, facts=facts, set_unrelate=frozenset({"T-1"})))
+    assert without.value == Decimal("100") / Decimal("400")
+    # Тот же откат в агрегате без фильтра по контрагенту — no-op.
+    assert evaluate(
+        parse("agg(OTHER_OPEX, out)"), Ctx(rows=rows, facts=facts, set_unrelate=frozenset({"T-1"}))
+    ).value == Decimal("400")

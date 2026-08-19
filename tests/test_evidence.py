@@ -226,3 +226,31 @@ def test_public_key_all_nine_found():
         if key["evidence_txn_id"] is not None and answers[sc][cl]["evidence_txn_id"] != key["evidence_txn_id"]
     ]
     assert missed == [], f"пропущенные улики: {missed}"
+
+
+def test_inclusion_rollback_keeps_the_denominator_whole():
+    """Откат признания связанности снимает строку только из числителя.
+
+    Финальное ревью ветки, §4: глобальное отсечение давало (N−r)/(D−r) вместо
+    (N−r)/D, а второе всегда больше — на max-ковенанте документальный кандидат
+    переставал переворачивать вердикт, и улику забирала догадка по леджеру, то
+    есть проигрыш происходил на первой, спекой определённой ступени. Здесь
+    ровно этот случай: 100/400 = 0.25 переворачивает порог, 100/300 = 0.33 —
+    нет."""
+    raw = [
+        row("T-1", "OTHER_OPEX", "-100", cp="Ertis Capital LLP"),
+        row("T-2", "OTHER_OPEX", "-100", cp="Ertis Capital LLP"),
+        row("T-3", "OTHER_OPEX", "-200"),
+    ]
+    facts = {
+        "related_parties": ["Ertis Capital LLP"],
+        "related_quotes": {"Ertis Capital LLP": "доля 51%"},
+    }
+    s = spec(
+        "ratio(agg(ALL, out, counterparty_in(related_parties)), agg(OTHER_OPEX, out))",
+        "max",
+        "0.30",
+    )
+    ev, trace = find(raw, facts, s, "BREACH")
+    assert ev == "T-1"
+    assert [t["decision_type"] for t in trace if t["txn"] == "T-1" and t["flipped"]] == ["inclusion"]

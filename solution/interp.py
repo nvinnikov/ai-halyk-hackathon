@@ -34,6 +34,12 @@ class Ctx:
     rows: list
     facts: dict
     set_exclude: frozenset = frozenset()
+    # Откат признания контрагента связанным — не то же самое, что снятие
+    # операции: отменяется решение «этот контрагент связан», а не «этой
+    # операции не было». Поэтому строка выпадает только из агрегатов с
+    # фильтром по множеству контрагентов (числитель доли), а знаменатель,
+    # который считает те же расходы без фильтра, остаётся полным.
+    set_unrelate: frozenset = frozenset()
 
 
 @dataclass(frozen=True)
@@ -63,6 +69,8 @@ def _pred(filters: tuple, ctx: Ctx):
                 if r["date"][5:7] not in _quarter_months(f.n):
                     return False
             elif isinstance(f, CounterpartyIn):
+                if r["txn_id"] in ctx.set_unrelate:
+                    return False
                 parties = list(f.setname) if isinstance(f.setname, tuple) else ctx.facts.get(f.setname, [])
                 if not is_related(r["counterparty"], parties):
                     return False

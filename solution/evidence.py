@@ -21,13 +21,13 @@ from engine import is_related, prepare_rows, tokens
 from interp import Ctx, check_trigger, evaluate, verdict
 
 
-def compute(raw_rows, facts, cellspec, overrides=None, set_exclude=frozenset()):
+def compute(raw_rows, facts, cellspec, overrides=None, set_exclude=frozenset(), set_unrelate=frozenset()):
     """Статус и значение ячейки с применёнными контрфактуалами.
 
     Подготовка строк (prepare_rows) происходит здесь: контрфактуал должен
     видеть сырые строки, в подготовленных отсечённой операции уже нет."""
     rows = prepare_rows(raw_rows, facts, overrides)
-    ctx = Ctx(rows=rows, facts=facts, set_exclude=set_exclude)
+    ctx = Ctx(rows=rows, facts=facts, set_exclude=set_exclude, set_unrelate=set_unrelate)
     res = evaluate(cellspec["metric_ast"], ctx)
     if not check_trigger(cellspec["trigger_ast"], ctx):
         return "COMPLIANT", res
@@ -94,7 +94,8 @@ def candidates(raw_rows, facts, cellspec) -> list[dict]:
                         "decision_type": "inclusion",
                         "quote": "; ".join(pquotes.get(p, "") for p in matched),
                         "overrides": None,
-                        "set_exclude": [r["txn_id"]],
+                        "set_exclude": [],
+                        "set_unrelate": [r["txn_id"]],
                     }
                 )
 
@@ -197,6 +198,7 @@ def find(raw_rows, facts, cellspec, status) -> tuple[str | None, list[dict]]:
             cellspec,
             overrides=cand["overrides"],
             set_exclude=frozenset(cand["set_exclude"]),
+            set_unrelate=frozenset(cand.get("set_unrelate", ())),
         )
         flipped = alt_status != status
         trace.append({k: v for k, v in cand.items() if k != "amt"} | {"flipped": flipped})
