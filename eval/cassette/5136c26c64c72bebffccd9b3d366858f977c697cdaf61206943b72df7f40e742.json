@@ -1,0 +1,6 @@
+{
+ "result": {
+  "computable": true,
+  "expression": "agg(FINANCING, out, period(2025-01-01, 2025-12-31))"
+ }
+}
