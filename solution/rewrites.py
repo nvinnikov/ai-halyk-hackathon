@@ -8,8 +8,10 @@
 
 import dataclasses
 import re
+from decimal import Decimal, InvalidOperation
 
-from dsl import Add, Agg, CounterpartyIn, Doc, MaxOf, MinOf, Period, Quarter, Ratio, Sub, unparse, walk
+from dsl import Add, Agg, Const, CounterpartyIn, Doc, MaxOf, MinOf, Period, Quarter, Ratio, Sub, unparse, walk
+from specs_extract import _limit_in_quote
 from taxonomy import LEAVES
 
 # Маркеры прямого широкого прочтения: договор сам говорит «все операционные».
@@ -373,6 +375,186 @@ def flip_debt_incurrence_sign(metric_ast, quote: str) -> tuple[object, bool]:
     return (out, changed) if changed else (metric_ast, False)
 
 
+# --- задача 4: капнутая разрешённая корзина связанных сторон -----------------
+#
+# Ковенант вида «платежи связанным сторонам, за вычетом разрешённой корзины в
+# размере ДО $X таких платежей, надлежащим образом квалифицированных как
+# <статья>» резолвится сегодня буквальным потолком — doc(<ключ>) равен $X
+# целиком, и метрика вычитает X, а не фактическую сумму квалифицированных
+# платежей. Корзина — минимум из двух величин: потолка и факта. Верная форма:
+# min(agg(<статья>, out, <фильтры агрегата платежей связанным сторонам>),
+# const(X)).
+#
+# Признак — по ЦИТАТЕ КОНКРЕТНОГО doc-ключа (doc_fact_quotes[key]), а не по
+# цитате всего пункта: doc-ключ резолвится адресно, и его собственная цитата —
+# это ровно то предложение договора, где корзина описана. Три условия, все
+# обязательны (однозначность несущая — молчаливый выбор дороже отказа):
+#   1) оборот про исключение/вычет корзины («корзин»/«basket»);
+#   2) потолок в виде «до $X» / «up to $X», и это ЖЕ значение (не любое число)
+#      лежит в doc_facts[key] — проверяется _limit_in_quote, той же функцией,
+#      которой конвейер уже сверяет пороги спек с их цитатами (эхо-гард,
+#      solution/specs_extract.py). Один вызов закрывает оба заявленных отказа
+#      («потолка нет» и «значение doc-ключа не совпадает с потолком») — это
+#      один и тот же факт: число обязано быть буквально в тексте цитаты;
+#   3) статья, которой платежи «надлежащим образом квалифицированы»,
+#      сопоставляется РОВНО ОДНОЙ категории таксономии.
+
+_BASKET_MARKERS = ("корзин", "basket")
+
+# «до $X» / «up to $X» — потолок корзины, а не голое число где-то в
+# предложении. Слово целиком (\b), не основа: «до» короче любого осмысленного
+# стема и без границы слова ловило бы что угодно.
+_UP_TO_RE = re.compile(r"\bдо\b\s*\$?\s*\d|\bup\s+to\b\s*\$?\s*\d|\bне\s+более\b\s*\$?\s*\d", re.IGNORECASE)
+
+# Фраза, называющая статью: «квалифицированных как <статья>» / «qualified as
+# <статья>». Захватывает всё до ближайшего знака препинания — этого достаточно
+# для короткого названия статьи в разрешённой корзине (см. живые цитаты
+# приватного набора в docstring cap_related_party_basket).
+_STATUTE_PHRASE_RE = re.compile(
+    r"(?:квалифицирован\w*\s+как|qualif(?:y|ied)\s+as|classified\s+as|characteri[sz]ed\s+as)\s+"
+    r"([^.,;)\n]+)",
+    re.IGNORECASE,
+)
+
+# Статья названа в тексте ДОГОВОРА (оба языка), не в описании проводки
+# леджера — это другой словарь природы, чем categorize.RULES: тот распознаёт
+# статью по ОПИСАНИЮ конкретной операции («advisory engagement», «retainer
+# fee», всегда по-английски), а здесь — формальное НАЗВАНИЕ статьи в пункте
+# договора («Консультационные услуги» / «Consulting Services»), которого в
+# RULES нет ни разу. Домен категорий — LEAVES (см. проверку ниже), стем-приём —
+# тот же, что у _mentions_incurrence/_mentions_repayment выше: основы слов,
+# проверяемые по токену (word.startswith), а не подстрокой по всему тексту —
+# иначе "current" ложно матчился бы стемом "rent" внутри "curRENT".
+_STATUTE_CATEGORY_STEMS: dict[str, tuple[str, ...]] = {
+    "CONSULTING": ("консультацион", "consulting"),
+    "MARKETING": ("маркетинг", "реклам", "marketing", "advertis"),
+    "INSURANCE": ("страхов", "insurance"),
+    "PAYROLL": ("оплат труд", "заработн", "payroll"),
+    "RENT": ("аренд", "rent", "lease"),
+    "UTILITIES": ("коммунальн", "utilit"),
+    "TELECOM": ("связ", "telecom"),
+    "TAX": ("налог", "tax"),
+    "INTEREST": ("процент", "interest"),
+    "CAPEX": ("капитальн", "capex", "capital expenditure"),
+    "OTHER_OPEX": ("операционн", "operating expense"),
+}
+assert set(_STATUTE_CATEGORY_STEMS) <= LEAVES  # ключи — не выдуманные категории
+
+
+def _mentions_basket(quote: str) -> bool:
+    t = _normalize(quote)
+    return any(m in t for m in _BASKET_MARKERS)
+
+
+def _mentions_up_to_cap(quote: str) -> bool:
+    return bool(_UP_TO_RE.search(_normalize(quote)))
+
+
+def _match_statute_category(quote: str) -> str | None:
+    """Единственная категория, названная статьёй в «квалифицированных как …»,
+    или None — фразы нет, категория не распознана, либо распознано несколько."""
+    m = _STATUTE_PHRASE_RE.search(quote)
+    if m is None:
+        return None
+    phrase = _normalize(m.group(1))
+    words = _WORD_RE.findall(phrase)
+    matched = {
+        category
+        for category, stems in _STATUTE_CATEGORY_STEMS.items()
+        for stem in stems
+        if (stem in phrase if " " in stem else any(w.startswith(stem) for w in words))
+    }
+    return matched.pop() if len(matched) == 1 else None
+
+
+def _find_related_party_agg(node: object) -> Agg | None:
+    """Первый Agg с фильтром связанных сторон в поддереве — образец фильтров
+    и знака для нового агрегата корзины (задача 4: одни и те же period и
+    counterparty_in, что у самого агрегата платежей связанным сторонам)."""
+    for n in walk(node):
+        if isinstance(n, Agg) and any(_is_related_party_filter(f) for f in n.filters):
+            return n
+    return None
+
+
+def _capped_basket_node(numerator: object, key: str, doc_facts: dict, doc_fact_quotes: dict) -> object | None:
+    quote = doc_fact_quotes.get(key)
+    value = doc_facts.get(key)
+    if not quote or value is None:
+        return None
+    if not _mentions_basket(quote) or not _mentions_up_to_cap(quote):
+        return None
+    # Один и тот же вызов закрывает оба отказа спеки задачи: «потолка нет в
+    # цитате числом» и «значение doc-ключа не совпадает с потолком» — оба
+    # означают одно и то же несовпадение буквальной формы value с текстом.
+    if not _limit_in_quote(str(value), quote):
+        return None
+    category = _match_statute_category(quote)
+    if category is None:
+        return None
+    related_agg = _find_related_party_agg(numerator)
+    if related_agg is None:
+        return None
+    try:
+        limit_value = Decimal(str(value))
+    except InvalidOperation:
+        return None
+    basket_agg = Agg(category=category, sign=related_agg.sign, filters=related_agg.filters)
+    return MinOf(args=(basket_agg, Const(value=limit_value)))
+
+
+def cap_related_party_basket(
+    metric_ast, doc_facts: dict | None, doc_fact_quotes: dict | None
+) -> tuple[object, bool]:
+    """«Разрешённая корзина в размере до $X» — минимум из потолка и факта.
+
+    Ковенант платежей связанным сторонам вычитает не сам потолок, а меньшее
+    из потолка и суммы платежей, ФАКТИЧЕСКИ надлежащим образом
+    квалифицированных договором как названная статья: «до $X таких платежей,
+    ... квалифицированных как <статья>» — это ПОТОЛОК корзины, а не
+    гарантированный вычет. Сегодня doc(<ключ>) резолвится числом потолка
+    напрямую (resolve_doc_fact берёт число из той же цитаты), и метрика
+    вычитает его целиком — переплачивая корзиной там, где фактические
+    квалифицированные платежи меньше потолка (например, часть переклассифицирована
+    аудитором в другую статью и больше не «надлежащим образом квалифицирована»).
+
+    Переписывается ТОЛЬКО Doc, стоящий вычитаемым (`b`) в Sub(a, Doc(key)),
+    где `a` содержит агрегат с фильтром связанных сторон — оттуда берутся его
+    period/counterparty_in и знак для нового агрегата корзины. Признание
+    цитаты и категории — в `_capped_basket_node`; любой из трёх гейтов
+    (корзина, потолок-в-цитате, однозначная статья) молчит целиком.
+
+    doc_facts/doc_fact_quotes — уже готовые факты досье (doc_fact_quotes[key]
+    — цитата, под которую резолвился именно ЭТОТ doc-ключ), не текст пункта
+    целиком: адресный резолв даёт цитату уже, чем цитата всего ковенанта, и
+    статья корзины называется именно в ней."""
+    if metric_ast is None or not doc_facts or not doc_fact_quotes:
+        return metric_ast, False
+
+    changed = False
+
+    def rewrite(node):
+        nonlocal changed
+        if isinstance(node, Sub) and isinstance(node.b, Doc):
+            replacement = _capped_basket_node(node.a, node.b.key, doc_facts, doc_fact_quotes)
+            if replacement is not None:
+                changed = True
+                return Sub(a=node.a, b=replacement)
+        if not hasattr(node, "__dataclass_fields__"):
+            return node
+        updates = {}
+        for name in node.__dataclass_fields__:
+            value = getattr(node, name)
+            if isinstance(value, tuple):
+                updates[name] = tuple(rewrite(c) if hasattr(c, "__dataclass_fields__") else c for c in value)
+            elif hasattr(value, "__dataclass_fields__"):
+                updates[name] = rewrite(value)
+        return dataclasses.replace(node, **updates) if updates else node
+
+    out = rewrite(metric_ast)
+    return (out, changed) if changed else (metric_ast, False)
+
+
 # Признак поквартальности: квантор («любой»/«каждый», any/each) и слово
 # «квартал»/quarter в пределах ограниченного разрыва слов, а не буквальная
 # фраза целиком (раунд правок 1). Список готовых фраз («любом финансовом
@@ -491,6 +673,8 @@ def apply_final(
     quote: str,
     direction: str | None = None,
     ebitda_needs_addback: bool = False,
+    doc_facts: dict | None = None,
+    doc_fact_quotes: dict | None = None,
 ) -> tuple[dict, list[dict]]:
     """Все финальные переписывания одним входом. cellspec не мутируется.
 
@@ -517,7 +701,12 @@ def apply_final(
     Квартализация триггера, наоборот, НЕ делается — сознательно и по причине,
     описанной в докстринге quarterly: квартальным бывает именно условие
     («если выручка любого квартала ниже X»), и тогда квартализовать надо не
-    его, а ничего."""
+    его, а ничего.
+
+    doc_facts/doc_fact_quotes (задача 4) — факты досье целиком (не только
+    цитата пункта), нужны cap_related_party_basket: капнутая корзина
+    резолвится по СОБСТВЕННОЙ цитате doc-ключа, а не по цитате всего пункта.
+    По умолчанию None — старые вызовы без этих kwarg-ов ничего не переписывают."""
     if not quote or cellspec.get("metric_ast") is None:
         return cellspec, []
     alarms: list[dict] = []
@@ -554,6 +743,10 @@ def apply_final(
     ast, widened = widen_related_party(ast, quote)
     if widened:
         alarms.append({"kind": "related_party_widened", "to": "ALL", "target": "metric"})
+
+    ast, basket_capped = cap_related_party_basket(ast, doc_facts, doc_fact_quotes)
+    if basket_capped:
+        alarms.append({"kind": "related_party_basket_capped", "target": "metric"})
 
     ast, sign_flipped = flip_debt_incurrence_sign(ast, quote)
     if sign_flipped:

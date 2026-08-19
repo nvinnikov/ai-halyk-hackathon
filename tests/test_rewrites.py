@@ -2,6 +2,7 @@ from dsl import parse, unparse
 from rewrites import (
     add_ebitda_addback,
     apply_final,
+    cap_related_party_basket,
     flip_debt_incurrence_sign,
     narrow_opex,
     quarterly,
@@ -574,3 +575,170 @@ def test_apply_final_applies_addback_to_trigger_too():
         "const(1000))"
     )
     assert "ebitda_addback_applied" in [a["kind"] for a in alarms]
+
+
+# --- Task 4: капнутая разрешённая корзина связанных сторон -------------------
+
+_BASKET_QUOTE_RU = (
+    "после исключения разрешённой корзины в размере до $300,000.00 таких "
+    "платежей, совершённых в обычном порядке и надлежащим образом "
+    "квалифицированных как Консультационные услуги"
+)
+
+_BASKET_METRIC = (
+    "sub(agg(ALL, out, period(2025-01-01, 2025-12-31), counterparty_in(related_parties)), "
+    "doc(related_party_consulting_basket))"
+)
+
+
+def test_caps_basket_with_min_of_category_and_const():
+    """B3 6.1: корзина — минимум из фактической суммы платежей, квалифицированных
+    как названная статья, и потолка из цитаты, а не потолок целиком."""
+    doc_facts = {"related_party_consulting_basket": "300000"}
+    doc_fact_quotes = {"related_party_consulting_basket": _BASKET_QUOTE_RU}
+    ast, changed = cap_related_party_basket(parse(_BASKET_METRIC), doc_facts, doc_fact_quotes)
+    assert changed
+    assert unparse(ast) == (
+        "sub(agg(ALL, out, period(2025-01-01, 2025-12-31), counterparty_in(related_parties)), "
+        "min(agg(CONSULTING, out, period(2025-01-01, 2025-12-31), counterparty_in(related_parties)), "
+        "const(300000)))"
+    )
+
+
+def test_caps_basket_english_quote():
+    metric = "sub(agg(ALL, out, counterparty_in(related_parties)), doc(rp_basket))"
+    doc_facts = {"rp_basket": "500000"}
+    doc_fact_quotes = {
+        "rp_basket": (
+            "excluding a permitted basket of up to $500,000.00 of such payments made in "
+            "the ordinary course and properly qualified as Consulting Services"
+        )
+    }
+    ast, changed = cap_related_party_basket(parse(metric), doc_facts, doc_fact_quotes)
+    assert changed
+    assert unparse(ast) == (
+        "sub(agg(ALL, out, counterparty_in(related_parties)), "
+        "min(agg(CONSULTING, out, counterparty_in(related_parties)), const(500000)))"
+    )
+
+
+def test_does_not_cap_when_doc_key_missing_from_facts():
+    ast, changed = cap_related_party_basket(parse(_BASKET_METRIC), {}, {})
+    assert not changed
+    assert unparse(ast) == _BASKET_METRIC
+
+
+def test_does_not_cap_when_value_not_echoed_in_quote():
+    """Значение doc-ключа не совпадает с потолком, найденным в цитате: ключ
+    несёт что-то другое, подменять его нельзя."""
+    doc_facts = {"related_party_consulting_basket": "250000"}
+    doc_fact_quotes = {"related_party_consulting_basket": _BASKET_QUOTE_RU}
+    ast, changed = cap_related_party_basket(parse(_BASKET_METRIC), doc_facts, doc_fact_quotes)
+    assert not changed
+    assert unparse(ast) == _BASKET_METRIC
+
+
+def test_does_not_cap_without_basket_wording():
+    quote = "величина, которая учитывается при расчёте показателя за период, до $300,000.00"
+    doc_facts = {"related_party_consulting_basket": "300000"}
+    doc_fact_quotes = {"related_party_consulting_basket": quote}
+    ast, changed = cap_related_party_basket(parse(_BASKET_METRIC), doc_facts, doc_fact_quotes)
+    assert not changed
+    assert unparse(ast) == _BASKET_METRIC
+
+
+def test_does_not_cap_without_up_to_wording():
+    quote = (
+        "после исключения разрешённой корзины в размере $300,000.00 таких "
+        "платежей, квалифицированных как Консультационные услуги"
+    )
+    doc_facts = {"related_party_consulting_basket": "300000"}
+    doc_fact_quotes = {"related_party_consulting_basket": quote}
+    ast, changed = cap_related_party_basket(parse(_BASKET_METRIC), doc_facts, doc_fact_quotes)
+    assert not changed
+    assert unparse(ast) == _BASKET_METRIC
+
+
+def test_does_not_cap_when_statute_is_ambiguous():
+    """Две подходящие категории — отказ: молчаливый выбор одной дороже отказа."""
+    quote = (
+        "после исключения разрешённой корзины в размере до $300,000.00 таких "
+        "платежей, квалифицированных как Консультационные услуги или "
+        "Маркетинговые расходы"
+    )
+    doc_facts = {"related_party_consulting_basket": "300000"}
+    doc_fact_quotes = {"related_party_consulting_basket": quote}
+    ast, changed = cap_related_party_basket(parse(_BASKET_METRIC), doc_facts, doc_fact_quotes)
+    assert not changed
+    assert unparse(ast) == _BASKET_METRIC
+
+
+def test_does_not_cap_when_statute_is_unrecognized():
+    quote = (
+        "после исключения разрешённой корзины в размере до $300,000.00 "
+        "таких платежей, квалифицированных как Специальные расходы"
+    )
+    doc_facts = {"related_party_consulting_basket": "300000"}
+    doc_fact_quotes = {"related_party_consulting_basket": quote}
+    ast, changed = cap_related_party_basket(parse(_BASKET_METRIC), doc_facts, doc_fact_quotes)
+    assert not changed
+    assert unparse(ast) == _BASKET_METRIC
+
+
+def test_does_not_cap_without_related_party_filter_on_numerator():
+    metric = "sub(agg(ALL, out, period(2025-01-01, 2025-12-31)), doc(related_party_consulting_basket))"
+    doc_facts = {"related_party_consulting_basket": "300000"}
+    doc_fact_quotes = {"related_party_consulting_basket": _BASKET_QUOTE_RU}
+    ast, changed = cap_related_party_basket(parse(metric), doc_facts, doc_fact_quotes)
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_does_not_touch_sub_without_doc_subtrahend():
+    metric = "sub(agg(REVENUE, in), agg(OTHER_OPEX, out))"
+    doc_facts = {"related_party_consulting_basket": "300000"}
+    doc_fact_quotes = {"related_party_consulting_basket": _BASKET_QUOTE_RU}
+    ast, changed = cap_related_party_basket(parse(metric), doc_facts, doc_fact_quotes)
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_caps_basket_nested_inside_add():
+    metric = f"add({_BASKET_METRIC}, agg(ONE_OFF, out))"
+    doc_facts = {"related_party_consulting_basket": "300000"}
+    doc_fact_quotes = {"related_party_consulting_basket": _BASKET_QUOTE_RU}
+    ast, changed = cap_related_party_basket(parse(metric), doc_facts, doc_fact_quotes)
+    assert changed
+    assert unparse(ast) == (
+        "add(sub(agg(ALL, out, period(2025-01-01, 2025-12-31), counterparty_in(related_parties)), "
+        "min(agg(CONSULTING, out, period(2025-01-01, 2025-12-31), counterparty_in(related_parties)), "
+        "const(300000))), agg(ONE_OFF, out))"
+    )
+
+
+def test_apply_final_caps_basket_and_reports_alarm():
+    spec = {
+        "metric_ast": parse(_BASKET_METRIC),
+        "metric_text": _BASKET_METRIC,
+        "direction": "max",
+    }
+    doc_facts = {"related_party_consulting_basket": "300000"}
+    doc_fact_quotes = {"related_party_consulting_basket": _BASKET_QUOTE_RU}
+    new, alarms = apply_final(
+        spec, "квоту не превышать", "max", False, doc_facts=doc_facts, doc_fact_quotes=doc_fact_quotes
+    )
+    assert new["metric_text"] == (
+        "sub(agg(ALL, out, period(2025-01-01, 2025-12-31), counterparty_in(related_parties)), "
+        "min(agg(CONSULTING, out, period(2025-01-01, 2025-12-31), counterparty_in(related_parties)), "
+        "const(300000)))"
+    )
+    assert "related_party_basket_capped" in [a["kind"] for a in alarms]
+    assert spec["metric_text"] == _BASKET_METRIC  # исходный cellspec не мутирован
+
+
+def test_apply_final_does_not_cap_basket_by_default():
+    """Обратная совместимость: без новых kwarg-ов ничего не переписывается."""
+    spec = {"metric_ast": parse(_BASKET_METRIC), "metric_text": _BASKET_METRIC}
+    new, alarms = apply_final(spec, "любая непустая цитата")
+    assert new["metric_text"] == _BASKET_METRIC
+    assert alarms == []

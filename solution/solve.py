@@ -360,7 +360,12 @@ def _shadow_compare(
     # Ошибка была односторонней только по видимости: сузили одну сторону —
     # алярм врёт именем, сузили обе — молчит честно.
     shadow_cs, _rw = rewrites.apply_final(
-        shadow_cs, quote, shadow_cs.get("direction"), shadow_cs.get("ebitda_needs_addback", False)
+        shadow_cs,
+        quote,
+        shadow_cs.get("direction"),
+        shadow_cs.get("ebitda_needs_addback", False),
+        doc_facts=facts.get("doc_facts"),
+        doc_fact_quotes=facts.get("doc_fact_quotes"),
     )
     shadow_status, shadow_res = evidence.compute(raw, facts, shadow_cs)
     shadow_actual = q2(abs(shadow_res.value))
@@ -537,6 +542,8 @@ def run_cell(
                 quote,
                 cellspec_or_error.get("direction"),
                 cellspec_or_error.get("ebitda_needs_addback", False),
+                doc_facts=facts.get("doc_facts"),
+                doc_fact_quotes=facts.get("doc_fact_quotes"),
             )
         except Exception as exc:
             cellspec, rewrite_alarms = cellspec_or_error, []
@@ -1647,6 +1654,8 @@ def _cell_diagnostics(
     pollution: Decimal,
     scenario: str,
     clause: str,
+    doc_facts: dict | None = None,
+    doc_fact_quotes: dict | None = None,
 ) -> None:
     """Три диагностики поверх УЖЕ посчитанной ячейки: знак, шум, неразнесённые.
 
@@ -1665,7 +1674,12 @@ def _cell_diagnostics(
     """
     try:
         final_spec, _rw = rewrites.apply_final(
-            cellspec, quote, cellspec.get("direction"), cellspec.get("ebitda_needs_addback", False)
+            cellspec,
+            quote,
+            cellspec.get("direction"),
+            cellspec.get("ebitda_needs_addback", False),
+            doc_facts=doc_facts,
+            doc_fact_quotes=doc_fact_quotes,
         )
     except Exception as exc:
         trace["diagnostics_rewrite_error"] = repr(exc)
@@ -1965,6 +1979,8 @@ def main(
                         pollution,
                         scenario,
                         clause,
+                        doc_facts=facts.get("doc_facts"),
+                        doc_fact_quotes=facts.get("doc_fact_quotes"),
                     )
                     if trace.get("tier") == 0:
                         computed.append((cellspec_or_error["direction"], cell["actual"]))
