@@ -1,5 +1,5 @@
 from dsl import parse, unparse
-from rewrites import apply_final, narrow_opex, quarterly, widen_related_party
+from rewrites import apply_final, flip_debt_incurrence_sign, narrow_opex, quarterly, widen_related_party
 
 _EBITDA_BROAD = "sub(agg(REVENUE, in), agg(OPEX_TOTAL, out))"
 
@@ -295,4 +295,75 @@ def test_apply_final_widens_related_party_and_reports_alarm():
     new, alarms = apply_final(spec, "платежи связанным сторонам")
     assert new["metric_text"] == "agg(ALL, out, counterparty_in(related_parties))"
     assert "related_party_widened" in [a["kind"] for a in alarms]
+    assert spec["metric_text"] == metric  # исходный cellspec не мутирован
+
+
+# --- Task 2: привлечённая задолженность — это приток -----------------------
+
+
+def test_flips_financing_out_to_in_when_quote_signals_incurrence():
+    """«Совокупная основная сумма Финансовой задолженности, привлечённой за
+    период» — это приток, а модель извлекла отток."""
+    metric = "agg(FINANCING, out)"
+    quote = "совокупная основная сумма Финансовой задолженности, привлечённой за период"
+    ast, changed = flip_debt_incurrence_sign(parse(metric), quote)
+    assert changed
+    assert unparse(ast) == "agg(FINANCING, in)"
+
+
+def test_flips_financing_out_to_in_for_english_incurrence_quote():
+    metric = "agg(FINANCING, out)"
+    quote = "the aggregate principal amount of Financial Indebtedness incurred during the period"
+    ast, changed = flip_debt_incurrence_sign(parse(metric), quote)
+    assert changed
+    assert unparse(ast) == "agg(FINANCING, in)"
+
+
+def test_does_not_flip_when_quote_signals_repayment():
+    metric = "agg(FINANCING, out)"
+    ast, changed = flip_debt_incurrence_sign(parse(metric), "погашение основного долга по кредитам")
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_does_not_flip_when_quote_mentions_both_incurrence_and_repayment():
+    """DSCR читает обе стороны в одной формуле — угадать здесь нельзя,
+    переписывание обязано промолчать целиком."""
+    metric = "agg(FINANCING, out)"
+    quote = (
+        "коэффициент покрытия обслуживания долга учитывает как привлечение "
+        "нового финансирования, так и погашение основного долга за период"
+    )
+    ast, changed = flip_debt_incurrence_sign(parse(metric), quote)
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_does_not_flip_other_category_under_incurrence_quote():
+    metric = "agg(OTHER, out)"
+    ast, changed = flip_debt_incurrence_sign(parse(metric), "задолженность, привлечённая за период")
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_does_not_flip_financing_already_in():
+    metric = "agg(FINANCING, in)"
+    ast, changed = flip_debt_incurrence_sign(parse(metric), "задолженность, привлечённая за период")
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_flips_financing_nested_inside_add():
+    metric = "add(agg(FINANCING, out), agg(OTHER, out))"
+    ast, changed = flip_debt_incurrence_sign(parse(metric), "задолженность, привлечённая за период")
+    assert changed
+    assert unparse(ast) == "add(agg(FINANCING, in), agg(OTHER, out))"
+
+
+def test_apply_final_flips_financing_sign_and_reports_alarm():
+    metric = "agg(FINANCING, out)"
+    spec = {"metric_ast": parse(metric), "metric_text": metric}
+    new, alarms = apply_final(spec, "задолженность, привлечённая за период")
+    assert new["metric_text"] == "agg(FINANCING, in)"
+    assert "financing_sign_flipped" in [a["kind"] for a in alarms]
     assert spec["metric_text"] == metric  # исходный cellspec не мутирован

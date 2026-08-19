@@ -163,6 +163,102 @@ def widen_related_party(metric_ast, quote: str) -> tuple[object, bool]:
     return (out, changed) if changed else (metric_ast, False)
 
 
+# Основы слов о ПРИВЛЕЧЕНИИ задолженности против основ слов о ЕЁ ПОГАШЕНИИ
+# (обслуживании). Основы, а не целые формы — падеж и род русских договоров
+# гуляют, а корень один: «привлечённая», «привлечение», «привлекла» —
+# одна основа. Английские формы нужны отдельно: часть договоров набора на
+# английском.
+_INCURRENCE_STEMS = (
+    "привлечен",
+    "привлека",
+    "наращива",
+    "нараста",
+    "заимствован",
+    "выборк",
+    "incurrence",
+    "incurred",
+    "incurring",
+    "drawdown",
+    "draw down",
+    "borrowing",
+)
+_REPAYMENT_STEMS = (
+    "погашен",
+    "погаша",
+    "обслуживан",
+    "возврат",
+    "repayment",
+    "repaid",
+    "repay",
+    "debt service",
+    "amortization of principal",
+)
+
+
+def _normalize(quote: str) -> str:
+    # «ё» приводим к «е»: в договорах написание пляшет («привлечённой» и
+    # «привлеченной» — одно слово), а основа без буквы «ё» одна.
+    return (quote or "").lower().replace("ё", "е")
+
+
+def _mentions_incurrence(quote: str) -> bool:
+    t = _normalize(quote)
+    return any(s in t for s in _INCURRENCE_STEMS)
+
+
+def _mentions_repayment(quote: str) -> bool:
+    t = _normalize(quote)
+    return any(s in t for s in _REPAYMENT_STEMS)
+
+
+def flip_debt_incurrence_sign(metric_ast, quote: str) -> tuple[object, bool]:
+    """«Привлечённая за период» задолженность — это приток, а не отток.
+
+    Модель выбирает знак по интуиции о категории FINANCING («это расход по
+    финансовой деятельности») и промахивается: погашение долга — отток,
+    привлечение нового долга (транша, займа) — приток. Договор про
+    «совокупную основную сумму Финансовой задолженности, привлечённой за
+    период» описывает именно второе, а извлечённая формула считает
+    agg(FINANCING, out) — то есть противоположную величину, и на леджере, где
+    отток по этой категории за период нулевой, агрегат тихо даёт ноль.
+
+    Признак — по цитате пункта, а не по имени категории: наличие основ слов о
+    привлечении при отсутствии слов о погашении/обслуживании. Если в цитате
+    есть и то и другое — переписывание молчит целиком: коэффициент покрытия
+    обслуживания долга (DSCR) читает обе стороны в одной формуле, и слепая
+    правка знака сломала бы верный ответ так же, как неверный знак сейчас
+    ломает эту ячейку. Различить, какая половина цитаты относится к узлу с
+    знаком out, здесь нечем — отказ дешевле угадывания.
+
+    Категория ограничена FINANCING сознательно: это единственная категория,
+    под которой в леджере встречаются движения по привлечению/погашению
+    долга, и расширять признак на другие категории — гадание без опоры на
+    наблюдаемый случай."""
+    if not _mentions_incurrence(quote) or _mentions_repayment(quote):
+        return metric_ast, False
+
+    changed = False
+
+    def rewrite(node):
+        nonlocal changed
+        if isinstance(node, Agg) and node.category == "FINANCING" and node.sign == "out":
+            changed = True
+            return dataclasses.replace(node, sign="in")
+        if not hasattr(node, "__dataclass_fields__"):
+            return node
+        updates = {}
+        for name in node.__dataclass_fields__:
+            value = getattr(node, name)
+            if isinstance(value, tuple):
+                updates[name] = tuple(rewrite(c) if hasattr(c, "__dataclass_fields__") else c for c in value)
+            elif hasattr(value, "__dataclass_fields__"):
+                updates[name] = rewrite(value)
+        return dataclasses.replace(node, **updates) if updates else node
+
+    out = rewrite(metric_ast)
+    return (out, changed) if changed else (metric_ast, False)
+
+
 # Признак поквартальности: квантор («любой»/«каждый», any/each) и слово
 # «квартал»/quarter в пределах ограниченного разрыва слов, а не буквальная
 # фраза целиком (раунд правок 1). Список готовых фраз («любом финансовом
@@ -324,9 +420,14 @@ def apply_final(cellspec: dict, quote: str, direction: str | None = None) -> tup
     if widened:
         alarms.append({"kind": "related_party_widened", "to": "ALL", "target": "metric"})
 
+    ast, sign_flipped = flip_debt_incurrence_sign(ast, quote)
+    if sign_flipped:
+        alarms.append({"kind": "financing_sign_flipped", "from": "out", "to": "in", "target": "metric"})
+
     # Порядок важен: квартализация копирует поддерево четырежды, и узкий опекс
-    # (и расширение категории связанных сторон) обязаны быть выбраны ДО
-    # копирования — иначе они чинились бы в четырёх местах.
+    # (расширение категории связанных сторон, переворот знака привлечённой
+    # задолженности) обязаны быть выбраны ДО копирования — иначе они
+    # чинились бы в четырёх местах.
     ast, quartered = quarterly(ast, quote, direction)
     if quartered:
         alarms.append({"kind": "metric_quarterized", "direction": direction})
