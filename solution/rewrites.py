@@ -163,36 +163,45 @@ def widen_related_party(metric_ast, quote: str) -> tuple[object, bool]:
     return (out, changed) if changed else (metric_ast, False)
 
 
+_WORD_RE = re.compile(r"[\w-]+", re.UNICODE)
+_SENTENCE_SPLIT_RE = re.compile(r"[.;]+")
+
+
 # Основы слов о ПРИВЛЕЧЕНИИ задолженности против основ слов о ЕЁ ПОГАШЕНИИ
 # (обслуживании). Основы, а не целые формы — падеж и род русских договоров
 # гуляют, а корень один: «привлечённая», «привлечение», «привлекла» —
 # одна основа. Английские формы нужны отдельно: часть договоров набора на
 # английском.
-_INCURRENCE_STEMS = (
+#
+# Ярус привлечения расколот надвое (раунд правок 1). НАДЁЖНЫЕ основы сами по
+# себе однозначно про долг («привлечение», «заимствование», incurred,
+# borrowing) — соседство им не требуется. РИСКОВАННЫЕ («наращива»/«нараста» —
+# обычные слова о росте ЛЮБОЙ величины: резервов, капитала, доли; «выборк» —
+# ещё и лексика аудиторских заключений, где это sample, а не выборка транша)
+# сами по себе ничего не говорят про долг: без проверки соседства они
+# переворачивали бы знак АКТИВНО НЕВЕРНО на цитате вроде «наращивание
+# резервов на возможные потери». Признак для них — слово о
+# задолженности/долге в ограниченном окне, не пересекающем границу
+# предложения: тот же приём, что у `_sentence_mentions_any_quarter`
+# (квантор и «квартал» рядом, окно ограничено, граница предложения его
+# обнуляет) — переиспользуется, а не изобретается заново.
+_INCURRENCE_STEMS_RELIABLE = (
     "привлечен",
     "привлека",
-    "наращива",
-    "нараста",
     "заимствован",
-    "выборк",
     "incurrence",
     "incurred",
     "incurring",
     "drawdown",
-    "draw down",
     "borrowing",
 )
-_REPAYMENT_STEMS = (
-    "погашен",
-    "погаша",
-    "обслуживан",
-    "возврат",
-    "repayment",
-    "repaid",
-    "repay",
-    "debt service",
-    "amortization of principal",
-)
+_INCURRENCE_PHRASE_STEMS = ("draw down",)
+_INCURRENCE_STEMS_RISKY = ("наращива", "нараста", "выборк")
+_DEBT_WORD_STEMS = ("задолженност", "долг", "заем", "займ", "кредит", "indebtedness", "debt", "loan")
+_DEBT_WORD_GAP = 4
+
+_REPAYMENT_WORD_STEMS = ("погашен", "погаша", "обслуживан", "возврат", "repayment", "repaid", "repay")
+_REPAYMENT_PHRASE_STEMS = ("debt service", "amortization of principal")
 
 
 def _normalize(quote: str) -> str:
@@ -201,14 +210,48 @@ def _normalize(quote: str) -> str:
     return (quote or "").lower().replace("ё", "е")
 
 
+def _word_matches_stem_unnegated(word: str, stems: tuple[str, ...]) -> bool:
+    """Слово несёт основу, но не как отрицание, слитое с ней («не» + основа
+    одним словом). «Непогашенная задолженность» — стандартный банковский
+    термин про остаток, который ЕЩЁ предстоит погасить, то есть говорит
+    ровно ПРОТИВОПОЛОЖНОЕ погашению; без этой защиты подстрока «погашен»
+    внутри «непогашенная» ошибочно блокировала бы починку знака отказом
+    (раунд правок 1, находка 1) — направление безопасное (недочинка, не
+    порча), но частое достаточно, чтобы стоило чинить."""
+    if not any(word.startswith(s) for s in stems):
+        return False
+    return not any(word.startswith("не" + s) for s in stems)
+
+
+def _sentence_mentions_risky_incurrence(sentence: str) -> bool:
+    words = _WORD_RE.findall(sentence)
+    for i, word in enumerate(words):
+        if not any(word.startswith(s) for s in _INCURRENCE_STEMS_RISKY):
+            continue
+        lo = max(0, i - _DEBT_WORD_GAP)
+        hi = i + _DEBT_WORD_GAP + 1
+        window = words[lo:i] + words[i + 1 : hi]
+        if any(any(w.startswith(d) for d in _DEBT_WORD_STEMS) for w in window):
+            return True
+    return False
+
+
 def _mentions_incurrence(quote: str) -> bool:
     t = _normalize(quote)
-    return any(s in t for s in _INCURRENCE_STEMS)
+    if any(p in t for p in _INCURRENCE_PHRASE_STEMS):
+        return True
+    words = _WORD_RE.findall(t)
+    if any(_word_matches_stem_unnegated(w, _INCURRENCE_STEMS_RELIABLE) for w in words):
+        return True
+    return any(_sentence_mentions_risky_incurrence(s) for s in _SENTENCE_SPLIT_RE.split(t))
 
 
 def _mentions_repayment(quote: str) -> bool:
     t = _normalize(quote)
-    return any(s in t for s in _REPAYMENT_STEMS)
+    if any(p in t for p in _REPAYMENT_PHRASE_STEMS):
+        return True
+    words = _WORD_RE.findall(t)
+    return any(_word_matches_stem_unnegated(w, _REPAYMENT_WORD_STEMS) for w in words)
 
 
 def flip_debt_incurrence_sign(metric_ast, quote: str) -> tuple[object, bool]:
@@ -223,12 +266,13 @@ def flip_debt_incurrence_sign(metric_ast, quote: str) -> tuple[object, bool]:
     отток по этой категории за период нулевой, агрегат тихо даёт ноль.
 
     Признак — по цитате пункта, а не по имени категории: наличие основ слов о
-    привлечении при отсутствии слов о погашении/обслуживании. Если в цитате
-    есть и то и другое — переписывание молчит целиком: коэффициент покрытия
-    обслуживания долга (DSCR) читает обе стороны в одной формуле, и слепая
-    правка знака сломала бы верный ответ так же, как неверный знак сейчас
-    ломает эту ячейку. Различить, какая половина цитаты относится к узлу с
-    знаком out, здесь нечем — отказ дешевле угадывания.
+    привлечении (см. `_mentions_incurrence` про два яруса надёжности) при
+    отсутствии слов о погашении/обслуживании. Если в цитате есть и то и
+    другое — переписывание молчит целиком: коэффициент покрытия обслуживания
+    долга (DSCR) читает обе стороны в одной формуле, и слепая правка знака
+    сломала бы верный ответ так же, как неверный знак сейчас ломает эту
+    ячейку. Различить, какая половина цитаты относится к узлу с знаком out,
+    здесь нечем — отказ дешевле угадывания.
 
     Категория ограничена FINANCING сознательно: это единственная категория,
     под которой в леджере встречаются движения по привлечению/погашению
@@ -290,8 +334,8 @@ _QUANT_WORDS_EN = ("any", "each")
 _QUARTER_STEMS = ("квартал", "quarter")
 _MAX_GAP_WORDS = 2
 
-_WORD_RE = re.compile(r"[\w-]+", re.UNICODE)
-_SENTENCE_SPLIT_RE = re.compile(r"[.;]+")
+# _WORD_RE/_SENTENCE_SPLIT_RE определены выше, рядом с
+# flip_debt_incurrence_sign — тот же приём переиспользуется здесь.
 
 
 def _is_quant_word(word: str) -> bool:

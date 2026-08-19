@@ -394,3 +394,70 @@ def test_apply_final_flips_financing_sign_and_reports_alarm():
     assert new["metric_text"] == "agg(FINANCING, in)"
     assert "financing_sign_flipped" in [a["kind"] for a in alarms]
     assert spec["metric_text"] == metric  # исходный cellspec не мутирован
+
+
+# --- Task 2, раунд правок 1: отрицание и рискованные основы -----------------
+
+
+def test_flips_despite_negated_repayment_word():
+    """Находка 1: «непогашенная» — стандартный банковский термин про остаток,
+    который ЕЩЁ предстоит погасить, а не про факт погашения. Substring-поиск
+    без учёта отрицания видел бы в ней подстроку «погашен» и ошибочно
+    отказывался чинить знак — направление безопасное (недочинка), но
+    формулировка типовая."""
+    metric = "agg(FINANCING, out)"
+    quote = "совокупная непогашенная основная сумма задолженности, привлечённой за период"
+    ast, changed = flip_debt_incurrence_sign(parse(metric), quote)
+    assert changed
+    assert unparse(ast) == "agg(FINANCING, in)"
+
+
+def test_negated_repayment_word_alone_is_not_a_repayment_signal():
+    """«Непогашенный остаток» сам по себе не сигнал ни привлечения, ни
+    погашения — без слова о привлечении переписывание не должно сработать,
+    но и не должно ошибочно решить, что это цитата про погашение."""
+    metric = "agg(FINANCING, out)"
+    ast, changed = flip_debt_incurrence_sign(parse(metric), "непогашенный остаток по договору")
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_flips_risky_stem_when_debt_word_is_nearby():
+    """Находка 2: «наращивание»/«нарастание» сами по себе не про долг, но
+    рядом со словом задолженности/долга — это и есть искомый сигнал."""
+    metric = "agg(FINANCING, out)"
+    quote = "наращивание совокупной Финансовой задолженности за период"
+    ast, changed = flip_debt_incurrence_sign(parse(metric), quote)
+    assert changed
+    assert unparse(ast) == "agg(FINANCING, in)"
+
+
+def test_does_not_flip_risky_stem_growth_of_unrelated_quantity():
+    """«Наращивание» резервов — рост произвольной величины, не задолженности:
+    без слова о долге рядом переписывание обязано промолчать, а не перевернуть
+    знак активно неверно."""
+    metric = "agg(FINANCING, out)"
+    quote = "наращивание резервов на возможные потери в течение периода"
+    ast, changed = flip_debt_incurrence_sign(parse(metric), quote)
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_does_not_flip_risky_stem_audit_sample_context():
+    """«Выборка» в лексике аудиторского заключения — sample, а не выборка
+    транша: без слова о долге рядом переписывание обязано промолчать."""
+    metric = "agg(FINANCING, out)"
+    quote = "аудиторская выборка составила 25% от общего числа операций за период"
+    ast, changed = flip_debt_incurrence_sign(parse(metric), quote)
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_does_not_flip_net_sign():
+    """Minor: код сравнивает со знаком out точно — net (уже свёрнутая нетто-
+    величина) переписывать нельзя, и будущий рефакторинг на «не приток» не
+    должен пройти мимо CI незамеченным."""
+    metric = "agg(FINANCING, net)"
+    ast, changed = flip_debt_incurrence_sign(parse(metric), "задолженность, привлечённая за период")
+    assert not changed
+    assert unparse(ast) == metric
