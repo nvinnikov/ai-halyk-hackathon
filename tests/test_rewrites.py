@@ -1,5 +1,5 @@
 from dsl import parse, unparse
-from rewrites import apply_final, narrow_opex, quarterly
+from rewrites import apply_final, narrow_opex, quarterly, widen_related_party
 
 _EBITDA_BROAD = "sub(agg(REVENUE, in), agg(OPEX_TOTAL, out))"
 
@@ -232,3 +232,67 @@ def test_quarterization_never_touches_the_trigger():
     new, alarms = apply_final(spec, "в любом отдельном финансовом квартале", direction="min")
     assert [a["kind"] for a in alarms] == ["metric_quarterized"]
     assert unparse(new["trigger_ast"]) == trigger
+
+
+# --- Task 1: платежи связанным сторонам читают все категории ----------------
+
+
+def test_widens_narrow_category_under_related_party_filter():
+    """Ковенант об оттоке к связанным сторонам не завязан на статью учёта:
+    FINANCING/OTHER — промах модели, реальный признак — фильтр
+    counterparty_in(related_parties)."""
+    metric = "agg(FINANCING, out, counterparty_in(related_parties))"
+    ast, changed = widen_related_party(parse(metric), "платежи связанным сторонам")
+    assert changed
+    assert unparse(ast) == "agg(ALL, out, counterparty_in(related_parties))"
+
+
+def test_widens_other_category_under_related_party_filter():
+    metric = "agg(OTHER, out, period(2025-01-01, 2025-12-31), counterparty_in(related_parties))"
+    ast, changed = widen_related_party(parse(metric), "выплаты аффилированным лицам")
+    assert changed
+    assert unparse(ast) == "agg(ALL, out, period(2025-01-01, 2025-12-31), counterparty_in(related_parties))"
+
+
+def test_leaves_agg_without_related_party_filter_alone():
+    metric = "agg(FINANCING, out)"
+    ast, changed = widen_related_party(parse(metric), "погашение задолженности")
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_leaves_agg_already_rolled_up_alone():
+    metric = "agg(ALL, out, counterparty_in(related_parties))"
+    ast, changed = widen_related_party(parse(metric), "платежи связанным сторонам")
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_does_not_widen_related_party_agg_in_ratio_denominator():
+    """related_share_revenue/related_share_opex: доля платежей связанным
+    сторонам в выручке/операционных расходах — знаменатель несёт смысл
+    категории, расширение его до ALL сломало бы верный ответ."""
+    metric = "ratio(agg(ALL, out, counterparty_in(related_parties)), agg(OTHER_OPEX, out))"
+    ast, changed = widen_related_party(parse(metric), "доля платежей связанным сторонам")
+    assert not changed
+    assert unparse(ast) == metric
+
+
+def test_widens_numerator_but_not_denominator_when_both_reference_related_parties():
+    """Числитель — узкая статья под фильтром связанных сторон и обязан
+    расшириться; знаменатель того же отношения (выручка) фильтра связанных
+    сторон не несёт вовсе и не тронут в принципе, но проверяем на живом дереве
+    с обеими сторонами, чтобы граница между num и den была явной."""
+    metric = "ratio(agg(FINANCING, out, counterparty_in(related_parties)), agg(REVENUE, in))"
+    ast, changed = widen_related_party(parse(metric), "платежи связанным сторонам")
+    assert changed
+    assert unparse(ast) == "ratio(agg(ALL, out, counterparty_in(related_parties)), agg(REVENUE, in))"
+
+
+def test_apply_final_widens_related_party_and_reports_alarm():
+    metric = "agg(FINANCING, out, counterparty_in(related_parties))"
+    spec = {"metric_ast": parse(metric), "metric_text": metric}
+    new, alarms = apply_final(spec, "платежи связанным сторонам")
+    assert new["metric_text"] == "agg(ALL, out, counterparty_in(related_parties))"
+    assert "related_party_widened" in [a["kind"] for a in alarms]
+    assert spec["metric_text"] == metric  # исходный cellspec не мутирован

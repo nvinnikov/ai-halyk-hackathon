@@ -9,7 +9,8 @@
 import dataclasses
 import re
 
-from dsl import Add, Agg, MaxOf, MinOf, Period, Quarter, Ratio, Sub, unparse, walk
+from dsl import Add, Agg, CounterpartyIn, MaxOf, MinOf, Period, Quarter, Ratio, Sub, unparse, walk
+from taxonomy import LEAVES
 
 # Маркеры прямого широкого прочтения: договор сам говорит «все операционные».
 # Это ЕДИНСТВЕННЫЙ путь к роллапу OPEX_TOTAL — подсчёт маркеров-статей
@@ -94,6 +95,71 @@ def narrow_opex(metric_ast, quote: str) -> tuple[object, bool]:
         return dataclasses.replace(node, **updates) if updates else node
 
     out = rewrite(metric_ast)
+    return (out, changed) if changed else (metric_ast, False)
+
+
+def _is_related_party_filter(f: object) -> bool:
+    return isinstance(f, CounterpartyIn) and f.setname == "related_parties"
+
+
+def widen_related_party(metric_ast, quote: str) -> tuple[object, bool]:
+    """Ковенант об оттоке к связанным сторонам не привязан к статье учёта.
+
+    «Ограниченные платежи / выплаты / распределения в пользу связанных
+    сторон» ограничивают ЛЮБОЙ отток к связанной стороне, а модель выбирает
+    статью по описанию платежа и промахивается: платёж, проведённый как
+    консультационный или прочий операционный, попадает в узкую категорию
+    (`FINANCING`, `OTHER`), под которой в леджере связанной стороны нет ни
+    строки. Признак ковенанта надёжен и не завязан на текст цитаты — это
+    фильтр `counterparty_in(related_parties)` на самом агрегате: если он
+    есть, категория заменяется на `ALL`, знак и остальные фильтры сохраняются.
+
+    Лист таксономии — обязательное условие: агрегат уже с ролловер-категорией
+    (`ALL`, `OPEX_TOTAL`) не трогаем — расширять нечего, а `OPEX_TOTAL` под
+    фильтром связанных сторон в природе не встречается и переписывать его как
+    лист было бы гаданием.
+
+    Знаменатель отношения не трогаем НИКОГДА, даже когда там тот же фильтр:
+    `related_share_revenue`/`related_share_opex` меряют ДОЛЮ платежей
+    связанным сторонам в выручке/операционных расходах, и категория
+    знаменателя там несёт смысл ковенанта, а не промах модели — расширение
+    до `ALL` завысило бы знаменатель и исказило верный ответ.
+
+    `quote` в сигнатуре не используется: признак здесь структурный (наличие
+    фильтра на самом узле), а не текстовый — сигнатура одного вида с
+    `narrow_opex`/`quarterly` для единообразного вызова из `apply_final`."""
+    changed = False
+
+    def rewrite(node, in_denominator: bool):
+        nonlocal changed
+        if isinstance(node, Ratio):
+            return dataclasses.replace(
+                node,
+                num=rewrite(node.num, in_denominator),
+                den=rewrite(node.den, True),
+            )
+        if (
+            not in_denominator
+            and isinstance(node, Agg)
+            and node.category in LEAVES
+            and any(_is_related_party_filter(f) for f in node.filters)
+        ):
+            changed = True
+            return dataclasses.replace(node, category="ALL")
+        if not hasattr(node, "__dataclass_fields__"):
+            return node
+        updates = {}
+        for name in node.__dataclass_fields__:
+            value = getattr(node, name)
+            if isinstance(value, tuple):
+                updates[name] = tuple(
+                    rewrite(c, in_denominator) if hasattr(c, "__dataclass_fields__") else c for c in value
+                )
+            elif hasattr(value, "__dataclass_fields__"):
+                updates[name] = rewrite(value, in_denominator)
+        return dataclasses.replace(node, **updates) if updates else node
+
+    out = rewrite(metric_ast, False)
     return (out, changed) if changed else (metric_ast, False)
 
 
@@ -254,8 +320,13 @@ def apply_final(cellspec: dict, quote: str, direction: str | None = None) -> tup
                 }
             )
 
+    ast, widened = widen_related_party(ast, quote)
+    if widened:
+        alarms.append({"kind": "related_party_widened", "to": "ALL", "target": "metric"})
+
     # Порядок важен: квартализация копирует поддерево четырежды, и узкий опекс
-    # обязан быть выбран ДО копирования — иначе он чинился бы в четырёх местах.
+    # (и расширение категории связанных сторон) обязаны быть выбраны ДО
+    # копирования — иначе они чинились бы в четырёх местах.
     ast, quartered = quarterly(ast, quote, direction)
     if quartered:
         alarms.append({"kind": "metric_quarterized", "direction": direction})
