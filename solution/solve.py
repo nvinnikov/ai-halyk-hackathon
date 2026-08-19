@@ -31,6 +31,7 @@ sys.path.insert(0, "eval")
 import evidence
 import facts_extract
 import llm
+import noise
 import rewrites
 from dossier import build_dossiers
 from dsl import Agg, Doc, DslError, Ratio, Sub, parse, signature, unparse, walk
@@ -1368,6 +1369,11 @@ def _write_borrower_trace(
         "docs_rejected": docs_rejected,
         "categories": {r["txn_id"]: r["cat"] for r in sorted(rows, key=lambda x: x["txn_id"])},
         "coverage": cov,
+        # Признак загрязнённости счёта — диагностический и сам по себе ничего
+        # не значит (см. докстринг noise.py): наборы им неразделимы. В трейс он
+        # идёт, чтобы в окне было видно, у каких заёмщиков широкое чтение
+        # вообще опасно.
+        "pollution_ratio": str(noise.pollution_ratio(rows)),
         "alarms": spec_alarms,
     }
     d = wd / "trace"
@@ -1653,6 +1659,15 @@ def main(
             continue
         for alarm in fx_alarms:
             print(f"ALARM {alarm}", flush=True)
+        # Один раз на заёмщика: признак — чистая функция от его строк, а
+        # читают его все ячейки. Под try по общему правилу: диагностика не
+        # имеет права стоить ячейки, а ноль означает «признак не посчитан» и
+        # просто оставляет алярм молчать.
+        try:
+            pollution = noise.pollution_ratio(rows)
+        except Exception as exc:
+            print(f"ALARM pollution_ratio_failed {scenario}: {exc!r}", flush=True)
+            pollution = Decimal(0)
         # Диагностика — не расчёт: её падение не должно стоить ни одной ячейки.
         try:
             cov = _write_borrower_trace(
@@ -1713,6 +1728,43 @@ def main(
                             trace["sign_divergence"] = divergence
                     except Exception as exc:
                         trace["sign_divergence_error"] = repr(exc)
+                    # Шум леджера дошёл до расчёта: счёт загрязнён И метрика
+                    # читает роллап, не суженный перечнем. По отдельности ни
+                    # одно из двух ничего не значит, поэтому алярм только на
+                    # сочетании. Диагностика: строки не отбрасываются, вердикт
+                    # не меняется, падение обхода не стоит ячейки.
+                    #
+                    # Смотреть надо на ПОСЛЕ-переписанную метрику: run_cell
+                    # прогоняет спеку через rewrites.apply_final (сужение
+                    # опекса, квартализация) и считает уже её, а cellspec на
+                    # входе остаётся прежним — apply_final не мутирует. На
+                    # исходной метрике алярм поднимался бы ровно там, где
+                    # сужение УЖЕ починило широкое чтение, то есть говорил бы
+                    # неправду. apply_final чистая и идемпотентная, повторный
+                    # вызов даёт тот же AST, что посчитала ячейка.
+                    try:
+                        final_spec, _rw = rewrites.apply_final(
+                            cellspec_or_error, quote, cellspec_or_error.get("direction")
+                        )
+                        na = noise.rollup_alarm(
+                            index["scenario_to_account"].get(scenario, ""),
+                            pollution,
+                            final_spec["metric_ast"],
+                        )
+                        if na is not None:
+                            # scenario/clause внутрь словаря по той же причине,
+                            # что у other_unassigned: точный дедуп в
+                            # _alarm_counts схлопнул бы разные ячейки в одну.
+                            trace.setdefault("alarms", []).append(
+                                {**na, "scenario": scenario, "clause": clause}
+                            )
+                            print(
+                                f"ALARM polluted_rollup_read {scenario} {clause}: "
+                                f"categories={','.join(na['categories'])} ratio={na['ratio']}",
+                                flush=True,
+                            )
+                    except Exception as exc:
+                        trace["polluted_rollup_read_error"] = repr(exc)
                     # Неразнесённые строки глазами этой ячейки (5.3): диагностика,
                     # вердикт не меняется. Падение обхода не стоит ячейки.
                     #
