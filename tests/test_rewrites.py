@@ -268,25 +268,52 @@ def test_leaves_agg_already_rolled_up_alone():
     assert unparse(ast) == metric
 
 
-def test_does_not_widen_related_party_agg_in_ratio_denominator():
-    """related_share_revenue/related_share_opex: доля платежей связанным
-    сторонам в выручке/операционных расходах — знаменатель несёт смысл
-    категории, расширение его до ALL сломало бы верный ответ."""
+def test_ratio_traversal_leaves_already_widened_numerator_and_unfiltered_denominator_alone():
+    """Проверяет только обход дерева через Ratio: числитель уже ALL (не
+    подходит под условие «лист»), знаменатель без фильтра связанных сторон
+    (не подходит под условие «есть фильтр») — ни один узел не проходит вход
+    в переписывание независимо от защиты знаменателя. Защиту знаменателя как
+    таковую эта пара не проверяет — см.
+    test_leaves_leaf_category_with_related_party_filter_in_denominator_alone."""
     metric = "ratio(agg(ALL, out, counterparty_in(related_parties)), agg(OTHER_OPEX, out))"
     ast, changed = widen_related_party(parse(metric), "доля платежей связанным сторонам")
     assert not changed
     assert unparse(ast) == metric
 
 
-def test_widens_numerator_but_not_denominator_when_both_reference_related_parties():
-    """Числитель — узкая статья под фильтром связанных сторон и обязан
-    расшириться; знаменатель того же отношения (выручка) фильтра связанных
-    сторон не несёт вовсе и не тронут в принципе, но проверяем на живом дереве
-    с обеими сторонами, чтобы граница между num и den была явной."""
+def test_widens_agg_inside_ratio_numerator():
+    """Узкая статья под фильтром связанных сторон расширяется и внутри
+    Ratio.num, а не только на корне дерева — обход спускается в num, а не
+    только в den."""
     metric = "ratio(agg(FINANCING, out, counterparty_in(related_parties)), agg(REVENUE, in))"
     ast, changed = widen_related_party(parse(metric), "платежи связанным сторонам")
     assert changed
     assert unparse(ast) == "ratio(agg(ALL, out, counterparty_in(related_parties)), agg(REVENUE, in))"
+
+
+def test_leaves_leaf_category_with_related_party_filter_in_denominator_alone():
+    """Прямая проверка защиты знаменателя (раунд правок 1, рулинг ревьюера):
+    предыдущие «знаменательные» тесты клали в знаменатель агрегат, который
+    ни при каких условиях не подходил под вход переписывания (либо не лист,
+    либо без фильтра связанных сторон), и потому не отличали защищённую
+    реализацию от снятой — оба варианта проходили все тесты.
+
+    Здесь в знаменателе стоит ЕДИНСТВЕННЫЙ вход, который вообще включает
+    переписывание: лист таксономии с фильтром counterparty_in(related_parties).
+    Форма осмысленна — «доля общих платежей связанным сторонам в тех же
+    платежах, проведённых по конкретной статье» — числитель обязан
+    расшириться, знаменатель (та же статья) обязан остаться, иначе метрика
+    считала бы саму себя в знаменателе."""
+    metric = (
+        "ratio(agg(FINANCING, out, counterparty_in(related_parties)), "
+        "agg(CONSULTING, out, counterparty_in(related_parties)))"
+    )
+    ast, changed = widen_related_party(parse(metric), "доля платежей связанным сторонам")
+    assert changed
+    assert unparse(ast) == (
+        "ratio(agg(ALL, out, counterparty_in(related_parties)), "
+        "agg(CONSULTING, out, counterparty_in(related_parties)))"
+    )
 
 
 def test_apply_final_widens_related_party_and_reports_alarm():
