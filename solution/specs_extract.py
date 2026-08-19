@@ -232,6 +232,35 @@ def _limit_in_quote(limit: str, quote: str) -> bool:
     return _scaled_in_quote(d, quote) or _percent_word_in_quote(d, quote)
 
 
+_CLAUSE_HEAD = r"(?:Пункт|Статья|Article|Section|Clause)"
+
+
+def _clause_span(agreement_text: str, clause: str) -> str:
+    """Текст пункта договора: от его заголовка до следующего заголовка.
+
+    Граница по заголовку, а не по длине: определение порога («Разрешённая
+    величина означает...») стоит в конце тела пункта, а произвольный потолок
+    в символах был бы магическим числом. Не нашли заголовок (другая
+    вёрстка) — пустая строка, вызывающий трактует как «не найдено»."""
+    if not agreement_text or not clause:
+        return ""
+    m = re.search(_CLAUSE_HEAD + r"\s+" + re.escape(clause) + r"(?![\d.])", agreement_text)
+    if not m:
+        return ""
+    nxt = re.search(_CLAUSE_HEAD + r"\s+\d", agreement_text[m.end() :])
+    end = m.end() + nxt.start() if nxt else len(agreement_text)
+    return agreement_text[m.start() : end]
+
+
+def _limit_in_clause_span(limit: str, agreement_text: str, clause: str) -> bool:
+    """Порог напечатан в тексте ТОГО ЖЕ пункта договора (вне цитаты).
+
+    Формы — ровно те же, что у _limit_in_quote: проверка не либеральнее,
+    просто корпус — тело пункта настоящего договора вместо цитаты."""
+    span = _clause_span(agreement_text, clause)
+    return bool(span) and _limit_in_quote(limit, span)
+
+
 def _heading_key_from_text(agreement_text: str, clause: str) -> str:
     """Ключ заголовка пункта — из ТЕКСТА договора, не из цитаты модели.
 
@@ -284,7 +313,17 @@ def _check(sp: dict, fact_keys: set[str], agreement_text: str) -> tuple[dict, ob
     if not verify_quote(sp["quote"], agreement_text):
         errors.append("quote_unverified")
     elif not _limit_in_quote(sp["limit"], sp["quote"]):
-        errors.append("limit_not_in_quote")
+        # Порог, определённый в том же пункте, но вне цитаты: «...не допускать
+        # превышения Разрешённой величины», а «Разрешённая величина означает
+        # 5 процентов...» стоит двумя предложениями ниже (боевой прогон
+        # 2026-08-09). Цитата покрывает обязательство, определение — нет.
+        # Защитная семантика сохранена: число обязано быть НАПЕЧАТАНО в тексте
+        # того же пункта настоящего договора — подсунутый промптом порог в
+        # тексте пункта не стоит. Совпадение помечается, а не молчит.
+        if _limit_in_clause_span(sp["limit"], agreement_text, sp.get("clause", "")):
+            out["limit_matched_in_clause"] = True
+        else:
+            errors.append("limit_not_in_quote")
 
     trig_value = sp["trigger"]
     if trig_value:
@@ -422,6 +461,10 @@ def extract_specs(wd: Path, dossier_art: dict, fact_keys: set[str]) -> dict:
         )
         if checked.pop("trigger_discarded", False):
             alarms.append({"kind": "trigger_discarded", "clause": clause_key})
+        if checked.pop("limit_matched_in_clause", False):
+            # Видимость нестандартного пути: порог сматчился не в цитате, а в
+            # теле пункта — на приватном наборе это надо видеть поимённо.
+            alarms.append({"kind": "limit_matched_in_clause_text", "clause": clause_key})
         clauses[clause_key] = checked
         if node is not None:
             parsed_nodes[clause_key] = node

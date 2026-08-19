@@ -1,7 +1,7 @@
 """DSL метрик (5.4): маленький и тотальный, парсится грамматикой до исполнения.
 
 expr    := agg(category, sign, filters?) | doc(key) | ratio(a,b) | sub(a,b)
-         | add(a...) | max(a...) | min(a...) | const(x)
+         | add(a...) | max(a...) | min(a...) | const(x) | mul(a,b)
 trigger := gt(a,b) | ge(a,b) | lt(a,b) | le(a,b)
 filters := period(from,to) | quarter(n) | counterparty_in(set) | txn_in(ids)
          | min_amount(x) | desc_contains(s)
@@ -93,6 +93,17 @@ class MinOf:
 @dataclass(frozen=True)
 class Const:
     value: Decimal
+
+
+@dataclass(frozen=True)
+class Mul:
+    """Произведение с константным множителем — процентные кэпы договоров
+    («добавки не более такой-то доли выручки»). Хотя бы один аргумент обязан
+    быть Const: произведение двух агрегатов ковенантной семантики не имеет,
+    а тихо разрешённое дало бы класс правдоподобно-огромных чисел."""
+
+    a: object
+    b: object
 
 
 @dataclass(frozen=True)
@@ -343,6 +354,15 @@ def _build_node(name, args):
         return MinOf(args=tuple(_expr(a) for a in args))
     if name == "const" and len(args) == 1:
         return Const(value=_lit(args[0], "num"))
+    if name == "mul" and len(args) == 2:
+        # Терпимость форм по образцу const(): числовой множитель, написанный
+        # голым числом или кавыченной строкой-числом — mul(x, agg(...)) —
+        # промотируется в Const тем же _lit-механизмом. Любая другая строка —
+        # ошибка, как везде.
+        operands = [Const(value=_lit(a, "num")) if _is_lit(a, "num", "str") else _expr(a) for a in args]
+        if not any(isinstance(o, Const) for o in operands):
+            raise DslError("mul: хотя бы один аргумент — константа")
+        return Mul(a=operands[0], b=operands[1])
     if name in ("gt", "ge", "lt", "le") and len(args) == 2:
         return Cmp(op=name, a=_expr(args[0]), b=_expr(args[1]))
     raise DslError(f"неизвестная конструкция {name}/{len(args)}")

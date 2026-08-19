@@ -1331,3 +1331,46 @@ def test_ebitda_definition_schema_failure_not_cached(tmp_path, monkeypatch):
     assert not (tmp_path / "facts" / "ACC-1.ebitda_def.json").exists()
     monkeypatch.setattr(facts_extract.llm, "call", _def_call(True, _EBITDA_DEF_NARROW))
     assert facts_extract.ebitda_definition(tmp_path, dossier) is not None
+
+
+# --- resolve_doc_metric -------------------------------------------------------
+
+
+_METRIC_DOSSIER = {"account_id": "ACC-M", "alarms": [], "docs": []}
+
+
+def _metric_answer(computable=True, expression="agg(FINANCING, out)"):
+    def call(prompt, schema, version, max_tokens=0):
+        return {"computable": computable, "expression": expression}
+
+    return call
+
+
+def test_resolve_doc_metric_valid_expression(tmp_path, monkeypatch):
+    """Формульный резолв: LLM выписывает агрегат, грамматика валидирует,
+    выражение возвращается текстом — считать его будет код."""
+    monkeypatch.setattr(facts_extract.llm, "call", _metric_answer())
+    expr = facts_extract.resolve_doc_metric(tmp_path, _METRIC_DOSSIER, "principal_payments", "цитата")
+    assert expr == "agg(FINANCING, out)"
+
+
+def test_resolve_doc_metric_rejects_constants_doc_and_garbage(tmp_path, monkeypatch):
+    # Const запрещён конструкцией — эхо порога здесь невозможно синтаксически;
+    # doc() запрещён — резолв не ссылается на другие нерешённые ключи; мусор
+    # и чужая категория валятся на грамматике/таксономии.
+    for i, bad in enumerate(
+        (
+            "add(agg(FINANCING, out), const(250000))",
+            "ratio(doc(other_key), agg(REVENUE, in))",
+            "const(3.5)",
+            "не формула вовсе",
+            "agg(NOT_A_CATEGORY, out)",
+        )
+    ):
+        monkeypatch.setattr(facts_extract.llm, "call", _metric_answer(expression=bad))
+        assert facts_extract.resolve_doc_metric(tmp_path, _METRIC_DOSSIER, f"key_{i}", "ц") is None
+
+
+def test_resolve_doc_metric_not_computable_is_refusal(tmp_path, monkeypatch):
+    monkeypatch.setattr(facts_extract.llm, "call", _metric_answer(computable=False, expression=""))
+    assert facts_extract.resolve_doc_metric(tmp_path, _METRIC_DOSSIER, "external_index", "ц") is None

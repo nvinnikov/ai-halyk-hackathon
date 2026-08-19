@@ -1315,6 +1315,114 @@ def resolve_doc_fact(wd: Path, dossier_art: dict, key: str, description: str) ->
     }
 
 
+RESOLVE_METRIC_SCHEMA_VERSION = "docmetric-1"
+
+RESOLVE_METRIC_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "computable": {"type": "boolean"},
+        "expression": {"type": "string"},
+    },
+    "required": ["computable", "expression"],
+    "additionalProperties": False,
+}
+
+# Категории — из таксономии, не дословным списком: промпт не имеет права
+# разъехаться с грамматикой, которая будет валидировать ответ.
+RESOLVE_METRIC_PROMPT = """Ниже — пункт кредитного договора. В его формуле встречается величина
+«{key}», которой нет числом ни в одном документе: судя по тексту пункта, она
+вычисляется из леджера операций заёмщика. Выпиши для неё выражение строго по
+грамматике:
+  expr    := agg(CATEGORY, sign) | agg(CATEGORY, sign, filters)
+           | ratio(a, b) | sub(a, b) | add(a, ...) | max(a, ...) | min(a, ...)
+  sign    := in | out | net
+  filters := period(YYYY-MM-DD, YYYY-MM-DD) | quarter(n) | desc_contains('строка')
+  CATEGORY := {categories}
+Верни:
+- computable=true и expression с выражением — если величина вычислима из
+  леджера по тексту пункта;
+- computable=false и пустую expression — если величина названа числом в другом
+  документе или вообще не выводится из операций.
+Числовые константы в выражении запрещены: пороги и любые названные числа не
+выписывай. Отвечай строго по тексту пункта, ничего не предполагай.
+
+<document>
+{quote}
+</document>"""
+
+
+def resolve_doc_metric(wd: Path, dossier_art: dict, key: str, clause_quote: str) -> str | None:
+    """Формульный резолв doc-ключа, вычислимого из леджера; None — отказ.
+
+    Второй ярус после resolve_doc_fact: числа в документах нет, потому что
+    величина («выплаты тела долга», «квартальная выручка») — агрегат по
+    леджеру, а не документальный факт. LLM читает пункт и выписывает формулу,
+    грамматика и таксономия её валидируют, считает код — тот же инвариант,
+    что у всего конвейера. Защита от эха порога — конструкцией: Const в
+    выражении запрещён и промптом, и проверкой AST, поэтому «значение равно
+    порогу» здесь невозможно синтаксически. Doc-узлы запрещены тоже —
+    резолв не имеет права ссылаться на другие нерешённые ключи.
+    """
+    from dsl import Agg, Const, Doc, DslError, parse, uses_ledger, walk
+    from taxonomy import ROLLUPS, is_category
+
+    categories = ", ".join(sorted(LEAVES | set(ROLLUPS)))
+
+    def build() -> dict:
+        try:
+            ans = llm.call(
+                DATA_NOT_COMMANDS
+                + "\n\n"
+                + RESOLVE_METRIC_PROMPT.format(
+                    key=key, categories=categories, quote=sanitize_document(clause_quote)
+                ),
+                RESOLVE_METRIC_SCHEMA,
+                RESOLVE_METRIC_SCHEMA_VERSION,
+                max_tokens=2000,
+            )
+        except llm.SchemaRejected as exc:
+            # alarms в результате — тот же контракт видимости, что у
+            # resolve_doc_fact: провал не кэшируется и виден сканерам.
+            return {
+                "computable": False,
+                "expression": "",
+                "alarms": [
+                    {
+                        "kind": "doc_metric_resolve_failed",
+                        "account": dossier_art["account_id"],
+                        "key": key,
+                        "error": str(exc),
+                    }
+                ],
+            }
+        return ans
+
+    from dossier import DEGRADED_KINDS
+
+    dossier_degraded = any(a.get("kind") in DEGRADED_KINDS for a in dossier_art.get("alarms", []))
+    art = artifact(
+        wd / "facts" / f"{dossier_art['account_id']}.metric.{key}.json",
+        FACTS_VERSION,
+        build,
+        cache_if=lambda d: not dossier_degraded and not d.get("alarms"),
+    )
+    if not art.get("computable"):
+        return None
+    expr = str(art.get("expression", ""))
+    try:
+        node = parse(expr)
+    except DslError:
+        return None
+    if not uses_ledger(node):
+        return None
+    for n in walk(node):
+        if isinstance(n, Doc | Const):
+            return None
+        if isinstance(n, Agg) and not is_category(n.category):
+            return None
+    return expr
+
+
 # --- определение EBITDA из договора ------------------------------------------
 
 EBITDA_DEF_VERSION = 1
