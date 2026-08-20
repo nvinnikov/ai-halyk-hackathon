@@ -542,3 +542,42 @@ def test_threshold_form_no_collision_with_neighboring_percent(tmp_path, monkeypa
     sp = art["clauses"]["6.10"]
     assert "limit_shape_mismatch" not in sp["errors"]
     assert not any(a["kind"] == "limit_shape_mismatch" for a in art["alarms"])
+
+
+def test_threshold_form_matches_despite_trailing_zeros_and_grouping(tmp_path, monkeypatch):
+    """Ревью раунд 2 (несущий тест): порог в цитате напечатан с разделителями
+    групп тысяч и хвостовыми десятичными нулями («$2,000,000.00»), а в спеке —
+    без них («2000000»). Печатная точность не обязана совпадать с точностью
+    значения — форма обязана распознаваться по РАВЕНСТВУ ЗНАЧЕНИЙ (Decimal),
+    а не по совпадению строки. Диагностировано на приватном наборе (round 1
+    после фикса границы потерял именно такие ячейки: 68→16)."""
+    quote = "Пункт 6.11: капитальные затраты не должны превышать $2,000,000.00 в год."
+    assert specs_extract._threshold_form("2000000", quote) == "absolute"
+    cov = covenant(
+        clause="6.11", metric="ratio(agg(CAPEX, out), agg(REVENUE, in))", limit="2000000", quote=quote
+    )
+    monkeypatch.setattr(specs_extract.llm, "call", lambda *a, **k: {"covenants": [cov]})
+    art = specs_extract.extract_specs(tmp_path, make_dossier(quote), set())
+    sp = art["clauses"]["6.11"]
+    assert sp["valid"] is False
+    assert "limit_shape_mismatch" in sp["errors"]
+    alarms = [a for a in art["alarms"] if a["kind"] == "limit_shape_mismatch"]
+    assert alarms[0]["threshold_shape"] == "absolute"
+    assert alarms[0]["metric_shape"] == "ratio"
+
+
+def test_threshold_form_percent_sign_scales_against_fraction_limit(tmp_path, monkeypatch):
+    """Ревью раунд 2, попутно найденный дефект: лимит в спеке хранится долей
+    (0.07), а в цитате напечатан как «7%» — старая реализация ни разу не
+    могла сопоставить эту пару (форма «7%» матчилась ЦЕЛИКОМ вместе со
+    знаком процента, оставляя классификатору уже пустой хвост). Новая
+    реализация ищет числовой токен «7» отдельно от «%» и при признаке доли
+    дополнительно пробует токен/100 против порога."""
+    quote = "Пункт 6.12: расходы не должны превышать 7% от выручки."
+    assert specs_extract._threshold_form("0.07", quote) == "share"
+    cov = covenant(clause="6.12", metric="agg(CAPEX, out)", limit="0.07", quote=quote)
+    monkeypatch.setattr(specs_extract.llm, "call", lambda *a, **k: {"covenants": [cov]})
+    art = specs_extract.extract_specs(tmp_path, make_dossier(quote), set())
+    sp = art["clauses"]["6.12"]
+    assert sp["valid"] is False
+    assert "limit_shape_mismatch" in sp["errors"]

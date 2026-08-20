@@ -254,21 +254,16 @@ _CURRENCY_SUFFIX_CTX = re.compile(r"^\s*(?:" + _CURRENCY_MARK + "|" + _CURRENCY_
 _SHAPE_CONTEXT_AFTER = 24
 _SHAPE_CONTEXT_BEFORE = 4
 
-# Граница числа: символ вплотную до/после найденного вхождения формы не
-# обязан быть цифрой, десятичной точкой/запятой или разделителем групп
-# тысяч (nbsp/узкий nbsp) — иначе короткий или круглый порог совпадает как
-# ПОДСТРОКА внутри чужого числа («1» внутри «21x», «5» внутри «15%») и
-# наследует его окружение. Ревью раунд 1: это давало уверенную чужую форму
-# вместо отказа — ровно противоположность замыслу правила. Обычный пробел
-# намеренно не в этом наборе: числа в прозе всегда окружены пробелами, и
-# запрет на них исключил бы вообще все совпадения.
-_NUMBER_ADJACENT = re.compile(r"[\d.,\xa0 ]")
-
-
-def _is_standalone_number(text: str, start: int, end: int) -> bool:
-    before_ok = start == 0 or not _NUMBER_ADJACENT.match(text[start - 1])
-    after_ok = end == len(text) or not _NUMBER_ADJACENT.match(text[end])
-    return before_ok and after_ok
+# Максимальный числовой токен в тексте: цифры, растущие вправо через
+# разделители групп тысяч (запятая/пробел/nbsp/узкий nbsp — ровно то, что
+# понимает _THOUSANDS_SEP), плюс необязательная десятичная часть. Жадный
+# `\d+` уже сам не даёт короткому порогу совпасть ПОДСТРОКОЙ внутри чужого
+# числа («1» внутри «21» найдено не будет — finditer не возвращается внутрь
+# уже поглощённого совпадения); `(?!\d)` после каждой тройки не даёт
+# токену оборваться на середине более длинной группы. Ревью раунд 2:
+# граница «это то же число» — вопрос о ЗНАЧЕНИИ, а не о соседних символах,
+# поэтому сравнение ниже идёт через Decimal, а не через форму строки.
+_NUMBER_TOKEN = re.compile(r"\d+(?:[,\x20\xa0\u202f]\d{3}(?!\d))*(?:[.,]\d+)?")
 
 
 def _classify_context(before: str, after: str) -> str | None:
@@ -281,30 +276,59 @@ def _classify_context(before: str, after: str) -> str | None:
     return None
 
 
+def _token_decimal_candidates(token: str) -> list[Decimal]:
+    """Кандидаты числового значения токена, найденного в цитате. Разделители
+    групп тысяч снимает та же `_degroup_thousands`, что и у `_limit_in_quote`
+    — второй список форм не заводится. Единственная оставшаяся запятая —
+    десятичный разделитель («1,44») либо буквальный текст; неоднозначность
+    (тот же случай, что в `_normalize_limit`) не решается здесь молча —
+    пробуются оба варианта, а решает совпадение с уже известным порогом."""
+    degrouped = _degroup_thousands(token)
+    variants = {degrouped}
+    if "," in degrouped:
+        variants.add(degrouped.replace(",", "."))
+    out = []
+    for v in variants:
+        try:
+            out.append(Decimal(v))
+        except InvalidOperation:
+            pass
+    return out
+
+
 def _threshold_form(limit: str, quote: str) -> str | None:
-    """Форма порога — по тому, чем число окружено в самой цитате пункта, а не
-    по его величине. 'ratio'/'share' сравниваются с family_of как один класс
+    """Форма порога — по тому, чем окружено В ЦИТАТЕ ЧИСЛО, РАВНОЕ порогу
+    (сравнение значений, не строк — ревью раунд 2), а не по величине самого
+    порога. 'ratio'/'share' сравниваются с family_of как один класс
     «отношение» (см. _shape_conflicts) — раскол ratio/share у family_of
     обслуживает другую задачу (выброс по семье метрики).
+
+    Печатная точность в цитате не обязана совпадать с точностью значения
+    в спеке (разделители групп тысяч и хвостовые десятичные нули в тексте —
+    то же число, Decimal сравнивает по значению, не по представлению) — как
+    и десятичная доля порога против процента в тексте (сравнение при признаке
+    доли дополнительно пробует токен/100).
 
     Несколько РАЗНЫХ форм у разных вхождений одного числа в цитате —
     неоднозначность, а не выбор: возвращаем None. Форма не найдена нигде —
     тоже None. Это главный отказ правила: оно вправе говорить только тогда,
     когда текст сказал явно."""
-    degrouped = _degroup_thousands(quote)
+    try:
+        target = Decimal(limit)
+    except InvalidOperation:
+        return None
     found: set[str] = set()
-    for text in {quote, degrouped}:
-        for form in _limit_forms(limit):
-            if not form:
-                continue
-            for m in re.finditer(re.escape(form), text):
-                if not _is_standalone_number(text, m.start(), m.end()):
-                    continue
-                before = text[max(0, m.start() - _SHAPE_CONTEXT_BEFORE) : m.start()]
-                after = text[m.end() : m.end() + _SHAPE_CONTEXT_AFTER]
-                cls = _classify_context(before, after)
-                if cls:
-                    found.add(cls)
+    for m in _NUMBER_TOKEN.finditer(quote):
+        before = quote[max(0, m.start() - _SHAPE_CONTEXT_BEFORE) : m.start()]
+        after = quote[m.end() : m.end() + _SHAPE_CONTEXT_AFTER]
+        cls = _classify_context(before, after)
+        if cls is None:
+            continue
+        candidates = _token_decimal_candidates(m.group())
+        if cls == "share":
+            candidates = candidates + [c / 100 for c in candidates]
+        if target in candidates:
+            found.add(cls)
     return found.pop() if len(found) == 1 else None
 
 
