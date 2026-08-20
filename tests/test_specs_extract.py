@@ -513,3 +513,32 @@ def test_shape_check_skipped_for_bare_doc_metric(tmp_path, monkeypatch):
     sp = art["clauses"]["6.8"]
     assert sp["valid"] is True, sp["errors"]
     assert not any(a["kind"] == "limit_shape_mismatch" for a in art["alarms"])
+
+
+def test_threshold_form_no_collision_with_neighboring_multiplier(tmp_path, monkeypatch):
+    """Ревью раунд 1 (Critical): короткий порог не должен подхватывать форму
+    ЧУЖОГО числа по совпадению цифры внутри него — «1» не должен читаться как
+    коэффициент из-за «21x» по соседству. Граница числа (не цифра/разделитель
+    вплотную к найденному вхождению) обязана быть проверена, иначе валидная
+    спека с коротким порогом ложно ловит противоречие форм."""
+    quote = "Не допускать превышения левериджа свыше 21x; абсолютный лимит составляет 1 млн долларов."
+    assert specs_extract._threshold_form("1", quote) is None
+    cov = covenant(clause="6.9", metric="agg(CAPEX, out)", limit="1", quote=quote)
+    monkeypatch.setattr(specs_extract.llm, "call", lambda *a, **k: {"covenants": [cov]})
+    art = specs_extract.extract_specs(tmp_path, make_dossier(quote), set())
+    sp = art["clauses"]["6.9"]
+    assert "limit_shape_mismatch" not in sp["errors"]
+    assert not any(a["kind"] == "limit_shape_mismatch" for a in art["alarms"])
+
+
+def test_threshold_form_no_collision_with_neighboring_percent(tmp_path, monkeypatch):
+    """Ревью раунд 1 (Critical): порог «5» не должен подхватывать форму
+    «доля» из чужих «15%» по соседству по той же причине."""
+    quote = "Расходы на маркетинг не выше 15% от EBITDA; минимальный порог составляет 5."
+    assert specs_extract._threshold_form("5", quote) is None
+    cov = covenant(clause="6.10", metric="ratio(agg(CAPEX, out), agg(REVENUE, in))", limit="5", quote=quote)
+    monkeypatch.setattr(specs_extract.llm, "call", lambda *a, **k: {"covenants": [cov]})
+    art = specs_extract.extract_specs(tmp_path, make_dossier(quote), set())
+    sp = art["clauses"]["6.10"]
+    assert "limit_shape_mismatch" not in sp["errors"]
+    assert not any(a["kind"] == "limit_shape_mismatch" for a in art["alarms"])

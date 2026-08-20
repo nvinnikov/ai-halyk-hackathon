@@ -242,7 +242,7 @@ def _limit_in_quote(limit: str, quote: str) -> bool:
 # Про запас — сама конструкция намеренно консервативна: признак ищется
 # ВПЛОТНУЮ к числу (не в произвольном месте цитаты), а разные вхождения с
 # разными формами дают неоднозначность, а не выбор (см. _threshold_form).
-_MULT_SUFFIX_CTX = re.compile(r"^\s*(?:[xх×](?![a-zа-я])|раз[а-я]*\b|крат\w*)", re.IGNORECASE)
+_MULT_SUFFIX_CTX = re.compile(r"^\s*(?:[xх×](?![a-zа-я])|раз[а-я]*\b|кратн\w*)", re.IGNORECASE)
 _PERCENT_SUFFIX_CTX = re.compile(r"^\s*%")
 _CURRENCY_MARK = r"[$€£¥₸₽₹]"
 _CURRENCY_WORD = r"(?:доллар\w*|тенге|евро\w*|рубл\w*|фунт\w*|юан\w*|dollars?|euros?|pounds?|tenge|yuan)"
@@ -253,6 +253,22 @@ _CURRENCY_SUFFIX_CTX = re.compile(r"^\s*(?:" + _CURRENCY_MARK + "|" + _CURRENCY_
 # но не настолько широкое, чтобы подцепить соседнее число другого пункта.
 _SHAPE_CONTEXT_AFTER = 24
 _SHAPE_CONTEXT_BEFORE = 4
+
+# Граница числа: символ вплотную до/после найденного вхождения формы не
+# обязан быть цифрой, десятичной точкой/запятой или разделителем групп
+# тысяч (nbsp/узкий nbsp) — иначе короткий или круглый порог совпадает как
+# ПОДСТРОКА внутри чужого числа («1» внутри «21x», «5» внутри «15%») и
+# наследует его окружение. Ревью раунд 1: это давало уверенную чужую форму
+# вместо отказа — ровно противоположность замыслу правила. Обычный пробел
+# намеренно не в этом наборе: числа в прозе всегда окружены пробелами, и
+# запрет на них исключил бы вообще все совпадения.
+_NUMBER_ADJACENT = re.compile(r"[\d.,\xa0 ]")
+
+
+def _is_standalone_number(text: str, start: int, end: int) -> bool:
+    before_ok = start == 0 or not _NUMBER_ADJACENT.match(text[start - 1])
+    after_ok = end == len(text) or not _NUMBER_ADJACENT.match(text[end])
+    return before_ok and after_ok
 
 
 def _classify_context(before: str, after: str) -> str | None:
@@ -282,6 +298,8 @@ def _threshold_form(limit: str, quote: str) -> str | None:
             if not form:
                 continue
             for m in re.finditer(re.escape(form), text):
+                if not _is_standalone_number(text, m.start(), m.end()):
+                    continue
                 before = text[max(0, m.start() - _SHAPE_CONTEXT_BEFORE) : m.start()]
                 after = text[m.end() : m.end() + _SHAPE_CONTEXT_AFTER]
                 cls = _classify_context(before, after)
