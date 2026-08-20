@@ -32,6 +32,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 make public-archive    # собрать 6a741640c31eb032062683.zip (в git не хранится)
+make private-archive   # собрать 6a7819a8cb7d3480322468.zip (в git не хранится)
 ./run.sh <архив.zip>   # единственная точка входа: архив → out/submission.json
 make solve      # то же через make (ARCHIVE=... переопределяет архив)
 make check      # локальное зеркало CI: lint + typecheck + test
@@ -422,8 +423,8 @@ make private-score     # скор последнего прогона проти
 объявлять конкретную ячейку неверной. Расхождение с прокси-ключом — повод
 прочитать трейс, не повод менять код под совпадение.
 
-`make private-score` (`LLM_OFFLINE=1 LLM_PROVIDER=gemini ./run.sh
-6a7819a8cb7d3480322468.zip && make private-score`) раскладывает скор на
+`make private-score` (`make private-archive && LLM_OFFLINE=1 LLM_PROVIDER=gemini
+./run.sh 6a7819a8cb7d3480322468.zip && make private-score`) раскладывает скор на
 `status`/`actual`/`evidence_txn_id` по формуле `CASE.ru.md` раздела 4,
 компоненты считаются напрямую (не вычитанием из `_cell_points` — при
 частичном `scale` вычитание не отделяет `actual` от `evidence`). Полный разбор
@@ -437,7 +438,10 @@ make private-score     # скор последнего прогона проти
 - Модули `solution/*` делают `sys.path.insert(0, "solution")` и импортируют друг
   друга плоско — репозиторий не пакет (`[tool.uv] package = false`). Ruff-правило
   `E402` отключено именно поэтому. `tests/conftest.py` фиксирует и `cwd`, и `sys.path`.
-- `dataset/agentic-bank-public/` — пакет от организаторов, **не редактируется**.
+- `dataset/agentic-bank-public/` и `dataset/agentic-bank-private/` — пакеты от
+  организаторов, **не редактируются**. Оба хранятся распакованными каталогами
+  и собираются в архив тем же воспроизводимым упаковщиком (`make
+  public-archive` / `make private-archive`); архивы в git не кладутся.
 - Регрессионные пороги скора — два: `BASELINE` в `tests/test_solution.py`
   (эталонный режим) и `EXTRACTED_BASELINE` в `tests/test_extracted_gate.py`
   (извлечённый, боевой). Улучшили решение — поднимите порог тем же коммитом,

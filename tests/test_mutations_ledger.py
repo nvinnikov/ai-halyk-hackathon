@@ -88,7 +88,7 @@ def test_mutation_counts_exact(tmp_path):
 def test_only_description_changes(tmp_path):
     """Суммы, счета, даты и валюты не тронуты — иначе поедет ключ."""
     dst, _ = _mutated(tmp_path)
-    src_rows = list(csv.DictReader(open(find_inputs(DATASET.parent)["ledger_csv"], newline="")))
+    src_rows = list(csv.DictReader(open(find_inputs(DATASET)["ledger_csv"], newline="")))
     dst_rows = list(csv.DictReader(open(find_inputs(dst)["ledger_csv"], newline="")))
     assert len(src_rows) == len(dst_rows)
     for a, b in zip(src_rows, dst_rows, strict=True):
@@ -118,7 +118,7 @@ def test_desc_contains_tokens_survive(tmp_path):
 
 
 def _source_descriptions() -> list[str]:
-    path = find_inputs(DATASET.parent)["ledger_csv"]
+    path = find_inputs(DATASET)["ledger_csv"]
     return [r["description"] for r in csv.DictReader(open(path, newline=""))]
 
 

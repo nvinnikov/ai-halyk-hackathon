@@ -15,10 +15,13 @@ UNSOLVED убрана, и её сравнение блокирующее: рег
 возвращает его тихо в XFAIL. Маркер на всём наборе разом был бы дырой —
 выигранная ячейка деградировала бы незаметно.
 
-Приватные данные в git не кладутся: тест живёт только на машинах с репликой
-(work/<hash> с артефактами и LLM-кэшем плюс архив в корне) и скипается везде
-ещё — в CI в том числе. Числа и идентификаторы TXN-/ACC- здесь легальны:
-греп-гейт ограничивает solution/, а tests/ и eval/ — разрешённые берега.
+Закрытый набор хранится в git распакованным каталогом
+(`dataset/agentic-bank-private/`), как и публичный, — он есть в любом чекауте.
+Чего в git нет и что делает тест живым только на части машин — это прогретый
+`work/<hash>/` с артефактами и `work/llm_cache/`: без них офлайн-прогон нечем
+кормить, и тест скипается, в CI в том числе. Числа и идентификаторы TXN-/ACC-
+здесь легальны: греп-гейт ограничивает solution/, а tests/ и eval/ —
+разрешённые берега.
 """
 
 import math
@@ -27,9 +30,24 @@ from pathlib import Path
 import pytest
 
 import solve
+from private_archive import ARCHIVE as PRIVATE_ZIP
+from private_archive import DATASET as PRIVATE_DATASET
+from private_archive import build_private_archive
+from util import dataset_hash
 
-PRIVATE_ZIP = Path("6a7819a8cb7d3480322468.zip")
-PRIVATE_HASH = "f1dc75c17f9a5e55"
+
+def _private_hash() -> str | None:
+    """dataset_hash закрытого архива, собранного из dataset/agentic-bank-private/.
+
+    Не хардкодится: он зависит от формата упаковки (tools/public_archive.
+    PACK_FORMAT), а не только от содержимого датасета, — тот же приём, что и
+    в tests/conftest.py для публичного архива. build_private_archive() — no-op,
+    если архив уже собран текущим форматом."""
+    if not PRIVATE_DATASET.is_dir():
+        return None
+    build_private_archive()
+    return dataset_hash(PRIVATE_ZIP)
+
 
 # Целевые ответы, выведенные руками из данных (формулы — в docs/ops):
 # (сценарий, пункт, status, actual, evidence, корень расхождения с кодом)
@@ -67,8 +85,11 @@ ACTUAL_RTOL = 0.01
 def _replica_ready() -> bool:
     from util import workdir
 
-    wd = workdir(PRIVATE_HASH)
-    return PRIVATE_ZIP.is_file() and (wd / "facts").is_dir() and (Path("work") / "llm_cache").is_dir()
+    ds_hash = _private_hash()
+    if ds_hash is None:
+        return False
+    wd = workdir(ds_hash)
+    return (wd / "facts").is_dir() and (Path("work") / "llm_cache").is_dir()
 
 
 @pytest.fixture(scope="module")
