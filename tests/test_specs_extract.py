@@ -244,8 +244,15 @@ def test_limit_currency_form_normalized_to_number(tmp_path, monkeypatch):
 
 def test_limit_multiplier_suffix_normalized(tmp_path, monkeypatch):
     # «2.5x» из инструкции промпта модель иногда возвращает буквально,
-    # с суффиксом кратности (латинским или кириллическим «х»).
-    cov = covenant(limit="2.5x", quote="Пункт 6.1 не более 2.5x показателя")
+    # с суффиксом кратности (латинским или кириллическим «х»). Метрика —
+    # отношение: кратность в тексте порога согласована с формой метрики
+    # (правило формы порога), иначе тест ловил бы limit_shape_mismatch,
+    # а не то, что он реально проверяет — нормализацию суффикса.
+    cov = covenant(
+        limit="2.5x",
+        quote="Пункт 6.1 не более 2.5x показателя",
+        metric="ratio(agg(CAPEX, out), agg(REVENUE, in))",
+    )
     monkeypatch.setattr(specs_extract.llm, "call", lambda *a, **k: {"covenants": [cov]})
     art = specs_extract.extract_specs(tmp_path, make_dossier(cov["quote"]), set())
     sp = art["clauses"]["6.1"]
@@ -385,3 +392,124 @@ def test_check_accepts_limit_defined_in_clause_body():
     sp2 = covenant(clause="6.3", quote=quote, limit="0.09", metric="agg(RENT, out)", direction="max")
     checked2, _ = specs_extract._check(sp2, set(), text)
     assert not checked2["valid"] and "limit_not_in_quote" in checked2["errors"]
+
+
+# Форма порога определяет форму метрики (правило команды со 2-го места):
+# лимит-коэффициент => метрика обязана быть отношением, лимит в валюте =>
+# метрика обязана быть суммой. Форма порога читается из текста цитаты, а не
+# из его величины — в отличие от solve._family_mismatch, который смотрит на
+# разрыв между посчитанным значением и порогом и ловит другой квадрант.
+
+
+def test_shape_mismatch_multiplier_threshold_vs_absolute_metric(tmp_path, monkeypatch):
+    """Квадрант-конфликт 1: суффикс кратности в тексте порога («3.5x»), а
+    метрика — абсолютная сумма, не отношение."""
+    quote = "Пункт 6.1: капитальные затраты не должны превышать 3.5x показателя"
+    cov = covenant(clause="6.1", metric="agg(CAPEX, out)", limit="3.5", quote=quote)
+    monkeypatch.setattr(specs_extract.llm, "call", lambda *a, **k: {"covenants": [cov]})
+    art = specs_extract.extract_specs(tmp_path, make_dossier(quote), set())
+    sp = art["clauses"]["6.1"]
+    assert sp["valid"] is False
+    assert "limit_shape_mismatch" in sp["errors"]
+    alarms = [a for a in art["alarms"] if a["kind"] == "limit_shape_mismatch"]
+    assert len(alarms) == 1
+    assert alarms[0]["threshold_shape"] == "ratio"
+    assert alarms[0]["metric_shape"] == "absolute"
+
+
+def test_shape_mismatch_currency_threshold_vs_ratio_metric(tmp_path, monkeypatch):
+    """Квадрант-конфликт 2: знак валюты в тексте порога, а метрика — отношение,
+    не сумма."""
+    quote = "Пункт 6.2: показатель не должен превышать $500,000 в квартал"
+    cov = covenant(
+        clause="6.2", metric="ratio(agg(CAPEX, out), agg(REVENUE, in))", limit="500000", quote=quote
+    )
+    monkeypatch.setattr(specs_extract.llm, "call", lambda *a, **k: {"covenants": [cov]})
+    art = specs_extract.extract_specs(tmp_path, make_dossier(quote), set())
+    sp = art["clauses"]["6.2"]
+    assert sp["valid"] is False
+    assert "limit_shape_mismatch" in sp["errors"]
+    alarms = [a for a in art["alarms"] if a["kind"] == "limit_shape_mismatch"]
+    assert alarms[0]["threshold_shape"] == "absolute"
+    assert alarms[0]["metric_shape"] == "ratio"
+
+
+def test_shape_agrees_multiplier_threshold_with_ratio_metric(tmp_path, monkeypatch):
+    """Согласованный квадрант 1 (кратность/отношение) — правило молчит."""
+    quote = "Пункт 6.3: коэффициент долга не должен превышать 3.5x показателя"
+    cov = covenant(clause="6.3", metric="ratio(agg(CAPEX, out), agg(REVENUE, in))", limit="3.5", quote=quote)
+    monkeypatch.setattr(specs_extract.llm, "call", lambda *a, **k: {"covenants": [cov]})
+    art = specs_extract.extract_specs(tmp_path, make_dossier(quote), set())
+    sp = art["clauses"]["6.3"]
+    assert sp["valid"] is True, sp["errors"]
+    assert not any(a["kind"] == "limit_shape_mismatch" for a in art["alarms"])
+
+
+def test_shape_agrees_currency_threshold_with_absolute_metric(tmp_path, monkeypatch):
+    """Согласованный квадрант 2 (валюта/сумма) — правило молчит."""
+    quote = "Пункт 6.4: расходы не должны превышать $500,000 в квартал"
+    cov = covenant(clause="6.4", metric="agg(CAPEX, out)", limit="500000", quote=quote)
+    monkeypatch.setattr(specs_extract.llm, "call", lambda *a, **k: {"covenants": [cov]})
+    art = specs_extract.extract_specs(tmp_path, make_dossier(quote), set())
+    sp = art["clauses"]["6.4"]
+    assert sp["valid"] is True, sp["errors"]
+    assert not any(a["kind"] == "limit_shape_mismatch" for a in art["alarms"])
+
+
+def test_shape_unrecognized_form_has_no_opinion(tmp_path, monkeypatch):
+    """Отказ 1 (главный): форма порога в тексте не распознана (голое число
+    без знака валюты/кратности/процента) — правило молчит, даже если семьи
+    в реальности расходятся."""
+    quote = "Пункт 6.5: капитальные затраты не должны превышать 500000"
+    cov = covenant(
+        clause="6.5", metric="ratio(agg(CAPEX, out), agg(REVENUE, in))", limit="500000", quote=quote
+    )
+    monkeypatch.setattr(specs_extract.llm, "call", lambda *a, **k: {"covenants": [cov]})
+    art = specs_extract.extract_specs(tmp_path, make_dossier(quote), set())
+    sp = art["clauses"]["6.5"]
+    assert sp["valid"] is True, sp["errors"]
+    assert not any(a["kind"] == "limit_shape_mismatch" for a in art["alarms"])
+
+
+def test_shape_check_skipped_when_limit_not_in_quote(tmp_path, monkeypatch):
+    """Отказ 2: порог не найден в цитате — уже валит спеку своей проверкой
+    (limit_not_in_quote), форма не проверяется повторно."""
+    quote = "Пункт 6.6: капитальные затраты не должны превышать установленный предел"
+    cov = covenant(clause="6.6", metric="agg(CAPEX, out)", limit="500000", quote=quote)
+    monkeypatch.setattr(specs_extract.llm, "call", lambda *a, **k: {"covenants": [cov]})
+    art = specs_extract.extract_specs(tmp_path, make_dossier(quote), set())
+    sp = art["clauses"]["6.6"]
+    assert sp["valid"] is False
+    assert "limit_not_in_quote" in sp["errors"]
+    assert "limit_shape_mismatch" not in sp["errors"]
+    assert not any(a["kind"] == "limit_shape_mismatch" for a in art["alarms"])
+
+
+def test_shape_check_skipped_when_metric_invalid(tmp_path, monkeypatch):
+    """Отказ 3: метрика не распарсилась — ранний возврат в _check до формы."""
+    quote = "Пункт 6.7: показатель не должен превышать 3.5x показателя"
+    cov = covenant(clause="6.7", metric="__import__('os')", limit="3.5", quote=quote)
+    monkeypatch.setattr(specs_extract.llm, "call", lambda *a, **k: {"covenants": [cov]})
+    art = specs_extract.extract_specs(tmp_path, make_dossier(quote), set())
+    sp = art["clauses"]["6.7"]
+    assert sp["valid"] is False
+    assert not any(a["kind"] == "limit_shape_mismatch" for a in art["alarms"])
+
+
+def test_shape_check_skipped_for_bare_doc_metric(tmp_path, monkeypatch):
+    """Отказ 4 (найден замером на приватном наборе): вся метрика — голый
+    doc(ключ). family_of видит только AST и для непрозрачного значения,
+    посчитанного вне DSL, по умолчанию отдаёт 'absolute' — не потому что
+    метрика действительно сумма, а потому что это не Ratio. Боевой кейс:
+    доля выручки квартала от годовой выражена doc()-ключом при пороге
+    «0.30x» — верная спека ложно конфликтовала бы с формой и уезжала на
+    лестницу. ratio(doc(...), ...) под исключение не попадает — там doc()
+    лишь аргумент, верхний узел Ratio, family_of классифицирует его верно
+    (см. test_shape_agrees_multiplier_threshold_with_ratio_metric)."""
+    quote = "Пункт 6.8: доля выручки квартала не должна превышать 0.30x от годовой"
+    cov = covenant(clause="6.8", metric="doc(quarterly_revenue_share)", limit="0.30", quote=quote)
+    monkeypatch.setattr(specs_extract.llm, "call", lambda *a, **k: {"covenants": [cov]})
+    art = specs_extract.extract_specs(tmp_path, make_dossier(quote), {"quarterly_revenue_share"})
+    sp = art["clauses"]["6.8"]
+    assert sp["valid"] is True, sp["errors"]
+    assert not any(a["kind"] == "limit_shape_mismatch" for a in art["alarms"])

@@ -232,6 +232,77 @@ def _limit_in_quote(limit: str, quote: str) -> bool:
     return _scaled_in_quote(d, quote) or _percent_word_in_quote(d, quote)
 
 
+# Форма порога, читаемая из ЦИТАТЫ (правило команды со 2-го места): форма
+# лимита в тексте определяет форму метрики, а не наоборот. Три текстовых
+# признака у числа порога:
+#   - суффикс кратности сразу после числа (латинское/кириллическое x/х/×,
+#     слово о кратности «раз»/«крат») => метрика обязана быть отношением;
+#   - знак или название валюты рядом с числом => метрика обязана быть суммой;
+#   - знак процента сразу после числа => метрика обязана быть отношением.
+# Про запас — сама конструкция намеренно консервативна: признак ищется
+# ВПЛОТНУЮ к числу (не в произвольном месте цитаты), а разные вхождения с
+# разными формами дают неоднозначность, а не выбор (см. _threshold_form).
+_MULT_SUFFIX_CTX = re.compile(r"^\s*(?:[xх×](?![a-zа-я])|раз[а-я]*\b|крат\w*)", re.IGNORECASE)
+_PERCENT_SUFFIX_CTX = re.compile(r"^\s*%")
+_CURRENCY_MARK = r"[$€£¥₸₽₹]"
+_CURRENCY_WORD = r"(?:доллар\w*|тенге|евро\w*|рубл\w*|фунт\w*|юан\w*|dollars?|euros?|pounds?|tenge|yuan)"
+_CURRENCY_PREFIX_CTX = re.compile(_CURRENCY_MARK + r"\s*$")
+_CURRENCY_SUFFIX_CTX = re.compile(r"^\s*(?:" + _CURRENCY_MARK + "|" + _CURRENCY_WORD + ")", re.IGNORECASE)
+
+# Окно контекста после числа: достаточно для «долларов США» / «процентов»,
+# но не настолько широкое, чтобы подцепить соседнее число другого пункта.
+_SHAPE_CONTEXT_AFTER = 24
+_SHAPE_CONTEXT_BEFORE = 4
+
+
+def _classify_context(before: str, after: str) -> str | None:
+    if _MULT_SUFFIX_CTX.match(after):
+        return "ratio"
+    if _PERCENT_SUFFIX_CTX.match(after):
+        return "share"
+    if _CURRENCY_PREFIX_CTX.search(before) or _CURRENCY_SUFFIX_CTX.match(after):
+        return "absolute"
+    return None
+
+
+def _threshold_form(limit: str, quote: str) -> str | None:
+    """Форма порога — по тому, чем число окружено в самой цитате пункта, а не
+    по его величине. 'ratio'/'share' сравниваются с family_of как один класс
+    «отношение» (см. _shape_conflicts) — раскол ratio/share у family_of
+    обслуживает другую задачу (выброс по семье метрики).
+
+    Несколько РАЗНЫХ форм у разных вхождений одного числа в цитате —
+    неоднозначность, а не выбор: возвращаем None. Форма не найдена нигде —
+    тоже None. Это главный отказ правила: оно вправе говорить только тогда,
+    когда текст сказал явно."""
+    degrouped = _degroup_thousands(quote)
+    found: set[str] = set()
+    for text in {quote, degrouped}:
+        for form in _limit_forms(limit):
+            if not form:
+                continue
+            for m in re.finditer(re.escape(form), text):
+                before = text[max(0, m.start() - _SHAPE_CONTEXT_BEFORE) : m.start()]
+                after = text[m.end() : m.end() + _SHAPE_CONTEXT_AFTER]
+                cls = _classify_context(before, after)
+                if cls:
+                    found.add(cls)
+    return found.pop() if len(found) == 1 else None
+
+
+def _shape_bucket(form: str) -> str:
+    return "absolute" if form == "absolute" else "ratio"
+
+
+def _shape_conflicts(threshold_form: str | None, metric_family: str | None) -> bool:
+    """Конфликт формы — порог денежный, а метрика отношение, или наоборот.
+    Молчит, если хотя бы одна сторона неизвестна: это не «формы совпали», а
+    «мнения не имеем» (см. докстринг _threshold_form)."""
+    if threshold_form is None or metric_family is None:
+        return False
+    return _shape_bucket(threshold_form) != _shape_bucket(metric_family)
+
+
 _CLAUSE_HEAD = r"(?:Пункт|Статья|Article|Section|Clause)"
 
 
@@ -307,8 +378,9 @@ def _check(sp: dict, fact_keys: set[str], agreement_text: str) -> tuple[dict, ob
     # исполнения» — иначе «5%» доехал бы валидным до Decimal() в solve
     # и ушёл на лестницу без алярма invalid_spec (ревью PR #9, 6-я волна).
     try:
-        Decimal(sp["limit"])
+        limit_decimal = Decimal(sp["limit"])
     except (InvalidOperation, TypeError):
+        limit_decimal = None
         errors.append("limit: не число")
     if not verify_quote(sp["quote"], agreement_text):
         errors.append("quote_unverified")
@@ -324,6 +396,26 @@ def _check(sp: dict, fact_keys: set[str], agreement_text: str) -> tuple[dict, ob
             out["limit_matched_in_clause"] = True
         else:
             errors.append("limit_not_in_quote")
+    elif limit_decimal is not None and not isinstance(node, Doc):
+        # Форма порога определяет форму метрики (правило команды со 2-го
+        # места). Ветка достижима только когда цитата верифицирована И порог
+        # напечатан прямо в ней — «порог не найден» и «метрика не
+        # распарсилась» отсекаются раньше и не дублируются здесь.
+        #
+        # Голый doc(ключ) в качестве ВСЕЙ метрики исключён отдельно: family_of
+        # видит только AST, а doc() — непрозрачное значение, посчитанное вне
+        # DSL (боевой прогон приватного набора: кратностный порог квартальной
+        # доли выручки от годовой модель выразила doc(...) вместо ratio(...),
+        # family_of дал 'absolute', и верная ячейка легла на лестницу — false
+        # positive, не тот случай, для которого заводилось правило).
+        # ratio(doc(...), ...) под это исключение не попадает — там doc()
+        # лишь один из аргументов, а верхний узел по-прежнему Ratio, и
+        # family_of классифицирует его корректно.
+        threshold_shape = _threshold_form(sp["limit"], sp["quote"])
+        metric_shape = family_of(node, limit_decimal)
+        if _shape_conflicts(threshold_shape, metric_shape):
+            errors.append("limit_shape_mismatch")
+            out["shape_mismatch"] = {"threshold_shape": threshold_shape, "metric_shape": metric_shape}
 
     trig_value = sp["trigger"]
     if trig_value:
@@ -465,6 +557,11 @@ def extract_specs(wd: Path, dossier_art: dict, fact_keys: set[str]) -> dict:
             # Видимость нестандартного пути: порог сматчился не в цитате, а в
             # теле пункта — на приватном наборе это надо видеть поимённо.
             alarms.append({"kind": "limit_matched_in_clause_text", "clause": clause_key})
+        shape_mismatch = checked.pop("shape_mismatch", None)
+        if shape_mismatch is not None:
+            # Какая форма ожидалась (из текста порога) и какая пришла (из
+            # формулы модели) — поимённо, а не только errors: "limit_shape_mismatch".
+            alarms.append({"kind": "limit_shape_mismatch", "clause": clause_key, **shape_mismatch})
         clauses[clause_key] = checked
         if node is not None:
             parsed_nodes[clause_key] = node
