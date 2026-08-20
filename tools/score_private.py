@@ -8,7 +8,7 @@ postmortem.md`). Метрика направленная: она годится 
 
 Конкретные числа скора здесь намеренно не приводятся: они меняются с каждой
 правкой конвейера и стареют быстрее докстринга. Актуальное значение — прогнать
-самому (`LLM_OFFLINE=1 LLM_PROVIDER=gemini ./run.sh
+самому (`make hidden-archive && LLM_OFFLINE=1 LLM_PROVIDER=gemini ./run.sh
 6a7819a8cb7d3480322468.zip && make private-score`) либо смотреть в
 `docs/ops/private-set-postmortem.md`, раздел «После починок» — там число всегда
 идёт с датой и коммитом, к которым привязано.

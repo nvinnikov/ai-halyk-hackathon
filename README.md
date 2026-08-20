@@ -21,7 +21,7 @@
 >
 > It scored 35.00/36.00 on the public set and then placed 51st of 186 on the
 > hidden one. **The interesting half of this repo is what happened next.** A
-> top-10 team published the hidden archive (it is in this repo, with the
+> top-10 team published the hidden dataset (it is in this repo, with the
 > organisers' permission), which gave a measurement loop, and
 > a written post-mortem turned into three waves of fixes that moved the score
 > from 65.58% to 91.65% against a proxy key — with no architectural changes at
@@ -98,10 +98,12 @@
 | Проводок в леджере | 1473 | 2355 |
 
 Пайплайн отработал в окне и выдал ответ по всем ячейкам без правок под данные.
-**Закрытый архив лежит в репозитории целиком** — организаторы разрешили его
-публикацию, — поэтому всё, что написано ниже про разбор, проверяется прогоном,
-а не на слово: `make verify-hidden ARCHIVE=6a7819a8cb7d3480322468.zip` сверяет
-байты, `make private-score` печатает скор. Ценнее другого:
+**Закрытый набор лежит в репозитории целиком**, распакованным каталогом, как и
+публичный, — организаторы разрешили его публикацию, — поэтому всё, что
+написано ниже про разбор, проверяется прогоном, а не на слово: `make
+hidden-archive` собирает архив из каталога, `make verify-hidden
+ARCHIVE=6a7819a8cb7d3480322468.zip` сверяет данные внутри него (леджер и
+шаблон ответа), `make private-score` печатает скор. Ценнее другого:
 прогон вскрыл три механизма, к которым публичный гейт 35.00 **слеп по
 построению** — соответствующие ветки кода на открытом наборе либо не
 исполняются вовсе, либо не имеют расхождений. Один из них (кэш
@@ -278,6 +280,11 @@ make check                            # локальный CI-гейт: lint + t
 архива, а с ними и `dataset_hash`, разошлись бы. На боевом прогоне архив
 приходит аргументом и уже существует.
 
+Закрытый набор устроен точно так же: `dataset/agentic-bank-hidden/` лежит в
+репозитории целиком (см. [«Результат»](#результат)), `make hidden-archive`
+пакует его в `6a7819a8cb7d3480322468.zip` тем же упаковщиком
+(`tools/hidden_archive.py`).
+
 Окружение поднимает [uv](https://docs.astral.sh/uv/) из `uv.lock`, Python пинится
 `.python-version`. Все скрипты рассчитаны на запуск **из корня репозитория** —
 пути к датасету относительные.
@@ -313,6 +320,7 @@ make cassette-freeze                                        # дозаписат
 | Путь | Что внутри |
 | --- | --- |
 | `dataset/agentic-bank-public/` | Пакет задания от организаторов: условие (`CASE.*.md`), леджер, 200 PDF (плюс CSV-лог, TXT и `Thumbs.db` в `documents/`), `ground_truth.json`, шаблон ответа. Не редактируется. |
+| `dataset/agentic-bank-hidden/` | Закрытый набор соревнования целиком, распакованным каталогом: 27 сценариев, 302 PDF, 2355 проводок (плюс тот же подсадный мусор, что и в публичном, — `Thumbs.db`, `~$lock.docx`, `.DS_Store`, лишние CSV/TXT, — конвейер обязан его отбраковывать сам). Публикация разрешена организаторами. `ground_truth.json` в наборе нет — это и есть закрытый ключ. |
 | `solution/ledger.py`, `fx.py`, `engine.py` | Распаковка архива, устойчивый разбор и категоризация леджера (`categorize*.py`), валютная нормализация, Decimal-агрегация. |
 | `solution/dsl.py`, `interp.py`, `templates.py` | Грамматика метрик, интерпретатор со знаковым вердиктом, библиотека шаблонов с сигнатурным матчем. |
 | `solution/evidence.py`, `fallbacks.py` | Улика откатом документального решения; лестница фолбэков (спека → эвристика → приор). |
@@ -321,10 +329,9 @@ make cassette-freeze                                        # дозаписат
 | `solution/solve.py` | Harness: скелет-первым `out/submission.json`, fail-open на ячейку, трейс в `work/<hash>/trace/`. |
 | `eval/` | Эталоны и метрики: `expected_extraction.py` (FACTS/SPECS для регрессионного режима), приор статусов, мутации, греп-гейт, `cassette/`. |
 | `docs/ops/` | Разборы: `private-set-postmortem.md` (почему проиграли и как чинилось, с цифрами), `playbook-eval-tasks.md` (переносимые уроки класса задач), `ledger-noise.md` (отвергнутая по замеру идея), `remaining-losses.md`, `runbook-2026-08-09.md`, `recovery-playbook.md`. |
-| `6a7819a8cb7d3480322468.zip` | Закрытый набор соревнования целиком: 27 сценариев, 302 PDF, 2355 проводок. Публикация разрешена организаторами. Хранится архивом, а не распакованным каталогом: `dataset_hash` считается от байтов zip и именует `work/<hash>/` — пересборка отвязала бы все числа разбора от данных. |
-| `tools/verify_hidden.py` | Сверка закрытого архива по sha256: архива целиком, леджера и шаблона ответа. |
+| `tools/verify_hidden.py` | Сверка данных закрытого набора по sha256: леджера и шаблона ответа внутри архива (не архива целиком — его байты зависят от упаковщика, а не только от датасета). |
 | `tools/score_private.py`, `eval/private_proxy_key.json` | Контур замера на закрытом наборе: скорер по официальной формуле и прокси-ключ (опубликованный ответ команды со второго места, не истина). |
-| `tools/public_archive.py` | Сборка публичного архива датасета — общий код для `make public-archive`, CI и `tests/conftest.py`. |
+| `tools/public_archive.py`, `tools/hidden_archive.py` | Сборка архивов датасетов из распакованных каталогов — общий воспроизводимый упаковщик (`pack_dataset`), два каталога-источника и два имени архива. Первым пользуются CI и `tests/conftest.py`, вторым — `make hidden-archive` и `tests/test_reality_gate.py`; архивы в git не хранятся (`*.zip` в `.gitignore`). |
 | `docs/superpowers/specs/`, `docs/superpowers/plans/` | Дизайн-спека и план реализации пайплайна. |
 
 ## Команды
@@ -333,6 +340,7 @@ make cassette-freeze                                        # дозаписат
 | --- | --- |
 | `make install` | `uv sync --extra dev` |
 | `make public-archive` | Собрать `6a741640c31eb032062683.zip` из `dataset/agentic-bank-public/` |
+| `make hidden-archive` | Собрать `6a7819a8cb7d3480322468.zip` из `dataset/agentic-bank-hidden/` |
 | `make solve` | Прогнать решение (`./run.sh`), записать `out/submission.json`, напечатать скор |
 | `make lint` | `ruff format --check` + `ruff check` |
 | `make typecheck` | `mypy` |
@@ -341,7 +349,7 @@ make cassette-freeze                                        # дозаписат
 | `make eval-offline` | Инварианты, греп-гейт и юниты без сети |
 | `make cassette-freeze` | Дозаписать `work/llm_cache/*.json` в `eval/cassette/` |
 | `make sanity ARCHIVE=<архив>` | Санитарные проверки прогона |
-| `make verify-hidden ARCHIVE=<архив>` | Сверить закрытый архив по sha256 с тем, на котором считались числа разбора |
+| `make verify-hidden ARCHIVE=<архив>` | Сверить данные закрытого архива (леджер, шаблон ответа) по sha256 с тем, на котором считались числа разбора |
 | `make private-score` | Скор `out/submission.json` против прокси-ключа закрытого набора |
 | `make run ARCHIVE=<архив>` | Боевой прогон по заданному архиву (без пересборки публичного) |
 | `make determinism ARCHIVE=<архив>` | Два прогона подряд, байт-диф `submission.json` |
