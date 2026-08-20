@@ -1,7 +1,7 @@
 # Все цели идут через `uv run` ради воспроизводимого окружения из uv.lock.
 # `check` — локальное зеркало CI-гейта. Цели ниже `check` — репетиция
 # (задача 31): однословные команды на 9 августа под трёхчасовым таймером.
-.PHONY: install public-archive solve score private-score lint typecheck test check \
+.PHONY: install public-archive verify-hidden solve score private-score lint typecheck test check \
 	run sanity eval-offline eval-live cassette-freeze determinism submit \
 	require-archive require-private-archive
 
@@ -18,6 +18,11 @@ install:
 # CI и tests/conftest.py. Если файл уже есть — no-op.
 public-archive: install
 	uv run python tools/public_archive.py
+
+# Сверка закрытого архива с байтами, на которых считались числа разбора.
+# Самого архива в репозитории нет — он принадлежит организаторам.
+verify-hidden: ## ARCHIVE=<путь> — проверить, что закрытый архив тот самый
+	uv run python tools/verify_hidden.py $(ARCHIVE)
 
 # Основной прогон через единственную точку входа: пишет out/submission.json и
 # печатает скор по публичному ground_truth. Архив переопределяется:
