@@ -1,0 +1,7 @@
+{
+ "result": {
+  "computable": true,
+  "expression": "agg(ALL, out, period(2025-01-01, 2025-12-31), counterparty_in(unrestricted_subsidiaries))",
+  "reason": "По тексту пункта величина вычисляется как совокупный объем передачи активов (категория ALL, направление out) в адрес необремененных дочерних обществ (counterparty_in(unrestricted_subsidiaries)) за период с 2025-01-01 по 2025-12-31."
+ }
+}
