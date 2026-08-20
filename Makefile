@@ -1,7 +1,7 @@
 # Все цели идут через `uv run` ради воспроизводимого окружения из uv.lock.
 # `check` — локальное зеркало CI-гейта. Цели ниже `check` — репетиция
 # (задача 31): однословные команды на 9 августа под трёхчасовым таймером.
-.PHONY: install public-archive hidden-archive verify-hidden solve score private-score lint typecheck test check \
+.PHONY: install public-archive private-archive verify-private solve score private-score lint typecheck test check \
 	run sanity eval-offline eval-live cassette-freeze determinism submit \
 	require-archive require-private-archive
 
@@ -20,18 +20,18 @@ public-archive: install
 	uv run python tools/public_archive.py
 
 # Закрытый набор хранится так же — распакованным каталогом
-# (dataset/agentic-bank-hidden/), архив в git не хранится и собирается
+# (dataset/agentic-bank-private/), архив в git не хранится и собирается
 # тем же воспроизводимым упаковщиком (tools/public_archive.pack_dataset),
 # только другим каталогом-источником и другим именем. Если файл уже есть
 # и собран текущим форматом упаковки — no-op.
-hidden-archive: install
-	uv run python tools/hidden_archive.py
+private-archive: install
+	uv run python tools/private_archive.py
 
 # Сверка данных закрытого набора с байтами, на которых считались числа
 # разбора: не архива целиком (его байты зависят от упаковщика), а леджера и
 # шаблона ответа внутри него — они от способа упаковки не зависят.
-verify-hidden: ## ARCHIVE=<путь> — проверить, что данные закрытого архива те самые
-	uv run python tools/verify_hidden.py $(ARCHIVE)
+verify-private: ## ARCHIVE=<путь> — проверить, что данные закрытого архива те самые
+	uv run python tools/verify_private.py $(ARCHIVE)
 
 # Основной прогон через единственную точку входа: пишет out/submission.json и
 # печатает скор по публичному ground_truth. Архив переопределяется:

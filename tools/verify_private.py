@@ -1,11 +1,11 @@
 """Проверка, что данные закрытого набора в репозитории — те самые, на которых
 считались все цифры разбора.
 
-Набор хранится в git РАСПАКОВАННЫМ КАТАЛОГОМ (`dataset/agentic-bank-hidden/`),
+Набор хранится в git РАСПАКОВАННЫМ КАТАЛОГОМ (`dataset/agentic-bank-private/`),
 как и публичный, — не переданным организаторами архивом, чтобы договоры можно
 было открыть глазами, а не только распаковкой блоба. Архив, который принимает
 `./run.sh`, собирается заново воспроизводимым упаковщиком
-(`tools/hidden_archive.py`, `make hidden-archive`), а его байты — и с ними
+(`tools/private_archive.py`, `make private-archive`), а его байты — и с ними
 `dataset_hash` (первые шестнадцать знаков sha256 архива, имя `work/<hash>/`) —
 зависят от упаковщика, а не только от содержимого датасета. Сверять их с
 байтами организаторской раздачи поэтому бессмысленно: другая реализация
@@ -54,7 +54,7 @@ def verify(path: Path) -> list[str]:
 
 def main() -> int:
     if len(sys.argv) != 2:
-        print("использование: verify_hidden.py <архив.zip>", file=sys.stderr)
+        print("использование: verify_private.py <архив.zip>", file=sys.stderr)
         return 2
     path = Path(sys.argv[1])
     if not path.is_file():

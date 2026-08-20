@@ -16,7 +16,7 @@ UNSOLVED убрана, и её сравнение блокирующее: рег
 выигранная ячейка деградировала бы незаметно.
 
 Закрытый набор хранится в git распакованным каталогом
-(`dataset/agentic-bank-hidden/`), как и публичный, — он есть в любом чекауте.
+(`dataset/agentic-bank-private/`), как и публичный, — он есть в любом чекауте.
 Чего в git нет и что делает тест живым только на части машин — это прогретый
 `work/<hash>/` с артефактами и `work/llm_cache/`: без них офлайн-прогон нечем
 кормить, и тест скипается, в CI в том числе. Числа и идентификаторы TXN-/ACC-
@@ -30,22 +30,22 @@ from pathlib import Path
 import pytest
 
 import solve
-from hidden_archive import ARCHIVE as PRIVATE_ZIP
-from hidden_archive import DATASET as PRIVATE_DATASET
-from hidden_archive import build_hidden_archive
+from private_archive import ARCHIVE as PRIVATE_ZIP
+from private_archive import DATASET as PRIVATE_DATASET
+from private_archive import build_private_archive
 from util import dataset_hash
 
 
 def _private_hash() -> str | None:
-    """dataset_hash закрытого архива, собранного из dataset/agentic-bank-hidden/.
+    """dataset_hash закрытого архива, собранного из dataset/agentic-bank-private/.
 
     Не хардкодится: он зависит от формата упаковки (tools/public_archive.
     PACK_FORMAT), а не только от содержимого датасета, — тот же приём, что и
-    в tests/conftest.py для публичного архива. build_hidden_archive() — no-op,
+    в tests/conftest.py для публичного архива. build_private_archive() — no-op,
     если архив уже собран текущим форматом."""
     if not PRIVATE_DATASET.is_dir():
         return None
-    build_hidden_archive()
+    build_private_archive()
     return dataset_hash(PRIVATE_ZIP)
 
 

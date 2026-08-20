@@ -10,7 +10,7 @@ __pycache__/
 .claude/
 
 # Оба набора (публичный и закрытый) распакованы в dataset/ и собираются из
-# него `make public-archive` / `make hidden-archive` — архивы в git не нужны.
+# него `make public-archive` / `make private-archive` — архивы в git не нужны.
 *.zip
 # Маркер формата упаковки архива (рядом с ним, тоже не в git)
 *.packfmt
@@ -26,7 +26,7 @@ out/
 # задания, конвейер обязан сам отбраковывать такие файлы, а не полагаться на
 # то, что их нет на диске. Общее правило выше для этого каталога отключается
 # точечно; публичный набор аналогичного мусора в git не несёт (см. README).
-!dataset/agentic-bank-hidden/**/.DS_Store
+!dataset/agentic-bank-private/**/.DS_Store
 
 # Ключи API и рабочие артефакты пайплайна
 .env
