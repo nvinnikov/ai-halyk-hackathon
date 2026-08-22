@@ -2,12 +2,22 @@
 name = "ai-halyk"
 version = "0.0.0"
 description = "Agentic Bank hackathon: категоризация леджера, факты из документов, проверка ковенантов"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [{name = "Nikita Vinnikov", email = "nvvinnikov@gmail.com"}]
 requires-python = ">=3.11"
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+]
 dependencies = [
     "pypdf==5.1.0",
     "anthropic>=0.40",
     "jsonschema>=4.23",
 ]
+
+[project.urls]
+repository = "https://github.com/nvinnikov/ai-halyk-hackathon"
 
 [project.optional-dependencies]
 dev = [

@@ -1,3 +1,7 @@
+[![CI](https://github.com/nvinnikov/ai-halyk-hackathon/actions/workflows/ci.yml/badge.svg)](https://github.com/nvinnikov/ai-halyk-hackathon/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/)
+
 # ai-halyk — Agentic Bank
 
 **Ковенантный мониторинг корпоративных кредитов.** Пайплайн читает 200 PDF
@@ -263,6 +267,21 @@ LLM-категоризации по батчу, а не по описанию) �
 `docs/ops/playbook-eval-tasks.md`: чеклист по фазам задачи с закрытым набором,
 подход «модель определяет словарь, код считает», и план перевода решения на
 него.
+
+## Для рекрутеров и ревьюеров
+
+Этот репозиторий демонстрирует:
+
+- **Eval-driven development**: каждая правка измеряется до мержа, CI ловит регрессию
+- **Детерминизм при недетерминированном компоненте**: LLM-cache + cassette replay
+- **Fail-open архитектуру**: ячейка не роняет прогон, лестница фолбэков
+- **Честный разбор неудач**: post-mortem с цифрами, negative results
+
+Ключевые файлы для оценки:
+
+- `solution/` — расчётное ядро (Decimal, без float, DSL + интерпретатор)
+- `eval/` — инфраструктура измерения: baseline gates, mutations, LOBO, grep-gate
+- `docs/ops/` — разборы боевых прогонов и transferable lessons
 
 ## Быстрый старт
 
