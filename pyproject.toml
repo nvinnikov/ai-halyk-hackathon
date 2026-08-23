@@ -1,6 +1,6 @@
 [project]
 name = "ai-halyk"
-version = "1.0.0"
+version = "2.0.0"
 description = "Agentic Bank hackathon: категоризация леджера, факты из документов, проверка ковенантов"
 readme = "README.md"
 license = {text = "Apache-2.0"}
