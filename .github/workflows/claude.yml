@@ -1,3 +1,11 @@
+# Ассистент по упоминанию `@claude` в issue и комментариях.
+#
+# ВНИМАНИЕ, репозиторий публичный. Джоба получает `CLAUDE_CODE_OAUTH_TOKEN`, а
+# тело issue/комментария — это недоверенный текст от произвольного человека,
+# который уезжает прямо в промпт агента. Поэтому к условию «в тексте есть
+# @claude» добавлен гейт по `author_association`: запускать только на автора
+# репозитория и людей с write-доступом. Без него любой прохожий заводит issue
+# со словом @claude и жжёт токен владельца.
 name: Claude Code
 
 on:
@@ -13,10 +21,18 @@ on:
 jobs:
   claude:
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      (github.event_name == 'issue_comment'
+        && contains(github.event.comment.body, '@claude')
+        && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review_comment'
+        && contains(github.event.comment.body, '@claude')
+        && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review'
+        && contains(github.event.review.body, '@claude')
+        && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association)) ||
+      (github.event_name == 'issues'
+        && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude'))
+        && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association))
     runs-on: ubuntu-latest
     permissions:
       contents: read
