@@ -283,6 +283,11 @@ LLM-категоризации по батчу, а не по описанию) �
 - `eval/` — инфраструктура измерения: baseline gates, mutations, LOBO, grep-gate
 - `docs/ops/` — разборы боевых прогонов и transferable lessons
 
+Участие подтверждено сертификатом организатора — [проверить на сайте
+Halyk Bank](https://halykbank.kz/ai-hackathon-certificate/id26357_1):
+
+[![Certificate of Participation — AI Challenge Hackathon by Halyk, Nikita Vinnikov](docs/halyk-ai-challenge-certificate.png)](https://halykbank.kz/ai-hackathon-certificate/id26357_1)
+
 ## Быстрый старт
 
 ```bash
