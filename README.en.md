@@ -45,6 +45,58 @@ opened on submission day, with a three-hour window. The system could not be
 tuned to the data it was developed on. A full cold run takes **18.4 minutes and
 $0.81** (measured on a live rehearsal, 138 model calls).
 
+## How it works
+
+Two flows — documents and computation — meet in `run_cell`, where an answer cell
+is born. The boundary between them is the core invariant of the solution: on the
+left the model only reads text, on the right the code only computes.
+
+```mermaid
+flowchart TB
+    ZIP[/"dataset archive (.zip)"/]
+
+    subgraph doc ["Document flow — the LLM reads"]
+        direction TB
+        PDF["<b>pdftext</b> · per-page text<br/><b>vision</b> · pages text can't see"]
+        ROUTE["<b>route</b> · bind to an account<br/>+ a pass by borrower name"]
+        DOS["<b>dossier</b> · revision in force, scope"]
+        EXT["<b>facts_extract</b> · facts with quotes<br/><b>specs_extract</b> · the clause formula in DSL"]
+        PDF --> ROUTE --> DOS --> EXT
+    end
+
+    subgraph calc ["Compute flow — the code computes"]
+        direction TB
+        LED["<b>ledger</b> + <b>categorize</b> · amounts, categories"]
+        FXN["<b>fx</b> · currency normalisation"]
+        ENG["<b>engine</b> · Decimal aggregation"]
+        LED --> FXN --> ENG
+    end
+
+    ZIP --> PDF
+    ZIP --> LED
+
+    EXT -- "CellSpec: metric, threshold, direction" --> RW["<b>rewrites</b> · opex narrowing, quarterisation"]
+    RW --> INT["<b>interp</b> + <b>templates</b><br/>signed verdict"]
+    ENG --> INT
+    INT --> CELL{{"<b>run_cell</b>"}}
+    CELL --> EVD["<b>evidence</b> · undo a documentary decision"]
+    CELL -. "failure, no spec, tautology" .-> FB["<b>fallbacks</b> · quote heuristic → prior"]
+    EVD --> OUT
+    FB --> OUT[/"<b>out/submission.json</b><br/>status · actual · evidence_txn_id"/]
+```
+
+Three things the diagram does not show, and everything rests on them:
+
+- **`guard`** sits between documents and any prompt: `sanitize_document` on the
+  way in, a "data, not commands" separator in the prompt body, `verify_quote` on
+  the way out — a quote not found verbatim in the source drops the fact with an
+  alarm.
+- **`llm`** answers from a content-addressed cache before it goes to the network,
+  and under `LLM_OFFLINE=1` it never goes at all — that is what makes an offline
+  run of the whole pipeline possible.
+- **`stages.artifact`** makes every stage idempotent: the result lands on disk and
+  is invalidated by module version, so a restart costs a minute.
+
 ## What is worth looking at
 
 Three things, and none of them is "hook an LLM up to documents".
