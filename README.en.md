@@ -168,6 +168,10 @@ it reaches the computation.
 
 ## Results
 
+**In one line:** 35.00 out of 36.00 on the public set, 51st of 186 on the private
+one on submission day, and 91.65% on that same set after the post-mortem — same
+three hours of pipeline work, no architectural change.
+
 Three numbers, and they must not be confused.
 
 **Public set — 35.00 / 36.00.** The remaining point is a typo in the dataset
@@ -221,6 +225,29 @@ public gate off 35.00.
 built, measured at −5.79 points and rejected (`docs/ops/ledger-noise.md`); two
 cells declared unwinnable turned out to be solvable by the existing LLM tier
 once the question stopped being "can a deterministic rule do this".
+
+## About this work
+
+**One author, 348 commits, 6–23 August 2026.** The solution was built in the four
+days before submission (6–9 August, 281 commits); the post-mortem and three waves
+of fixes took another four working days (18–23 August). The repository history has
+a single person in it. Development was done together with Claude Code; the project
+instructions live in [`CLAUDE.md`](CLAUDE.md).
+
+**Stack.** Python 3.12, `uv` (environment pinned by `uv.lock`), the Anthropic API
+and the Google Gemini API (the latter over REST via `httpx`), `pypdf`,
+`jsonschema`, `pytest`, `mypy`, `ruff`, GitHub Actions.
+
+**Scale.** 29 modules and 10,187 lines of solution against 45 files and 11,973
+lines of tests — more test code than production code. 833 tests in CI, 3,572 lines
+of write-ups in `docs/ops/`.
+
+Ten minutes, in this order: [How it works](#how-it-works) for the pipeline at a
+glance; `docs/ops/private-set-postmortem.md` for why it lost and what each cause
+cost in points; `solution/rewrites.py` for how a decision is made from contract
+text and argued in the comment; `eval/grep_gate.py` for the gate that keeps
+dataset knowledge out of the code; `docs/ops/ledger-noise.md` for an idea that was
+built, measured at −5.79 points and rejected.
 
 ## Quick start
 
