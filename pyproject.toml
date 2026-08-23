@@ -5,10 +5,11 @@ description = "Agentic Bank hackathon: категоризация леджера
 readme = "README.md"
 license = {text = "Apache-2.0"}
 authors = [{name = "Nikita Vinnikov", email = "nvvinnikov@gmail.com"}]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
     "pypdf==5.1.0",
